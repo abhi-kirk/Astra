@@ -1,10 +1,18 @@
+# Python
 .venv/
 __pycache__/
 *.pyc
 *.pyo
-.DS_Store
-data/live_portfolio.json
-*.db
+
+# Local only — never commit
 .env
-analysis/*.json
 CLAUDE.md
+data/
+convictions.json
+
+# Generated outputs
+analysis/*.json
+*.db
+
+# macOS
+.DS_Store

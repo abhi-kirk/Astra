@@ -25,7 +25,7 @@ ANALYSIS_DIR = ROOT / "analysis"
 
 def run(mode: str = "simulation", single_ticker: str | None = None):
     ANALYSIS_DIR.mkdir(exist_ok=True)
-    memory.init_db()
+
 
     run_date = datetime.now().isoformat()
     print(f"\n{'='*60}")

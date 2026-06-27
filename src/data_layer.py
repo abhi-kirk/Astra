@@ -2,14 +2,14 @@
 Data layer: portfolio positions, cost basis, and market data.
 
 Portfolio state comes from two sources:
-  - data/live_portfolio.json  — written by Claude via Robinhood MCP (refreshed each session)
-  - data/portfolio_history.csv — historical trades, used for cost basis calculations
+  - Supabase portfolio_snapshots table (written by Claude after Robinhood MCP read)
+  - data/portfolio_history.csv (local fallback for cost basis when no live snapshot)
 
+Convictions come from Supabase convictions table (fallback: local convictions.json).
 Market/fundamental data comes from yfinance (free, EOD).
 """
 
 import json
-import sqlite3
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -18,8 +18,7 @@ import yfinance as yf
 
 ROOT = Path(__file__).parent.parent
 HISTORY_CSV = ROOT / "data" / "portfolio_history.csv"
-LIVE_PORTFOLIO = ROOT / "data" / "live_portfolio.json"
-CONVICTIONS = ROOT / "convictions.json"
+CONVICTIONS_FALLBACK = ROOT / "convictions.json"
 
 
 # ---------------------------------------------------------------------------
@@ -27,8 +26,19 @@ CONVICTIONS = ROOT / "convictions.json"
 # ---------------------------------------------------------------------------
 
 def load_convictions() -> dict:
-    with open(CONVICTIONS) as f:
-        return json.load(f)
+    """Load convictions from Supabase; fall back to local file if DB unavailable."""
+    try:
+        from src.memory import get_latest_convictions
+        remote = get_latest_convictions()
+        if remote:
+            return remote
+    except Exception:
+        pass
+    # Local fallback
+    if CONVICTIONS_FALLBACK.exists():
+        with open(CONVICTIONS_FALLBACK) as f:
+            return json.load(f)
+    raise RuntimeError("No convictions available — Supabase unreachable and no local fallback")
 
 
 def get_cost_basis_from_csv() -> dict[str, dict]:
@@ -86,30 +96,32 @@ def get_cost_basis_from_csv() -> dict[str, dict]:
     return {t: v for t, v in result.items() if v["shares"] > 0.01}
 
 
-def get_live_portfolio() -> dict[str, dict] | None:
-    """
-    Load live portfolio snapshot written by Claude via Robinhood MCP.
-    Returns None if no snapshot exists (fall back to CSV).
-    """
-    if not LIVE_PORTFOLIO.exists():
-        return None
-    with open(LIVE_PORTFOLIO) as f:
-        return json.load(f)
-
-
 def get_portfolio() -> dict[str, dict]:
     """
-    Best available portfolio data. Live MCP snapshot if fresh (<24h), else CSV cost basis.
+    Best available portfolio data.
+    Priority: Supabase portfolio snapshot (<24h) → CSV cost basis fallback.
     """
-    live = get_live_portfolio()
-    if live:
-        ts = live.get("_snapshot_time", "")
-        if ts:
-            age = datetime.now() - datetime.fromisoformat(ts)
-            if age < timedelta(hours=24):
-                return live.get("positions", {})
+    try:
+        from src.memory import get_latest_portfolio_snapshot
+        snapshot = get_latest_portfolio_snapshot()
+        if snapshot:
+            ts = datetime.fromisoformat(snapshot["snapshot_time"].replace("Z", ""))
+            if datetime.now() - ts < timedelta(hours=24):
+                return snapshot["positions"]
+    except Exception:
+        pass
 
     return get_cost_basis_from_csv()
+
+
+def save_mcp_portfolio_snapshot(positions: dict):
+    """
+    Called by Claude after reading Robinhood MCP. Persists to Supabase.
+    positions: {ticker: {shares, current_price, market_value, avg_cost, ...}}
+    """
+    from src.memory import save_portfolio_snapshot
+    save_portfolio_snapshot(positions)
+    print(f"Saved portfolio snapshot to Supabase: {len(positions)} positions")
 
 
 def save_mcp_portfolio_snapshot(positions: dict):
