@@ -239,7 +239,7 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
 
     memory.log_run_summary(
         mode=mode, signals=[s.to_dict() for s in signals],
-        summary=summary, run_date=run_date,
+        summary=summary, raw_output=output, run_date=run_date,
     )
 
     print(f"Summary: {summary}")

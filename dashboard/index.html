@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ASTRA — Mission Control</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+  <!-- CDN libs -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <canvas id="starfield"></canvas>
+
+  <!-- HEADER -->
+  <header id="site-header">
+    <div class="header-left">
+      <div class="logo">
+        <svg class="rocket-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 2C12 2 7 7 7 13C7 16.31 9.69 19 13 19H11C11 19 9 21 7 22C9 22 12 21 14 19C17.31 19 20 16.31 20 13C20 7 12 2 12 2Z" fill="var(--accent-cyan)" opacity="0.9"/>
+          <path d="M12 2C12 2 17 7 17 13" stroke="var(--accent-cyan)" stroke-width="1.5" stroke-linecap="round"/>
+          <circle cx="12" cy="12" r="2.5" fill="var(--bg-deep)" stroke="var(--accent-cyan)" stroke-width="1.5"/>
+          <path d="M8 17L6 22L10 20" fill="var(--accent-orange)" opacity="0.8"/>
+          <path d="M16 17L18 22L14 20" fill="var(--accent-orange)" opacity="0.8"/>
+        </svg>
+        <div>
+          <span class="logo-text">ASTRA</span>
+          <span class="logo-sub">Mission Control</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="header-center">
+      <div id="header-status">
+        <div class="status-item">
+          <span class="status-label">LAST RUN</span>
+          <span id="last-run-date" class="status-value">—</span>
+        </div>
+        <div class="status-divider"></div>
+        <div class="status-item">
+          <span class="status-label">NEXT RUN</span>
+          <span id="next-run-date" class="status-value">—</span>
+        </div>
+        <div class="status-divider"></div>
+        <div class="status-item">
+          <span class="status-label">POSITIONS</span>
+          <span id="positions-count" class="status-value">—</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <div id="live-indicator" class="live-badge">
+        <span class="pulse-dot"></span>
+        <span>SIMULATION</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN -->
+  <main id="app">
+
+    <!-- Loading state -->
+    <div id="loading-state">
+      <div class="loading-ring"></div>
+      <p>Establishing uplink to ASTRA…</p>
+    </div>
+
+    <!-- Error state (hidden by default) -->
+    <div id="error-state" class="hidden">
+      <p class="error-text">⚠ Failed to connect to ASTRA database.</p>
+      <p style="font-family:monospace; font-size:11px; color:#445566; margin-top:8px;">Open DevTools → Console for details (⌘⌥J)</p>
+    </div>
+
+    <!-- Content (hidden until data loads) -->
+    <div id="content" class="hidden">
+
+      <!-- SIGNALS OVERVIEW BAR -->
+      <section id="signals-bar">
+        <div class="signals-chart-wrap">
+          <canvas id="signals-donut" width="100" height="100"></canvas>
+        </div>
+        <div class="signals-counts" id="signals-counts">
+          <!-- injected by JS -->
+        </div>
+        <div class="signals-summary">
+          <span id="run-summary-text" class="summary-text"></span>
+        </div>
+      </section>
+
+      <!-- ADVISOR NOTE -->
+      <section id="advisor-section">
+        <div class="section-label">
+          <span class="section-icon">◈</span>
+          <span>AI ADVISOR NOTE</span>
+          <span class="section-badge">ASTRA · claude-haiku</span>
+        </div>
+        <div id="advisor-note" class="advisor-card">
+          <!-- markdown rendered by JS -->
+        </div>
+      </section>
+
+      <!-- FLEET STATUS: SWIM LANES -->
+      <section id="fleet-status">
+        <div class="section-label">
+          <span class="section-icon">◈</span>
+          <span>FLEET STATUS</span>
+        </div>
+
+        <!-- Lanes injected by JS -->
+        <div id="lanes-container"></div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- POSITION DETAIL MODAL -->
+  <div id="modal-overlay" class="hidden" role="dialog" aria-modal="true">
+    <div id="modal">
+      <button id="modal-close" aria-label="Close">✕</button>
+      <div id="modal-content">
+        <!-- injected by JS -->
+      </div>
+    </div>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>

@@ -122,7 +122,17 @@ ALTER TABLE portfolio_snapshots ENABLE ROW LEVEL SECURITY;
 -- (no anon policy = anon gets nothing; service role still has full access)
 
 -- ============================================================
--- GRANTS (run if service_role gets permission denied errors)
+-- GRANTS
 -- ============================================================
+-- service_role: full access (used by Python backend + GitHub Actions)
 GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;
+
+-- anon role: read-only on public tables (used by dashboard JS)
+-- RLS policies above also required; Postgres needs both grant + policy.
+GRANT SELECT ON run_summaries TO anon;
+GRANT SELECT ON decisions     TO anon;
+GRANT SELECT ON convictions   TO anon;
+GRANT SELECT ON trades        TO anon;
+GRANT SELECT ON outcomes      TO anon;
+-- portfolio_snapshots: no anon grant (positions are private)

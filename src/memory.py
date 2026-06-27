@@ -51,6 +51,7 @@ def log_run_summary(
     mode: str,
     signals: list[dict],
     summary: str,
+    raw_output: dict | None = None,
     run_date: str | None = None,
 ):
     run_date = run_date or datetime.now().isoformat()
@@ -61,7 +62,7 @@ def log_run_summary(
         "num_signals": len(signals),
         "buy_signals": buy_signals,
         "summary": summary,
-        "raw_output": signals,
+        "raw_output": raw_output or {"signals": signals},
     }).execute()
 
 
