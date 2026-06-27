@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+data/live_portfolio.json
+*.db
+.env
+analysis/*.json
+CLAUDE.md

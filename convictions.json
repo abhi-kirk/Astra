@@ -1,0 +1,151 @@
+{
+  "_meta": {
+    "last_updated": "2026-06-27",
+    "notes": "Updated via Claude Code conversation. Edit by talking to Claude or directly editing this file."
+  },
+
+  "exclusions": [
+    {
+      "ticker": "TSLA",
+      "reason": "Employment equity + blackout periods. Already heavily concentrated via RSUs. Hard exclusion — agent must never act on Tesla in Robinhood."
+    }
+  ],
+
+  "themes": {
+    "space": {
+      "conviction": "very_high",
+      "horizon_years": "5-10",
+      "thesis": "Artemis program returning humans to the moon + SpaceX driving down orbital launch costs = orbital infrastructure buildout. Satellite constellations, lunar economy, US government contracts will grow substantially. Payoff is long but expected to be large.",
+      "quality_filter": "Company must directly benefit from cheap orbital access or government space contracts. Sub-orbital tourism (different, unproven market) is excluded from this thesis.",
+      "approved": ["RKLB", "ASTS", "ARKX", "SPCX", "NASA"],
+      "do_not_add": ["SPCE"],
+      "notes": {
+        "RKLB": "Highest current conviction. Operational launch vehicle (Electron), Neutron in development, US govt contracts. Directly aligned with thesis. Continue accumulating on dips.",
+        "ASTS": "AST SpaceMobile — direct-to-device satellite broadband. Higher risk than RKLB but legitimate thesis. AT&T/Vodafone partnerships. Appropriate as smaller position.",
+        "SPCE": "DO NOT ADD. Sub-orbital tourist flights from New Mexico — completely misaligned with the orbital infrastructure thesis. Went through restructuring. Pending sell decision (Mon 2026-06-30).",
+        "ARKX": "Space ETF. Diversified exposure. Long hold.",
+        "NASA": "Aerospace/defense ETF. Supplementary space exposure."
+      }
+    },
+
+    "ev_transition": {
+      "conviction": "high",
+      "horizon_years": "10-30",
+      "thesis": "ICE vehicles become a minority within 20-30 years. Near-certainty over 50-year horizon. Growth will be gradual not exponential, but companies that survive the shakeout and achieve scale will be very large.",
+      "quality_filter": "Prioritize companies with path to profitability and real manufacturing scale. Chinese ADR geopolitical risk (potential delisting, audit disputes) must be factored into position sizing.",
+      "preferred": ["BYDDY"],
+      "hold_only": ["NIO", "LCID", "CHPT"],
+      "notes": {
+        "BYDDY": "Cleaner expression of China EV thesis than NIO. Profitable, vertically integrated (batteries + vehicles), dominant market share. Prefer adding here over NIO.",
+        "NIO": "HOLD ONLY. Do not add without a documented fresh catalyst: profitability milestone, major new partnership, or volume growth clearly outpacing BYD. Risks: cash burn, BYD price competition in premium segment, China ADR geopolitical exposure. 54 buys already — averaging-down trap acknowledged.",
+        "LCID": "HOLD ONLY. Small position ($1.5K). At cost basis. Not adding.",
+        "CHPT": "HOLD ONLY. Last buy at $0.58 — effectively written off. Not adding."
+      }
+    },
+
+    "cannabis": {
+      "conviction": "low",
+      "horizon_years": "unknown",
+      "thesis": "US federal legalization was expected to unlock market economics. Thesis has stalled: Section 280E tax burden cripples legal operators, no federal banking access, legal market undercut by untaxed black market, Gen Z consumption lower than expected.",
+      "status": "stalled — no visible near-term catalyst",
+      "hold_only": ["CRON"],
+      "notes": {
+        "CRON": "HOLD ONLY. Cronos Group — Canadian-listed, Altria-backed, one of the more resilient cannabis companies. Small position (~$1.6K). Not adding. Revisit only if US federal legislation materially advances (banking access + Section 280E reform)."
+      }
+    },
+
+    "ai_infrastructure": {
+      "conviction": "high",
+      "horizon_years": "3-7",
+      "thesis": "AI compute demand is secular and accelerating. Data centers, GPUs, networking infrastructure will see sustained capital expenditure regardless of which AI models win.",
+      "quality_filter": "Prefer picks-and-shovels plays over pure AI application companies. Look for companies with durable competitive moats in the supply chain.",
+      "preferred": ["NVDA", "AMD", "MSFT", "GOOGL", "AMZN"],
+      "notes": {
+        "NVDA": "Core holding. Dominant GPU market share for AI training/inference. Continue accumulating on meaningful dips (>15% off recent high, RSI < 40).",
+        "AMD": "Secondary GPU/CPU play. Benefits from NVDA supply constraints and data center diversification.",
+        "GOOGL": "Largest open position. TPU infrastructure, cloud AI services, search moat. Long-term hold.",
+        "MSFT": "Azure + OpenAI partnership. Hold.",
+        "AMZN": "AWS + Trainium/Inferentia custom chips. Consistent accumulation."
+      }
+    }
+  },
+
+  "individual_holdings": {
+    "DAL": {
+      "status": "hold",
+      "thesis": "Travel demand recovery post-COVID. Airlines operationally improved. Long-term hold at current cost basis.",
+      "action": "No new buys. Reassess if airline fundamentals deteriorate."
+    },
+    "KO": {
+      "status": "hold",
+      "thesis": "Dividend compounder. Steady accumulation via Robinhood recurring buys. Defensive position.",
+      "action": "Continue small recurring buys. Not a high-conviction growth play."
+    },
+    "UBER": {
+      "status": "hold",
+      "thesis": "Rideshare + delivery network effects. Path to profitability achieved. Autonomous vehicle wildcard.",
+      "action": "Hold. Revisit if autonomous vehicle timeline accelerates (positive) or Waymo expands rapidly (competitive risk)."
+    },
+    "NFLX": {
+      "status": "hold",
+      "thesis": "Streaming consolidation winner. Ad-supported tier expanding TAM. Password sharing crackdown worked.",
+      "action": "Hold existing position."
+    },
+    "CRM": {
+      "status": "hold",
+      "thesis": "Enterprise software. AI integration (Einstein) could re-accelerate growth.",
+      "action": "Hold. Small position relative to cost."
+    },
+    "BA": {
+      "status": "hold",
+      "thesis": "Aerospace duopoly. Supply chain issues resolving. Long recovery runway.",
+      "action": "Hold. Do not add until 737 MAX production ramp is clearly on track."
+    },
+    "ARKK": {
+      "status": "hold",
+      "thesis": "Innovation ETF. Diversified exposure to disruptive tech. Bought during 2021 peak — underwater.",
+      "action": "Hold as diversified long-term bet. Not adding."
+    },
+    "SMR": {
+      "status": "hold",
+      "thesis": "NuScale Power — small modular nuclear reactors. Data center energy demand could be a major catalyst.",
+      "action": "Small speculative position. Hold. Watch for SMR regulatory approvals and data center partnerships."
+    },
+    "BB": {
+      "status": "hold",
+      "thesis": "BlackBerry pivot to enterprise security software. Original meme-stock buy.",
+      "action": "Small legacy position. Not adding. Monitor security software traction."
+    },
+    "NOK": {
+      "status": "hold",
+      "thesis": "5G infrastructure. Originally a meme play, now holding on 5G rollout thesis.",
+      "action": "Small position. Hold."
+    },
+    "USO": {
+      "status": "hold",
+      "thesis": "Oil ETF. Original COVID recovery play from 2020.",
+      "action": "Old position. Reassess relevance given EV conviction."
+    }
+  },
+
+  "agent_rules": {
+    "hard_constraints": [
+      "TSLA: never touch — hard exclusion",
+      "No averaging down: max 3 additional buys on any position >35% below average cost basis without explicit user re-approval of thesis",
+      "Hold-only names (NIO, LCID, CHPT, CRON): no new buys without documented fresh catalyst",
+      "Do-not-add names (SPCE): no new buys under any circumstances",
+      "Max single-name position: 10% of total Robinhood portfolio value",
+      "Max single speculative theme: 15% of total portfolio (e.g., all space names excluding core ETFs)"
+    ],
+    "profit_take_triggers": [
+      "Flag for review when any position is up >60% from average cost basis",
+      "Flag for review when any single name exceeds 15% of portfolio value"
+    ],
+    "entry_criteria": [
+      "Position in convictions.json (theme approved or individual holding)",
+      "Quality filter passed: revenue growth >10% YoY, gross margin stable/improving, no distressed balance sheet",
+      "Technical signal: >15% below 52-week high AND RSI < 40",
+      "Dip cause: macro/sector selloff preferred over company-specific bad news"
+    ]
+  }
+}
