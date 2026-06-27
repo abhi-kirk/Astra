@@ -41,13 +41,60 @@ def load_convictions() -> dict:
     raise RuntimeError("No convictions available — Supabase unreachable and no local fallback")
 
 
+def get_cost_basis_from_db() -> dict[str, dict]:
+    """
+    Compute per-ticker cost basis from Supabase trades table.
+    Used by GitHub Actions and any environment without the local CSV.
+    """
+    from src.db import get_client
+    rows = get_client().table("trades").select(
+        "ticker, trans_code, quantity, price, amount, activity_date"
+    ).in_("trans_code", ["Buy", "Sell"]).execute().data or []
+
+    from collections import defaultdict
+    buys: dict = defaultdict(lambda: {"qty": 0.0, "amt": 0.0, "count": 0, "last_price": None, "last_date": None})
+    sells: dict = defaultdict(lambda: {"qty": 0.0, "amt": 0.0, "count": 0})
+
+    for r in rows:
+        t = (r.get("ticker") or "").strip()
+        if not t:
+            continue
+        qty = float(r["quantity"] or 0)
+        amt = float(r["amount"] or 0)
+        if r["trans_code"] == "Buy":
+            buys[t]["qty"] += qty
+            buys[t]["amt"] += amt
+            buys[t]["count"] += 1
+            buys[t]["last_price"] = r.get("price")
+            buys[t]["last_date"] = r.get("activity_date")
+        else:
+            sells[t]["qty"] += qty
+            sells[t]["amt"] += amt
+            sells[t]["count"] += 1
+
+    result = {}
+    for ticker in buys:
+        b, s = buys[ticker], sells.get(ticker, {"qty": 0.0, "amt": 0.0, "count": 0})
+        net_shares = round(b["qty"] - s["qty"], 6)
+        net_cost = round(b["amt"] - s["amt"], 2)
+        if net_shares <= 0.01:
+            continue
+        result[ticker] = {
+            "shares": net_shares,
+            "avg_cost": round(net_cost / net_shares, 4),
+            "total_invested": net_cost,
+            "num_buys": b["count"],
+            "num_sells": s["count"],
+            "last_buy_price": b["last_price"],
+            "last_buy_date": b["last_date"],
+        }
+    return result
+
+
 def get_cost_basis_from_csv() -> dict[str, dict]:
-    """
-    Compute per-ticker cost basis and estimated open positions from trade history CSV.
-    Returns {ticker: {shares, avg_cost, total_invested, num_buys, num_sells}}
-    """
-    df = pd.read_csv(HISTORY_CSV, engine="python", quotechar='"', on_bad_lines="skip")
-    df.columns = [c.strip() for c in df.columns]
+    """Local CSV fallback — only used in dev when Supabase is unavailable."""
+    if not HISTORY_CSV.exists():
+        raise FileNotFoundError(f"CSV not found and Supabase unavailable: {HISTORY_CSV}")
 
     def clean_dollar(val):
         if pd.isna(val):
@@ -58,6 +105,8 @@ def get_cost_basis_from_csv() -> dict[str, dict]:
         except ValueError:
             return None
 
+    df = pd.read_csv(HISTORY_CSV, engine="python", quotechar='"', on_bad_lines="skip")
+    df.columns = [c.strip() for c in df.columns]
     df["amount"] = df["Amount"].apply(clean_dollar)
     df["price"] = df["Price"].apply(clean_dollar)
     df["qty"] = pd.to_numeric(df["Quantity"], errors="coerce")
@@ -65,44 +114,33 @@ def get_cost_basis_from_csv() -> dict[str, dict]:
 
     trades = df[df["Trans Code"].isin(["Buy", "Sell"])].copy()
     result = {}
-
     for ticker, group in trades.groupby("Instrument"):
         buys = group[group["Trans Code"] == "Buy"]
         sells = group[group["Trans Code"] == "Sell"]
-
-        buy_qty = buys["qty"].sum()
-        sell_qty = sells["qty"].sum()
-        net_shares = round(buy_qty - sell_qty, 6)
-
-        buy_amt = buys["amount"].sum()
-        sell_amt = sells["amount"].sum()
-        net_cost = round(buy_amt - sell_amt, 2)
-
-        avg_cost = round(net_cost / net_shares, 4) if net_shares > 0.01 else 0
-
+        net_shares = round(buys["qty"].sum() - sells["qty"].sum(), 6)
+        net_cost = round(buys["amount"].sum() - sells["amount"].sum(), 2)
+        if net_shares <= 0.01:
+            continue
         last_buy = buys.sort_values("date").iloc[-1] if len(buys) else None
-
         result[ticker] = {
             "shares": net_shares,
-            "avg_cost": avg_cost,
-            "total_invested": round(net_cost, 2),
+            "avg_cost": round(net_cost / net_shares, 4) if net_shares > 0 else 0,
+            "total_invested": net_cost,
             "num_buys": len(buys),
             "num_sells": len(sells),
             "last_buy_price": last_buy["price"] if last_buy is not None else None,
             "last_buy_date": str(last_buy["date"].date()) if last_buy is not None else None,
         }
-
-    # Return only open positions
-    return {t: v for t, v in result.items() if v["shares"] > 0.01}
+    return result
 
 
 def get_portfolio() -> dict[str, dict]:
     """
     Best available portfolio data.
-    Priority: Supabase portfolio snapshot (<24h) → CSV cost basis fallback.
+    Priority: Supabase MCP snapshot (<24h) → Supabase trades table → local CSV.
     """
+    from src.memory import get_latest_portfolio_snapshot
     try:
-        from src.memory import get_latest_portfolio_snapshot
         snapshot = get_latest_portfolio_snapshot()
         if snapshot:
             ts = datetime.fromisoformat(snapshot["snapshot_time"].replace("Z", ""))
@@ -111,31 +149,19 @@ def get_portfolio() -> dict[str, dict]:
     except Exception:
         pass
 
+    try:
+        return get_cost_basis_from_db()
+    except Exception:
+        pass
+
     return get_cost_basis_from_csv()
 
 
 def save_mcp_portfolio_snapshot(positions: dict):
-    """
-    Called by Claude after reading Robinhood MCP. Persists to Supabase.
-    positions: {ticker: {shares, current_price, market_value, avg_cost, ...}}
-    """
+    """Called by Claude after reading Robinhood MCP. Persists to Supabase."""
     from src.memory import save_portfolio_snapshot
     save_portfolio_snapshot(positions)
     print(f"Saved portfolio snapshot to Supabase: {len(positions)} positions")
-
-
-def save_mcp_portfolio_snapshot(positions: dict):
-    """
-    Called by Claude after reading Robinhood MCP. Writes live_portfolio.json.
-    positions: {ticker: {shares, current_price, market_value, avg_cost, ...}}
-    """
-    snapshot = {
-        "_snapshot_time": datetime.now().isoformat(),
-        "_source": "robinhood_mcp",
-        "positions": positions,
-    }
-    LIVE_PORTFOLIO.write_text(json.dumps(snapshot, indent=2))
-    print(f"Saved live portfolio snapshot: {len(positions)} positions")
 
 
 # ---------------------------------------------------------------------------
