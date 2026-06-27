@@ -1,0 +1,39 @@
+name: Weekly Analysis
+
+on:
+  schedule:
+    - cron: "0 14 * * 1"   # Every Monday 6am PT (14:00 UTC) — after markets open
+  workflow_dispatch:         # Allow manual trigger from GitHub Actions UI
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run ASTRA analysis
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python -m src.agent --mode simulation
+
+      - name: Commit analysis output
+        run: |
+          git config user.name "astra-bot"
+          git config user.email "astra-bot@users.noreply.github.com"
+          git add analysis/
+          git diff --staged --quiet || git commit -m "Weekly analysis $(date -u +%Y-%m-%d)"
+          git push
