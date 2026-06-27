@@ -5,9 +5,6 @@ on:
     - cron: "0 14 * * 1"   # Every Monday 6am PT (14:00 UTC) — after markets open
   workflow_dispatch:         # Allow manual trigger from GitHub Actions UI
 
-permissions:
-  contents: write
-
 jobs:
   analyze:
     runs-on: ubuntu-latest
@@ -33,10 +30,4 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python -m src.agent --mode simulation
 
-      - name: Commit analysis output
-        run: |
-          git config user.name "astra-bot"
-          git config user.email "astra-bot@users.noreply.github.com"
-          git add analysis/
-          git diff --staged --quiet || git commit -m "Weekly analysis $(date -u +%Y-%m-%d)"
-          git push
+      # Analysis output goes to Supabase only — no files committed back to repo.

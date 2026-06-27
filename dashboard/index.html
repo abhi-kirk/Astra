@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ASTRA — Mission Control</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23050a14'/><path d='M16 4 C16 4 10 10 10 18 C10 22 13 25 16 25 C19 25 22 22 22 18 C22 10 16 4 16 4Z' fill='%2300d4ff' opacity='0.9'/><circle cx='16' cy='16' r='3' fill='%23050a14' stroke='%2300d4ff' stroke-width='1.5'/><path d='M12 23 L10 29 L15 27' fill='%23ff6b35'/><path d='M20 23 L22 29 L17 27' fill='%23ff6b35'/></svg>">
 
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -13,6 +14,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
 
   <link rel="stylesheet" href="css/style.css">
 </head>
@@ -58,6 +60,11 @@
     </div>
 
     <div class="header-right">
+      <span class="phase-badge">PHASE 1</span>
+      <button class="lock-btn" id="lock-btn" title="Toggle private view">
+        <span id="lock-icon">🔒</span>
+        <span id="lock-label">PRIVATE</span>
+      </button>
       <div id="live-indicator" class="live-badge">
         <span class="pulse-dot"></span>
         <span>SIMULATION</span>
@@ -101,7 +108,6 @@
         <div class="section-label">
           <span class="section-icon">◈</span>
           <span>AI ADVISOR NOTE</span>
-          <span class="section-badge">ASTRA · claude-haiku</span>
         </div>
         <div id="advisor-note" class="advisor-card">
           <!-- markdown rendered by JS -->
@@ -129,6 +135,19 @@
       <div id="modal-content">
         <!-- injected by JS -->
       </div>
+    </div>
+  </div>
+
+  <!-- LOGIN MODAL -->
+  <div id="login-overlay" class="hidden" role="dialog" aria-modal="true">
+    <div id="login-modal">
+      <button id="login-close" aria-label="Close">✕</button>
+      <div class="login-lock-icon">🔒</div>
+      <div class="login-title">PRIVATE VIEW</div>
+      <div class="login-subtitle">Sign in to unlock personal financial data — avg cost, P&L, and the full ASTRA advisor note.</div>
+      <div id="login-error" class="login-error hidden"></div>
+      <input type="password" id="login-password" class="login-input" placeholder="Password" autocomplete="current-password">
+      <button id="login-submit" class="login-submit-btn">UNLOCK →</button>
     </div>
   </div>
 

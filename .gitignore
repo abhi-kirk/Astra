@@ -7,12 +7,17 @@ __pycache__/
 # Local only — never commit
 .env
 CLAUDE.md
-data/
 convictions.json
 
-# Generated outputs
-analysis/*.json
+# Personal financial data — lives in Supabase only
+data/
+
+# Legacy / generated
+analysis/
 *.db
+
+# Claude Code local settings
+.claude/
 
 # macOS
 .DS_Store

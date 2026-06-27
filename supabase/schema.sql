@@ -1,12 +1,12 @@
--- ASTRA schema
--- Run this in: Supabase Dashboard → SQL Editor
--- Or via CLI: supabase db push
+-- ASTRA — Supabase schema + auth setup
+-- Run in: Supabase Dashboard → SQL Editor
+-- Represents the complete desired state; safe to re-run (uses IF NOT EXISTS / OR REPLACE).
 
 -- ============================================================
 -- TABLES
 -- ============================================================
 
--- Full trade history imported from Robinhood CSV (one-time seed)
+-- Full trade history imported from Robinhood CSV (one-time seed via supabase/seed.py)
 CREATE TABLE IF NOT EXISTS trades (
     id              BIGSERIAL PRIMARY KEY,
     activity_date   DATE,
@@ -21,8 +21,7 @@ CREATE TABLE IF NOT EXISTS trades (
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Convictions store — replaces convictions.json
--- Single row updated in place; full history via conviction_snapshots
+-- Convictions store — replaces convictions.json on disk
 CREATE TABLE IF NOT EXISTS convictions (
     id          BIGSERIAL PRIMARY KEY,
     content     JSONB NOT NULL,
@@ -35,18 +34,18 @@ CREATE TABLE IF NOT EXISTS portfolio_snapshots (
     id             BIGSERIAL PRIMARY KEY,
     snapshot_time  TIMESTAMPTZ NOT NULL,
     source         TEXT DEFAULT 'robinhood_mcp',
-    positions      JSONB NOT NULL,   -- {ticker: {shares, current_price, avg_cost, ...}}
+    positions      JSONB NOT NULL,
     created_at     TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Every analysis signal with reasoning
+-- Every analysis signal with reasoning (private — auth only)
 CREATE TABLE IF NOT EXISTS decisions (
     id                  BIGSERIAL PRIMARY KEY,
     run_date            TIMESTAMPTZ NOT NULL,
     ticker              TEXT NOT NULL,
     action              TEXT NOT NULL,  -- buy/sell/hold/watch/review/blocked
     reasoning           TEXT,
-    signal_data         JSONB,          -- full Signal dataclass
+    signal_data         JSONB,
     price_at_decision   NUMERIC(18,4),
     shares_held         NUMERIC(18,6),
     avg_cost            NUMERIC(18,4),
@@ -55,7 +54,7 @@ CREATE TABLE IF NOT EXISTS decisions (
     created_at          TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Outcome tracking for closed/reviewed decisions
+-- Outcome tracking for past decisions
 CREATE TABLE IF NOT EXISTS outcomes (
     id                  BIGSERIAL PRIMARY KEY,
     decision_id         BIGINT REFERENCES decisions(id) ON DELETE CASCADE,
@@ -67,15 +66,18 @@ CREATE TABLE IF NOT EXISTS outcomes (
 );
 
 -- Weekly run audit log
+-- raw_output: full data including advisor note (private, auth only)
+-- public_output: scrubbed version safe for anon visitors (no personal financial data)
 CREATE TABLE IF NOT EXISTS run_summaries (
-    id           BIGSERIAL PRIMARY KEY,
-    run_date     TIMESTAMPTZ NOT NULL,
-    mode         TEXT NOT NULL,        -- simulation / live
-    num_signals  INTEGER,
-    buy_signals  JSONB,                -- ["RKLB", "ASTS"]
-    summary      TEXT,
-    raw_output   JSONB,
-    created_at   TIMESTAMPTZ DEFAULT NOW()
+    id            BIGSERIAL PRIMARY KEY,
+    run_date      TIMESTAMPTZ NOT NULL,
+    mode          TEXT NOT NULL,        -- simulation / live
+    num_signals   INTEGER,
+    buy_signals   JSONB,                -- ["RKLB", "ASTS"]
+    summary       TEXT,
+    raw_output    JSONB,
+    public_output JSONB,
+    created_at    TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- ============================================================
@@ -93,46 +95,75 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_time      ON portfolio_snapshots(snapsh
 -- ============================================================
 -- ROW LEVEL SECURITY
 -- ============================================================
--- RLS is enabled automatically on all tables (we checked that box at project creation).
--- Service role key bypasses RLS entirely (used by Python backend + GitHub Actions).
--- Anon key (used by dashboard) gets explicit read-only access below.
+-- Service role key (Python backend + GitHub Actions) bypasses RLS entirely.
+-- Anon key (public dashboard visitors) gets read-only access via RPC only.
+-- Authenticated users (owner, via Supabase Auth) get full read access.
 
--- trades: dashboard can read for cost basis display
-ALTER TABLE trades ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "anon read trades" ON trades FOR SELECT TO anon USING (true);
-
--- convictions: dashboard can read current thesis
-ALTER TABLE convictions ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "anon read convictions" ON convictions FOR SELECT TO anon USING (true);
-
--- decisions: dashboard reads all signals
-ALTER TABLE decisions ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "anon read decisions" ON decisions FOR SELECT TO anon USING (true);
-
--- outcomes: dashboard reads outcomes
-ALTER TABLE outcomes ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "anon read outcomes" ON outcomes FOR SELECT TO anon USING (true);
-
--- run_summaries: dashboard reads run history
-ALTER TABLE run_summaries ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "anon read run_summaries" ON run_summaries FOR SELECT TO anon USING (true);
-
--- portfolio_snapshots: NO anon read — positions are private
+ALTER TABLE trades             ENABLE ROW LEVEL SECURITY;
+ALTER TABLE convictions        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE decisions          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE outcomes           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE run_summaries      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE portfolio_snapshots ENABLE ROW LEVEL SECURITY;
--- (no anon policy = anon gets nothing; service role still has full access)
+
+-- Public tables: anon can read convictions and trades (no personal financial data)
+CREATE POLICY "anon read trades"       ON trades       FOR SELECT TO anon USING (true);
+CREATE POLICY "anon read convictions"  ON convictions  FOR SELECT TO anon USING (true);
+CREATE POLICY "anon read outcomes"     ON outcomes     FOR SELECT TO anon USING (true);
+
+-- Private tables: only the owner account can read (enforced by email)
+-- Replace 'your@email.com' with the email used in Supabase Auth → Users
+CREATE POLICY "owner read run_summaries" ON run_summaries
+    FOR SELECT TO authenticated USING (auth.email() = 'abhikirk@icloud.com');
+
+CREATE POLICY "owner read decisions" ON decisions
+    FOR SELECT TO authenticated USING (auth.email() = 'abhikirk@icloud.com');
+
+-- portfolio_snapshots: owner only
+CREATE POLICY "owner read snapshots" ON portfolio_snapshots
+    FOR SELECT TO authenticated USING (auth.email() = 'abhikirk@icloud.com');
 
 -- ============================================================
 -- GRANTS
 -- ============================================================
--- service_role: full access (used by Python backend + GitHub Actions)
+
+-- Service role: full access (bypasses RLS anyway, but be explicit)
 GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;
 
--- anon role: read-only on public tables (used by dashboard JS)
--- RLS policies above also required; Postgres needs both grant + policy.
-GRANT SELECT ON run_summaries TO anon;
-GRANT SELECT ON decisions     TO anon;
-GRANT SELECT ON convictions   TO anon;
-GRANT SELECT ON trades        TO anon;
-GRANT SELECT ON outcomes      TO anon;
--- portfolio_snapshots: no anon grant (positions are private)
+-- Authenticated (owner): full read on all tables
+GRANT SELECT ON run_summaries      TO authenticated;
+GRANT SELECT ON decisions          TO authenticated;
+GRANT SELECT ON trades             TO authenticated;
+GRANT SELECT ON convictions        TO authenticated;
+GRANT SELECT ON outcomes           TO authenticated;
+GRANT SELECT ON portfolio_snapshots TO authenticated;
+
+-- Anon: read-only on non-sensitive tables only
+-- run_summaries and decisions are NOT granted to anon directly —
+-- public data is served via the get_latest_run_public() RPC function below.
+GRANT SELECT ON convictions TO anon;
+GRANT SELECT ON trades      TO anon;
+GRANT SELECT ON outcomes    TO anon;
+
+-- ============================================================
+-- PUBLIC RPC — scrubbed data for unauthenticated visitors
+-- ============================================================
+-- SECURITY DEFINER: runs as the function owner, bypassing RLS on run_summaries.
+-- Only exposes public_output (no advisor note, no personal financial data).
+
+CREATE OR REPLACE FUNCTION get_latest_run_public()
+RETURNS jsonb
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    SELECT COALESCE(public_output, '{}'::jsonb)
+    FROM run_summaries
+    WHERE public_output IS NOT NULL
+    ORDER BY id DESC
+    LIMIT 1;
+$$;
+
+GRANT EXECUTE ON FUNCTION get_latest_run_public() TO anon;
+GRANT EXECUTE ON FUNCTION get_latest_run_public() TO authenticated;

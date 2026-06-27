@@ -14,7 +14,7 @@ Usage:
 import argparse
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import anthropic
@@ -26,10 +26,7 @@ from src import memory
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-ROOT = Path(__file__).parent.parent
-ANALYSIS_DIR = ROOT / "analysis"
-
-REASONING_MODEL = "claude-haiku-4-5-20251001"   # cheap + fast for weekly batch runs
+REASONING_MODEL = "claude-sonnet-4-6"
 
 
 def call_claude_reasoning(
@@ -79,14 +76,15 @@ def call_claude_reasoning(
     # Theme conviction summary
     themes = {k: v.get("conviction") for k, v in convictions.get("themes", {}).items()}
 
-    prompt = f"""You are ASTRA, an AI trading advisor for a personal Robinhood portfolio.
+    prompt = f"""You are ASTRA, a personal trading assistant for a non-finance-professional investor.
 
 INVESTOR PROFILE:
-- Software engineer at Tesla. Deep tech + space sector expertise.
+- Software engineer at Tesla. Understands tech deeply, but does not have a finance background and does not trade daily.
+- Invests based on personal conviction in themes he follows (space, tech, EV) — not short-term trading signals.
+- Medium-term horizon: holds positions for weeks to months, sometimes longer if the thesis is strong.
 - TSLA excluded (employment equity + blackout restrictions).
 - Conviction themes: {json.dumps(themes)}
-- Investment style: medium-term (weeks to months), conviction-based, not high-frequency.
-- Key rule: no averaging down past 3x on positions >35% below cost basis.
+- Key rule: no buying more of a stock that is already more than 35% below what he paid, if he has bought it more than 3 times already.
 
 PRIOR DECISION HISTORY (for continuity):
 {history_context}
@@ -94,27 +92,70 @@ PRIOR DECISION HISTORY (for continuity):
 THIS WEEK'S MECHANICAL SIGNALS:
 {signal_text}
 
-Write a concise weekly advisor note (200-300 words) covering:
-1. PRIORITY ACTIONS: What needs attention this week and why (be specific about tickers).
-2. RISK FLAGS: Any positions or patterns worth watching.
-3. CONVICTION CHECK: Do this week's signals align with the investor's stated themes?
-4. ONE THING TO WATCH: A single forward-looking observation for next week.
+Write a plain-English weekly note (200-300 words) as if you're a knowledgeable friend explaining what's happening in his portfolio this week. Avoid finance jargon — no terms like "D/E ratio", "RSI", "basis points", "technicals", "fundamentals", "unrealized P&L". Instead say things like "the stock is down 35% from what you paid" or "the company is growing revenue fast" or "this one has a lot of debt". Be conversational but specific — name actual tickers and prices. Structure the note as:
 
-Be direct and specific. Reference actual tickers and prices. No generic disclaimers."""
+1. PRIORITY ACTIONS: What he should actually consider doing this week, and the simple reason why.
+2. RISK FLAGS: Anything that looks concerning in plain terms.
+3. CONVICTION CHECK: Are the signals this week in line with his long-term bets, or noise?
+4. ONE THING TO WATCH: One forward-looking thing to keep an eye on next week.
+
+No disclaimers. No "as always, consult a financial advisor." Just honest, clear, friend-level advice."""
 
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
         model=REASONING_MODEL,
-        max_tokens=500,
+        max_tokens=800,
         messages=[{"role": "user", "content": prompt}],
     )
     return message.content[0].text
 
 
-def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool = True):
-    ANALYSIS_DIR.mkdir(exist_ok=True)
+def build_public_output(output: dict) -> dict:
+    """
+    Scrubbed version of the weekly output safe for public display.
+    Strips: advisor note, avg_cost references in reasons, suggested position sizes,
+    portfolio % / dollar amounts from blocked reasons, history context.
+    """
+    public_signals = []
+    for s in output.get("signals", []):
+        action = s.get("action", "")
+        reasons = s.get("reasons", [])
 
-    run_date = datetime.now().isoformat()
+        if action == "review":
+            # Review reasons always embed avg_cost — replace with generic
+            public_reasons = ["Position has appreciated significantly — profit-take review triggered."]
+        elif action == "blocked":
+            public_reasons = []
+            for r in reasons:
+                if "POSITION LIMIT" in r:
+                    public_reasons.append("BLOCKED: Single-position size limit reached.")
+                elif "AVERAGING DOWN CAP" in r:
+                    public_reasons.append("BLOCKED: Averaging-down rule triggered — requires thesis re-confirmation.")
+                elif "THEME LIMIT" in r:
+                    public_reasons.append("BLOCKED: Theme concentration limit reached (max 15% per theme).")
+                else:
+                    public_reasons.append(r)
+        else:
+            public_reasons = reasons
+
+        public_sig = {k: v for k, v in s.items() if k != "suggested_position_pct"}
+        public_sig["reasons"] = public_reasons
+        public_signals.append(public_sig)
+
+    return {
+        "run_date": output["run_date"],
+        "mode": output["mode"],
+        "num_positions_screened": output["num_positions_screened"],
+        "summary": output["summary"],
+        "signals": public_signals,
+        "market_data_snapshot": output.get("market_data_snapshot", {}),
+        # advisor_note excluded — references personal financial data
+        # history_context excluded — contains personal decision history
+    }
+
+
+def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool = True):
+    run_date = datetime.now(timezone.utc).isoformat()
     print(f"\n{'='*60}")
     print(f"ASTRA — {mode.upper()} run")
     print(f"Date: {run_date[:10]}")
@@ -233,13 +274,11 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
         "history_context": history_context,
     }
 
-    out_file = ANALYSIS_DIR / f"{run_date[:10]}.json"
-    out_file.write_text(json.dumps(output, indent=2, default=str))
-    print(f"\nAnalysis written to {out_file}")
-
     memory.log_run_summary(
         mode=mode, signals=[s.to_dict() for s in signals],
-        summary=summary, raw_output=output, run_date=run_date,
+        summary=summary, raw_output=output,
+        public_output=build_public_output(output),
+        run_date=run_date,
     )
 
     print(f"Summary: {summary}")
