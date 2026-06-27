@@ -36,11 +36,13 @@ def seed_trades():
         if v is None:
             return None
         try:
-            if math.isnan(float(v)):
+            f = float(v)
+            if math.isnan(f):
                 return None
+            # Return int if it's a whole number, else float — avoids numpy types
+            return int(f) if f == int(f) and abs(f) < 1e15 else f
         except (TypeError, ValueError):
-            pass
-        return v
+            return None
 
     rows = []
     for _, r in df.iterrows():

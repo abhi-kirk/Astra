@@ -120,3 +120,9 @@ CREATE POLICY "anon read run_summaries" ON run_summaries FOR SELECT TO anon USIN
 -- portfolio_snapshots: NO anon read — positions are private
 ALTER TABLE portfolio_snapshots ENABLE ROW LEVEL SECURITY;
 -- (no anon policy = anon gets nothing; service role still has full access)
+
+-- ============================================================
+-- GRANTS (run if service_role gets permission denied errors)
+-- ============================================================
+GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;
