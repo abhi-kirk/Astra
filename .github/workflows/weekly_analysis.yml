@@ -5,6 +5,9 @@ on:
     - cron: "0 14 * * 1"   # Every Monday 6am PT (14:00 UTC) — after markets open
   workflow_dispatch:         # Allow manual trigger from GitHub Actions UI
 
+permissions:
+  contents: write
+
 jobs:
   analyze:
     runs-on: ubuntu-latest
