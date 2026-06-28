@@ -108,6 +108,17 @@ def build_servers() -> list[BetaRequestMCPServerURLDefinitionParam]:
     return [s for s in candidates if s is not None]
 
 
+def build_exploration_servers() -> list[BetaRequestMCPServerURLDefinitionParam]:
+    """Minimal MCP server list for the weekly exploration run.
+
+    Intentionally excludes SEC EDGAR (community-hosted, unreliable) and FMP
+    to reduce round-trips and avoid hanging on unresponsive servers.
+    Tavily discovers names; Alpha Vantage vets quality. That's enough.
+    """
+    candidates = [_tavily(), _alpha_vantage()]
+    return [s for s in candidates if s is not None]
+
+
 def extract_text(message: Any) -> str:
     """
     Pull plain text out of an Anthropic API response.
@@ -134,9 +145,18 @@ def extract_text(message: Any) -> str:
     return next((b.text for b in content if isinstance(b, TextBlock)), "")
 
 
-def search_context(max_searches: int = TAVILY_MAX_SEARCHES) -> dict[str, Any]:
-    """Template vars for the news instruction block in advisor_note.mustache."""
-    servers = build_servers()
+def search_context(
+    max_searches: int = TAVILY_MAX_SEARCHES,
+    servers: list | None = None,
+) -> dict[str, Any]:
+    """Template vars for the mustache prompt tool-use block.
+
+    Pass `servers` explicitly to match exactly what was passed to the API call —
+    the template must only advertise tools that are actually connected.
+    Defaults to build_servers() (all configured servers) when not specified.
+    """
+    if servers is None:
+        servers = build_servers()
     names = {s["name"] for s in servers}
     return {
         "has_search":        bool(servers),

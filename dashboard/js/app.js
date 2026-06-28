@@ -1465,6 +1465,153 @@ function showError(msg) {
   errEl.querySelector('.error-text').textContent = '⚠ ' + msg;
 }
 
+// ── On Radar (exploration candidates) ────────────────────────
+
+async function fetchExplorationCandidates(sb) {
+  const { data } = await sb
+    .from('exploration_candidates')
+    .select('*')
+    .in('status', ['on_radar', 'paper_trading'])
+    .order('claude_conviction', { ascending: true })   // high < medium < low alphabetically — reversed below
+    .order('discovered_at', { ascending: false });
+  // Re-sort client-side: high → medium → low, then newest first within each tier
+  const convRank = { high: 0, medium: 1, low: 2 };
+  return (data || []).sort((a, b) => {
+    const cr = (convRank[a.claude_conviction] ?? 1) - (convRank[b.claude_conviction] ?? 1);
+    if (cr !== 0) return cr;
+    return new Date(b.discovered_at) - new Date(a.discovered_at);
+  });
+}
+
+function textToBullets(text, maxBullets) {
+  if (!text) return '<ul class="conv-thesis-list"><li>—</li></ul>';
+  const sentences = text.includes('\n')
+    ? text.split('\n')
+    : text.split(/(?<=\.)\s+/);
+  const bullets = sentences.map(s => s.replace(/\.\s*$/, '').trim()).filter(Boolean);
+  const shown = maxBullets ? bullets.slice(0, maxBullets) : bullets;
+  return '<ul class="conv-thesis-list">' + shown.map(b => `<li>${b}</li>`).join('') + '</ul>';
+}
+
+function convictionColor(level) {
+  if (level === 'high')   return 'var(--accent-green)';
+  if (level === 'medium') return 'var(--accent-yellow, #f5c518)';
+  return 'var(--text-muted)';
+}
+
+function renderOnRadar(candidates, sb) {
+  const section = document.getElementById('on-radar');
+  if (!candidates.length) { section.classList.add('hidden'); return; }
+  section.classList.remove('hidden');
+
+  const THEME_LABEL = {
+    space:         'SPACE',
+    core_tech:     'CORE TECH',
+    ev_transition: 'EV',
+    cannabis:      'CANNABIS',
+  };
+
+  const cards = candidates.map(c => {
+    const tLabel     = THEME_LABEL[c.source_theme] || c.source_theme.toUpperCase();
+    const convColor  = convictionColor(c.claude_conviction);
+    const statusBadge = c.status === 'paper_trading'
+      ? `<span class="radar-status-badge paper">◈ PAPER TRADING</span>`
+      : `<span class="radar-status-badge on-radar">⬡ ON RADAR</span>`;
+
+    return `
+      <div class="radar-card" data-ticker="${c.ticker}" style="cursor:pointer" title="Click to expand">
+        <div class="radar-card-top">
+          <span class="radar-ticker">${c.ticker}</span>
+          <span class="radar-theme-badge">${tLabel}</span>
+          ${statusBadge}
+        </div>
+        <div class="radar-conviction" style="color:${convColor}">
+          ASTRA CONFIDENCE: ${(c.claude_conviction || 'medium').toUpperCase()}
+        </div>
+        <div class="radar-rationale">${DOMPurify.sanitize(textToBullets(c.rationale, 2))}</div>
+        ${isAuthenticated ? `<button class="radar-reject-btn" data-ticker="${c.ticker}">DISMISS ✕</button>` : ''}
+      </div>`;
+  }).join('');
+
+  section.innerHTML = `
+    <div class="section-label">
+      <span class="section-icon">⬡</span>
+      <span>ON RADAR</span>
+      <span class="section-badge">ASTRA DISCOVERY</span>
+    </div>
+    <div class="radar-grid">${cards}</div>`;
+
+  // Click card → open detail modal (but not when clicking DISMISS button)
+  section.querySelectorAll('.radar-card').forEach(card => {
+    card.addEventListener('click', e => {
+      if (e.target.classList.contains('radar-reject-btn')) return;
+      const ticker = card.dataset.ticker;
+      const candidate = candidates.find(c => c.ticker === ticker);
+      if (candidate) openRadarModal(candidate, THEME_LABEL);
+    });
+  });
+
+  if (isAuthenticated) {
+    section.querySelectorAll('.radar-reject-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const ticker = btn.dataset.ticker;
+        btn.disabled = true;
+        btn.textContent = 'Dismissing…';
+        const { error } = await sb
+          .from('exploration_candidates')
+          .update({ status: 'rejected', updated_at: new Date().toISOString() })
+          .eq('ticker', ticker);
+        if (!error) {
+          btn.closest('.radar-card').remove();
+          const remaining = section.querySelectorAll('.radar-card');
+          if (!remaining.length) section.classList.add('hidden');
+        } else {
+          btn.disabled = false;
+          btn.textContent = 'DISMISS ✕';
+        }
+      });
+    });
+  }
+}
+
+function openRadarModal(c, themeLabels) {
+  const THEME_LABEL = themeLabels || {
+    space: 'SPACE', core_tech: 'CORE TECH', ev_transition: 'EV', cannabis: 'CANNABIS',
+  };
+  const tLabel    = THEME_LABEL[c.source_theme] || (c.source_theme || '').toUpperCase();
+  const convColor = convictionColor(c.claude_conviction);
+  const discovered = c.discovered_at
+    ? new Date(c.discovered_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    : '—';
+
+  document.getElementById('modal-content').innerHTML = DOMPurify.sanitize(`
+    <div class="modal-header">
+      <div>
+        <span class="modal-ticker">${c.ticker}</span>
+        <span class="modal-company">${tLabel}</span>
+      </div>
+      <span style="font-family:var(--font-mono);font-size:0.72rem;letter-spacing:1.5px;color:${convColor}">
+        ASTRA CONFIDENCE: ${(c.claude_conviction || 'MEDIUM').toUpperCase()}
+      </span>
+    </div>
+    <div class="modal-section-title">WHY ASTRA IS WATCHING THIS</div>
+    <div style="margin:0 0 20px">${textToBullets(c.rationale)}</div>
+    <div class="modal-verdict" style="grid-template-columns:1fr 1fr">
+      <div class="modal-verdict-item">
+        <div class="modal-verdict-label">QUALITY</div>
+        <div style="margin-top:6px">${textToBullets(c.quality_summary)}</div>
+      </div>
+      <div class="modal-verdict-item">
+        <div class="modal-verdict-label">ANALYST</div>
+        <div style="margin-top:6px">${textToBullets(c.analyst_summary)}</div>
+      </div>
+    </div>
+    <div class="modal-section-title" style="margin-top:20px">DISCOVERED BY ASTRA</div>
+    <p style="margin:6px 0 0;color:var(--text-secondary)">${discovered}</p>
+  `);
+  document.getElementById('modal-overlay').classList.remove('hidden');
+}
+
 async function init() {
   initStarfield();
 
@@ -1683,6 +1830,14 @@ async function init() {
     // ── Paper portfolio (auth-gated) ──
     const paperTradesByTicker = Object.fromEntries(paperTrades.map(pt => [pt.ticker, pt]));
     if (isAuthenticated) renderPaperPortfolio(paperTrades, marketData);
+
+    // ── On Radar (exploration candidates — public) ──
+    try {
+      const explorationCandidates = await fetchExplorationCandidates(sb);
+      renderOnRadar(explorationCandidates, sb);
+    } catch (err) {
+      console.error('[OnRadar] render error:', err);
+    }
 
     // ── Fetch convictions → build dynamic theme map ──
     const { data: convData } = await sb.from('convictions')

@@ -26,7 +26,7 @@ SEC_EDGAR_MCP_URL        = _cfg("SEC_EDGAR_MCP_URL",        default="https://sec
 FMP_API_KEY              = _cfg("FMP_API_KEY",              default="")
 
 # ── AI reasoning ──────────────────────────────────────────────
-REASONING_MODEL      = _cfg("REASONING_MODEL",      default="claude-opus-4-8")
+REASONING_MODEL      = _cfg("REASONING_MODEL",      default="claude-sonnet-4-6")
 REASONING_MAX_TOKENS = _cfg("REASONING_MAX_TOKENS", cast=int, default=3000)
 TAVILY_MAX_SEARCHES  = _cfg("TAVILY_MAX_SEARCHES",  cast=int, default=5)
 # Alpha Vantage free tier: 25 calls/day, 5 calls/min
@@ -67,6 +67,17 @@ TECH_SIGNALS_REQUIRED       = _cfg("TECH_SIGNALS_REQUIRED",       cast=int,   de
 ROBINHOOD_ACCOUNT_NUMBER = _cfg("ROBINHOOD_ACCOUNT_NUMBER", default="")   # primary account (read-only)
 ROBINHOOD_TOKEN_KEY      = _cfg("ROBINHOOD_TOKEN_KEY",      default="")   # base64 AES-256 key for tokens.enc
 ROBINHOOD_TOKENS_FILE    = _cfg("ROBINHOOD_TOKENS_FILE",    default="tokens.enc")
+
+# ── Exploration (weekly discovery run) ───────────────────────
+EXPLORATION_MODEL         = _cfg("EXPLORATION_MODEL",         default="claude-sonnet-4-6")
+EXPLORATION_MAX_TOKENS    = _cfg("EXPLORATION_MAX_TOKENS",    cast=int, default=8000)
+EXPLORATION_MAX_SEARCHES  = _cfg("EXPLORATION_MAX_SEARCHES",  cast=int, default=2)   # per theme
+EXPLORATION_MAX_AV_CALLS  = _cfg("EXPLORATION_MAX_AV_CALLS",  cast=int, default=8)
+EXPLORATION_MAX_FMP_CALLS = _cfg("EXPLORATION_MAX_FMP_CALLS", cast=int, default=15)
+
+# ── Claude API call timeouts ──────────────────────────────────
+ADVISOR_TIMEOUT     = _cfg("ADVISOR_TIMEOUT",     cast=int, default=300)  # 5 min
+EXPLORATION_TIMEOUT = _cfg("EXPLORATION_TIMEOUT", cast=int, default=480)  # 8 min
 
 # ── Strategy: position sizing ─────────────────────────────────
 SIZE_PREFERRED_PCT          = _cfg("SIZE_PREFERRED_PCT",          cast=float, default=0.06)

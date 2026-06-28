@@ -1417,6 +1417,89 @@ header, main, #modal-overlay { position: relative; z-index: 1; }
 ::-webkit-scrollbar-thumb:hover { background: var(--accent-cyan); }
 
 /* ============================================================
+   ON RADAR (exploration candidates)
+   ============================================================ */
+
+#on-radar { margin-bottom: 40px; }
+
+.radar-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.radar-card {
+  background: rgba(0, 18, 36, 0.7);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 18px 20px 16px;
+  display: flex; flex-direction: column; gap: 10px;
+  transition: border-color 0.2s;
+}
+.radar-card:hover { border-color: rgba(0, 212, 255, 0.3); }
+
+.radar-card-top {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+
+.radar-ticker {
+  font-family: var(--font-mono); font-size: 15px; font-weight: 700;
+  color: var(--text-primary); letter-spacing: 1px;
+}
+
+.radar-theme-badge {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 2px;
+  color: var(--accent-cyan); border: 1px solid rgba(0,212,255,0.25);
+  border-radius: 100px; padding: 2px 8px;
+}
+
+.radar-status-badge {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 1.5px;
+  border-radius: 100px; padding: 2px 8px;
+}
+.radar-status-badge.on-radar {
+  color: var(--text-muted); border: 1px solid var(--border);
+}
+.radar-status-badge.paper {
+  color: var(--accent-green); border: 1px solid rgba(57,211,83,0.35);
+}
+
+.radar-conviction {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 2px;
+}
+
+.radar-rationale {
+  font-size: 12px; line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.radar-meta-row {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+  border-top: 1px solid var(--border); padding-top: 10px; margin-top: 2px;
+}
+
+.radar-meta-label {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 2px;
+  color: var(--text-muted); margin-bottom: 4px;
+}
+
+.radar-meta-value {
+  font-size: 11px; line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.radar-reject-btn {
+  align-self: flex-end; margin-top: 4px;
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 1.5px;
+  color: var(--text-dim); background: none;
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 3px 10px; cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.radar-reject-btn:hover { color: var(--accent-red); border-color: rgba(255,107,53,0.4); }
+.radar-reject-btn:disabled { opacity: 0.4; cursor: default; }
+
+/* ============================================================
    RESPONSIVE
    ============================================================ */
 

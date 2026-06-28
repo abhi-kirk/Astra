@@ -23,5 +23,6 @@ analysis/
 astra.egg-info/
 src/astra.egg-info/
 
-# tokens
+# tokens / local temp
 tokens.enc
+tmp/

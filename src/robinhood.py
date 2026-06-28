@@ -227,6 +227,11 @@ def sync_portfolio_to_supabase() -> dict | None:
         from src.data_layer import save_mcp_portfolio_snapshot
         save_mcp_portfolio_snapshot(portfolio)
         print(f"  Live portfolio synced: {len(portfolio)} positions.")
+
+        # Promote any on_radar/paper_trading exploration candidates that are now held
+        from src.exploration import check_graduations
+        check_graduations(set(portfolio.keys()))
+
         return portfolio
 
     except Exception as exc:

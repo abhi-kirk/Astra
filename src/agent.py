@@ -21,10 +21,12 @@ import chevron
 
 from src import memory, mcp
 from src.config import (
+    ADVISOR_TIMEOUT,
     ANTHROPIC_API_KEY,
     REASONING_MAX_TOKENS,
     REASONING_MODEL,
 )
+from src.timeout import run_with_timeout
 from src.data_layer import get_market_data_bulk, get_portfolio, load_convictions
 from src.strategy import screen_all_positions
 
@@ -91,22 +93,24 @@ def call_claude_reasoning(
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     servers = mcp.build_servers()
 
-    if servers:
-        message = client.beta.messages.create(
-            model=REASONING_MODEL,
-            max_tokens=REASONING_MAX_TOKENS,
-            mcp_servers=servers,
-            messages=[{"role": "user", "content": prompt}],
-            betas=mcp.BETA_FLAGS,
-        )
-    else:
-        message = client.messages.create(
-            model=REASONING_MODEL,
-            max_tokens=REASONING_MAX_TOKENS,
-            messages=[{"role": "user", "content": prompt}],
-        )
+    def _call() -> str:
+        if servers:
+            msg = client.beta.messages.create(
+                model=REASONING_MODEL,
+                max_tokens=REASONING_MAX_TOKENS,
+                mcp_servers=servers,
+                messages=[{"role": "user", "content": prompt}],
+                betas=mcp.BETA_FLAGS,
+            )
+        else:
+            msg = client.messages.create(
+                model=REASONING_MODEL,
+                max_tokens=REASONING_MAX_TOKENS,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        return mcp.extract_text(msg) or ""
 
-    return mcp.extract_text(message) or "No advisor note generated."
+    return run_with_timeout(_call, ADVISOR_TIMEOUT, label="Advisor Claude call") or "No advisor note generated."
 
 
 def build_public_output(output: dict) -> dict:
@@ -301,6 +305,10 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
         public_output=build_public_output(output),
         run_date=run_date,
     )
+
+    # Screen on_radar exploration candidates against quality + technical signal
+    from src.exploration import screen_and_paper_trade_candidates
+    screen_and_paper_trade_candidates(run_date)
 
     print(f"Summary: {summary}")
     return output

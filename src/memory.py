@@ -182,6 +182,52 @@ def close_paper_trade(ticker: str, close_price: float, run_date: str, reason: st
           f"P&L ${pnl_d:+.2f} ({pnl_pct:+.1f}%)  reason={reason}")
 
 
+def upsert_exploration_candidate(candidate: dict) -> None:
+    """Insert or update an exploration candidate (keyed on ticker)."""
+    get_client().table("exploration_candidates").upsert({
+        "ticker":            candidate["ticker"],
+        "source_theme":      candidate["source_theme"],
+        "rationale":         candidate.get("rationale"),
+        "quality_summary":   candidate.get("quality_summary"),
+        "analyst_summary":   candidate.get("analyst_summary"),
+        "claude_conviction": candidate.get("claude_conviction"),
+        "status":            candidate.get("status", "on_radar"),
+        "updated_at":        datetime.now().isoformat(),
+    }, on_conflict="ticker").execute()
+
+
+def get_on_radar_candidates() -> Rows:
+    return db_rows(
+        get_client().table("exploration_candidates")
+        .select("*")
+        .eq("status", "on_radar")
+        .order("discovered_at", desc=True)
+        .execute().data
+    )
+
+
+def update_exploration_status(ticker: str, status: str) -> None:
+    get_client().table("exploration_candidates").update({
+        "status":     status,
+        "updated_at": datetime.now().isoformat(),
+    }).eq("ticker", ticker).execute()
+
+
+def get_all_exploration_tickers() -> set[str]:
+    """
+    Tickers to exclude from re-discovery: currently visible or already graduated.
+    Rejected tickers are intentionally omitted so Claude can re-surface them
+    if the thesis strengthens in a subsequent week.
+    """
+    data = db_rows(
+        get_client().table("exploration_candidates")
+        .select("ticker")
+        .in_("status", ["on_radar", "paper_trading", "graduated"])
+        .execute().data
+    )
+    return {row["ticker"] for row in data}
+
+
 def get_open_paper_trades() -> Rows:
     return db_rows(
         get_client().table("paper_trades").select("*").eq("is_open", True)
