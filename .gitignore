@@ -20,3 +20,5 @@ analysis/
 
 # macOS
 .DS_Store
+astra.egg-info/
+src/astra.egg-info/
