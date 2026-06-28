@@ -77,19 +77,52 @@ class TestExtractText:
 # ---------------------------------------------------------------------------
 
 class TestSearchContext:
-    def test_has_search_when_url_set(self, monkeypatch):
-        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "https://mcp.tavily.com/mcp/?tavilyApiKey=test")
-        ctx = search_context()
-        assert ctx["has_search"] is True
-        assert ctx["max_searches"] > 0
-
-    def test_no_search_when_url_empty(self, monkeypatch):
+    def _patch_none(self, monkeypatch):
         monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
         monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
+
+    def test_no_search_when_both_empty(self, monkeypatch):
+        self._patch_none(monkeypatch)
         ctx = search_context()
         assert ctx["has_search"] is False
+        assert ctx["has_tavily"] is False
+        assert ctx["has_alpha_vantage"] is False
+
+    def test_has_search_tavily_only(self, monkeypatch):
+        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "https://mcp.tavily.com/mcp/?tavilyApiKey=test")
+        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
+        ctx = search_context()
+        assert ctx["has_search"] is True
+        assert ctx["has_tavily"] is True
+        assert ctx["has_alpha_vantage"] is False
+
+    def test_has_search_alpha_vantage_only(self, monkeypatch):
+        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
+        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "testkey")
+        ctx = search_context()
+        assert ctx["has_search"] is True
+        assert ctx["has_tavily"] is False
+        assert ctx["has_alpha_vantage"] is True
+
+    def test_has_search_both_configured(self, monkeypatch):
+        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "https://mcp.tavily.com/mcp/?tavilyApiKey=test")
+        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "testkey")
+        ctx = search_context()
+        assert ctx["has_search"] is True
+        assert ctx["has_tavily"] is True
+        assert ctx["has_alpha_vantage"] is True
+        assert ctx["max_av_calls"] > 0
 
     def test_max_searches_override(self, monkeypatch):
         monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "https://example.com")
         ctx = search_context(max_searches=3)
         assert ctx["max_searches"] == 3
+
+    def test_alpha_vantage_key_in_url(self, monkeypatch):
+        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
+        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "my-secret-key")
+        from src.mcp import build_servers
+        servers = build_servers()
+        assert len(servers) == 1
+        assert "my-secret-key" in servers[0]["url"]
+        assert servers[0]["name"] == "alpha_vantage"
