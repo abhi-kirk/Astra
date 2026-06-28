@@ -18,6 +18,7 @@ import pandas as pd
 import yfinance as yf
 
 from src.config import MARKET_DATA_PERIOD_DAYS, MARKET_DATA_WORKERS
+from src.db import rows as db_rows
 
 ROOT = Path(__file__).parent.parent
 HISTORY_CSV = ROOT / "data" / "portfolio_history.csv"
@@ -39,14 +40,14 @@ def load_convictions() -> dict:
 def get_cost_basis_from_db() -> dict[str, dict]:
     """Compute per-ticker cost basis from Supabase trades table."""
     from src.db import get_client
-    rows = get_client().table("trades").select(
+    trade_rows = db_rows(get_client().table("trades").select(
         "ticker, trans_code, quantity, price, amount, activity_date"
-    ).in_("trans_code", ["Buy", "Sell"]).execute().data or []
+    ).in_("trans_code", ["Buy", "Sell"]).execute().data)
 
     buys: dict = defaultdict(lambda: {"qty": 0.0, "amt": 0.0, "count": 0, "last_price": None, "last_date": None})
     sells: dict = defaultdict(lambda: {"qty": 0.0, "amt": 0.0, "count": 0})
 
-    for r in rows:
+    for r in trade_rows:
         t = (r.get("ticker") or "").strip()
         if not t:
             continue

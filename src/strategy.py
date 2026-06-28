@@ -7,7 +7,7 @@ framework defined in CLAUDE.md. Returns structured signals for the agent layer.
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Any
 
 from src.config import (
     QUALITY_MAX_DEBT_EQUITY,
@@ -27,20 +27,11 @@ from src.config import (
 )
 
 
-class Signal(TypedDict):
-    ticker: str
-    action: str                    # "buy" | "sell" | "watch" | "hold" | "blocked"
-    conviction_match: bool
-    quality_pass: bool
-    technical_pass: bool
-    hard_rule_block: str | None
-    reasons: list[str]
-    risk_flags: list[str]
-    suggested_position_pct: float | None
+Signal = dict[str, Any]
 
 
 def make_signal(**kwargs) -> Signal:
-    return Signal(**kwargs)
+    return dict(**kwargs)
 
 
 # ---------------------------------------------------------------------------

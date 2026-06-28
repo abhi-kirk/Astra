@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import anthropic
+from anthropic.types import TextBlock
+from anthropic.types.beta import BetaTextBlock
 import chevron
 
 from src import memory
@@ -115,7 +117,7 @@ def call_claude_reasoning(
             messages=[{"role": "user", "content": prompt}],
             betas=["mcp-client-2025-04-04"],
         )
-        text_blocks = [t for block in message.content if (t := getattr(block, "text", None))]
+        text_blocks = [b.text for b in message.content if isinstance(b, BetaTextBlock)]
         raw_text = text_blocks[-1] if text_blocks else ""
         # Strip inline MCP tool call/response XML blocks
         clean = re.sub(r"<tool_call>.*?</tool_call>", "", raw_text, flags=re.DOTALL)
@@ -132,7 +134,8 @@ def call_claude_reasoning(
             max_tokens=REASONING_MAX_TOKENS,
             messages=[{"role": "user", "content": prompt}],
         )
-        return message.content[0].text
+        text = next((b.text for b in message.content if isinstance(b, TextBlock)), "")
+        return text or "No advisor note generated."
 
 
 def build_public_output(output: dict) -> dict:
