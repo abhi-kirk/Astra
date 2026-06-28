@@ -81,24 +81,13 @@ def call_claude_reasoning(
 
     themes = {k: v.get("conviction") for k, v in convictions.get("themes", {}).items()}
 
-    news_instruction = (
-        f"You have access to a web search tool. Use it to look up recent news for the most "
-        f"relevant tickers — prioritize BUY and WATCH signals, but also search any HOLD position "
-        f"if it seems like something significant may have happened (earnings, big price move, "
-        f"sector news). Limit yourself to a maximum of {TAVILY_MAX_SEARCHES} searches total. "
-        f"Search for things like '[TICKER] news' or '[TICKER] earnings'. Use what you find to "
-        f"make the note specific and grounded — mention actual events if you find them. "
-        f"If results are thin or unhelpful, skip and write from the mechanical signals."
-        if TAVILY_MCP_URL else
-        "No search tool available this run — write from the mechanical signals only."
-    )
-
     template = (PROMPTS_DIR / "advisor_note.mustache").read_text()
     prompt = chevron.render(template, {
         "themes_json":     json.dumps(themes),
         "history_context": history_context,
         "signal_text":     signal_text,
-        "news_instruction": news_instruction,
+        "has_search":      bool(TAVILY_MCP_URL),
+        "max_searches":    TAVILY_MAX_SEARCHES,
         "date":            datetime.now().strftime("%B %-d, %Y"),
     })
 

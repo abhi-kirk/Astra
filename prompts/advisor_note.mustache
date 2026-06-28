@@ -15,7 +15,12 @@ TODAY'S MECHANICAL SIGNALS:
 {{{signal_text}}}
 
 NEWS RESEARCH INSTRUCTIONS:
-{{{news_instruction}}}
+{{#has_search}}
+You have access to a web search tool. Use it to look up recent news for the most relevant tickers — prioritize BUY and WATCH signals, but also search any HOLD position if it seems like something significant may have happened (earnings, big price move, sector news). Limit yourself to a maximum of {{max_searches}} searches total. Search for things like '[TICKER] news' or '[TICKER] earnings'. Use what you find to make the note specific and grounded — mention actual events if you find them. If results are thin or unhelpful, skip and write from the mechanical signals.
+{{/has_search}}
+{{^has_search}}
+No search tool available this run — write from the mechanical signals only.
+{{/has_search}}
 
 Write a plain-English daily note (200-300 words) as if you're a knowledgeable friend explaining what's happening in his portfolio today. Avoid finance jargon — no terms like "D/E ratio", "RSI", "basis points", "technicals", "fundamentals", "unrealized P&L". Instead say things like "the stock is down 35% from what you paid" or "the company is growing revenue fast" or "this one has a lot of debt". Be conversational but specific — name actual tickers, prices, and real events where you found them. Structure the note as:
 
