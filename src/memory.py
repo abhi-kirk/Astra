@@ -115,6 +115,66 @@ def save_portfolio_snapshot(positions: dict):
     }).execute()
 
 
+PAPER_TRADE_VIRTUAL_SIZE = 1000.0  # dollars per BUY signal
+
+def log_paper_trade(
+    ticker: str,
+    price: float,
+    run_date: str,
+    signal_data: dict | None = None,
+) -> None:
+    """Log a virtual BUY trade when ASTRA issues a BUY signal.
+    Only logs if no open paper position already exists for this ticker.
+    """
+    db = get_client()
+    existing = (
+        db.table("paper_trades")
+        .select("id")
+        .eq("ticker", ticker)
+        .eq("is_open", True)
+        .limit(1)
+        .execute()
+    )
+    if existing.data:
+        return  # already holding a virtual position
+
+    virtual_shares = round(PAPER_TRADE_VIRTUAL_SIZE / price, 6) if price else 0
+    db.table("paper_trades").insert({
+        "ticker": ticker,
+        "action": "buy",
+        "price_at_signal": price,
+        "virtual_shares": virtual_shares,
+        "virtual_cost": PAPER_TRADE_VIRTUAL_SIZE,
+        "run_date": run_date,
+        "signal_data": signal_data or {},
+        "is_open": True,
+    }).execute()
+    print(f"  [paper] BUY {ticker}: {virtual_shares:.4f} virtual shares @ ${price:.2f}")
+
+
+def get_open_paper_trades() -> list[dict]:
+    result = (
+        get_client()
+        .table("paper_trades")
+        .select("*")
+        .eq("is_open", True)
+        .order("run_date", desc=True)
+        .execute()
+    )
+    return result.data or []
+
+
+def get_paper_trades_history() -> list[dict]:
+    result = (
+        get_client()
+        .table("paper_trades")
+        .select("*")
+        .order("run_date", desc=True)
+        .execute()
+    )
+    return result.data or []
+
+
 # ---------------------------------------------------------------------------
 # Read
 # ---------------------------------------------------------------------------

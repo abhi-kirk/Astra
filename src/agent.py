@@ -14,6 +14,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -38,6 +39,7 @@ def call_claude_reasoning(
 ) -> str:
     """
     Call Claude API to synthesize mechanical signals into advisor narrative.
+    Uses Tavily MCP for live news search when available.
     Returns a markdown-formatted analysis string.
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
@@ -76,6 +78,19 @@ def call_claude_reasoning(
     # Theme conviction summary
     themes = {k: v.get("conviction") for k, v in convictions.get("themes", {}).items()}
 
+    tavily_mcp_url = os.environ.get("TAVILY_MCP_URL", "").strip()
+    news_instruction = (
+        "You have access to a web search tool. Use it to look up recent news for the most "
+        "relevant tickers — prioritize BUY and WATCH signals, but also search any HOLD position "
+        "if it seems like something significant may have happened (earnings, big price move, "
+        "sector news). Limit yourself to a maximum of 5 searches total. Search for things like "
+        "'[TICKER] news' or '[TICKER] earnings'. Use what you find to make the note specific "
+        "and grounded — mention actual events if you find them. "
+        "If results are thin or unhelpful, skip and write from the mechanical signals."
+        if tavily_mcp_url else
+        "No search tool available this run — write from the mechanical signals only."
+    )
+
     prompt = f"""You are ASTRA, a personal trading assistant for a non-finance-professional investor.
 
 INVESTOR PROFILE:
@@ -89,25 +104,54 @@ INVESTOR PROFILE:
 PRIOR DECISION HISTORY (for continuity):
 {history_context}
 
-THIS WEEK'S MECHANICAL SIGNALS:
+TODAY'S MECHANICAL SIGNALS:
 {signal_text}
 
-Write a plain-English weekly note (200-300 words) as if you're a knowledgeable friend explaining what's happening in his portfolio this week. Avoid finance jargon — no terms like "D/E ratio", "RSI", "basis points", "technicals", "fundamentals", "unrealized P&L". Instead say things like "the stock is down 35% from what you paid" or "the company is growing revenue fast" or "this one has a lot of debt". Be conversational but specific — name actual tickers and prices. Structure the note as:
+NEWS RESEARCH INSTRUCTIONS:
+{news_instruction}
 
-1. PRIORITY ACTIONS: What he should actually consider doing this week, and the simple reason why.
+Write a plain-English daily note (200-300 words) as if you're a knowledgeable friend explaining what's happening in his portfolio today. Avoid finance jargon — no terms like "D/E ratio", "RSI", "basis points", "technicals", "fundamentals", "unrealized P&L". Instead say things like "the stock is down 35% from what you paid" or "the company is growing revenue fast" or "this one has a lot of debt". Be conversational but specific — name actual tickers, prices, and real events where you found them. Structure the note as:
+
+1. PRIORITY ACTIONS: What he should actually consider doing today/this week, and the simple reason why.
 2. RISK FLAGS: Anything that looks concerning in plain terms.
-3. CONVICTION CHECK: Are the signals this week in line with his long-term bets, or noise?
-4. ONE THING TO WATCH: One forward-looking thing to keep an eye on next week.
+3. CONVICTION CHECK: Are the signals today in line with his long-term bets, or noise?
+4. ONE THING TO WATCH: One forward-looking thing to keep an eye on.
 
 No disclaimers. No "as always, consult a financial advisor." Just honest, clear, friend-level advice."""
 
     client = anthropic.Anthropic(api_key=api_key)
-    message = client.messages.create(
-        model=REASONING_MODEL,
-        max_tokens=800,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return message.content[0].text
+
+    tavily_mcp_url = os.environ.get("TAVILY_MCP_URL", "").strip()
+    if tavily_mcp_url:
+        message = client.beta.messages.create(
+            model=REASONING_MODEL,
+            max_tokens=3000,
+            mcp_servers=[{
+                "type": "url",
+                "url": tavily_mcp_url,
+                "name": "tavily",
+                "tool_configuration": {"enabled": True, "allowed_tools": ["tavily-search"]},
+            }],
+            messages=[{"role": "user", "content": prompt}],
+            betas=["mcp-client-2025-04-04"],
+        )
+        # Extract text and strip inline MCP tool call/response XML
+        text_blocks = [block.text for block in message.content if hasattr(block, "text")]
+        raw_text = text_blocks[-1] if text_blocks else ""
+        clean = re.sub(r"<tool_call>.*?</tool_call>", "", raw_text, flags=re.DOTALL)
+        clean = re.sub(r"<tool_response>.*?</tool_response>", "", clean, flags=re.DOTALL)
+        # Drop any preamble before the first markdown heading
+        heading_match = re.search(r"^#{1,3} ", clean, flags=re.MULTILINE)
+        if heading_match:
+            clean = clean[heading_match.start():]
+        return clean.strip() or "No advisor note generated."
+    else:
+        message = client.messages.create(
+            model=REASONING_MODEL,
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return message.content[0].text
 
 
 def build_public_output(output: dict) -> dict:
@@ -234,21 +278,29 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
         print("="*60)
         print(advisor_note)
 
-    # 8. Log decisions to Supabase
+    # 8. Log decisions + paper trades to Supabase
     for sig in signals:
         pos = portfolio.get(sig.ticker, {})
         mdata = market_data.get(sig.ticker, {})
+        price = mdata.get("current_price")
         if sig.action in ("buy", "review", "watch"):
             memory.log_decision(
                 ticker=sig.ticker,
                 action=sig.action,
                 reasoning="; ".join(sig.reasons),
                 signal_data=sig.to_dict(),
-                price_at_decision=mdata.get("current_price"),
+                price_at_decision=price,
                 shares_held=pos.get("shares"),
                 avg_cost=pos.get("avg_cost"),
                 executed=(mode == "live"),
                 run_date=run_date,
+            )
+        if sig.action == "buy" and price:
+            memory.log_paper_trade(
+                ticker=sig.ticker,
+                price=price,
+                run_date=run_date,
+                signal_data=sig.to_dict(),
             )
 
     # 9. Write analysis JSON

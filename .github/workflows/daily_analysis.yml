@@ -1,9 +1,9 @@
-name: Weekly Analysis
+name: Daily Analysis
 
 on:
   schedule:
-    - cron: "0 14 * * 1"   # Every Monday 6am PT (14:00 UTC) — after markets open
-  workflow_dispatch:         # Allow manual trigger from GitHub Actions UI
+    - cron: "0 13 * * 1-5"   # Weekdays 6am PT (13:00 UTC) — after US pre-market
+  workflow_dispatch:           # Allow manual trigger from GitHub Actions UI
 
 jobs:
   analyze:
@@ -28,6 +28,7 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TAVILY_MCP_URL: ${{ secrets.TAVILY_MCP_URL }}
         run: python -m src.agent --mode simulation
 
       # Analysis output goes to Supabase only — no files committed back to repo.
