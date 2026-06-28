@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 from pathlib import Path
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 from src.config import (
     ROBINHOOD_ACCOUNT_NUMBER,
@@ -178,7 +181,7 @@ def _enrich_num_buys(portfolio: dict[str, dict]) -> None:
         for ticker, pos in portfolio.items():
             pos["num_buys"] = db_data.get(ticker, {}).get("num_buys", 1)
     except Exception as exc:
-        print(f"  Could not merge num_buys from DB: {exc} (defaulting to 1)")
+        logger.warning(f"Could not merge num_buys from DB (defaulting to 1): {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -191,34 +194,31 @@ def sync_portfolio_to_supabase() -> dict | None:
     Returns the portfolio dict on success, None if credentials are missing or sync fails.
     """
     if not ROBINHOOD_TOKEN_KEY or not ROBINHOOD_TOKENS_FILE:
-        print("  Robinhood credentials not configured — skipping live sync.")
+        logger.warning("Robinhood credentials not configured — skipping live sync.")
         return None
     if not ROBINHOOD_ACCOUNT_NUMBER:
-        print("  ROBINHOOD_ACCOUNT_NUMBER not set — skipping live sync.")
+        logger.warning("ROBINHOOD_ACCOUNT_NUMBER not set — skipping live sync.")
         return None
 
-    # 1. Load tokens (Supabase has rotated refresh_token; file is the bootstrap fallback)
     tokens = _load_tokens_from_supabase()
     if tokens:
-        print("  Loaded Robinhood tokens from Supabase.")
+        logger.info("Loaded Robinhood tokens from Supabase.")
     else:
         try:
             tokens = _load_tokens_from_file()
-            print("  Loaded Robinhood tokens from tokens.enc.")
-        except Exception as exc:
-            print(f"  Could not load tokens: {exc} — skipping live sync.")
+            logger.info("Loaded Robinhood tokens from tokens.enc.")
+        except Exception:
+            logger.error("Could not load tokens — skipping live sync.", exc_info=True)
             return None
 
     try:
-        # 2. Refresh and persist updated tokens
         try:
             tokens = _refresh_tokens(tokens)
             _save_tokens_to_supabase(tokens)
-            print("  Token refreshed and saved to Supabase.")
+            logger.info("Token refreshed and saved to Supabase.")
         except Exception as exc:
-            print(f"  Token refresh failed: {exc} — using stored access token.")
+            logger.warning(f"Token refresh failed — using stored access token: {exc}")
 
-        # 3. Fetch positions and write snapshot
         bearer    = tokens["access_token"]
         positions = _fetch_positions(bearer)
         portfolio = _positions_to_portfolio(positions)
@@ -226,14 +226,13 @@ def sync_portfolio_to_supabase() -> dict | None:
 
         from src.data_layer import save_mcp_portfolio_snapshot
         save_mcp_portfolio_snapshot(portfolio)
-        print(f"  Live portfolio synced: {len(portfolio)} positions.")
+        logger.info(f"Live portfolio synced: {len(portfolio)} positions.")
 
-        # Promote any on_radar/paper_trading exploration candidates that are now held
         from src.exploration import check_graduations
         check_graduations(set(portfolio.keys()))
 
         return portfolio
 
-    except Exception as exc:
-        print(f"  Robinhood sync failed: {exc} — pipeline will use cached data.")
+    except Exception:
+        logger.error("Robinhood sync failed — pipeline will use cached data.", exc_info=True)
         return None

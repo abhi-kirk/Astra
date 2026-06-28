@@ -13,6 +13,8 @@ Usage:
 
 import argparse
 import json
+import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -26,9 +28,12 @@ from src.config import (
     REASONING_MAX_TOKENS,
     REASONING_MODEL,
 )
+from src.logger import timer
 from src.timeout import run_with_timeout
 from src.data_layer import get_market_data_bulk, get_portfolio, load_convictions
 from src.strategy import screen_all_positions
+
+logger = logging.getLogger(__name__)
 
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
@@ -108,6 +113,9 @@ def call_claude_reasoning(
                 max_tokens=REASONING_MAX_TOKENS,
                 messages=[{"role": "user", "content": prompt}],
             )
+        usage = getattr(msg, "usage", None)
+        if usage:
+            logger.info(f"Advisor tokens — input: {usage.input_tokens}  output: {usage.output_tokens}  total: {usage.input_tokens + usage.output_tokens}")
         return mcp.extract_text(msg) or ""
 
     return run_with_timeout(_call, ADVISOR_TIMEOUT, label="Advisor Claude call") or "No advisor note generated."
@@ -155,55 +163,58 @@ def build_public_output(output: dict) -> dict:
 
 
 def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool = True):
+    run_start = time.perf_counter()
     run_date = datetime.now(timezone.utc).isoformat()
-    print(f"\n{'='*60}")
-    print(f"ASTRA — {mode.upper()} run")
-    print(f"Date: {run_date[:10]}")
-    print(f"{'='*60}\n")
+    logger.info("=" * 60)
+    logger.info(f"ASTRA — {mode.upper()} run  |  {run_date[:10]}")
+    logger.info("=" * 60)
 
     convictions = load_convictions()
     excluded = {e["ticker"] for e in convictions.get("exclusions", [])}
 
-    print("Syncing live portfolio from Robinhood...")
     from src.robinhood import sync_portfolio_to_supabase
-    sync_portfolio_to_supabase()
+    with timer("Robinhood portfolio sync", logger):
+        sync_portfolio_to_supabase()
 
-    print("Loading portfolio...")
     portfolio = get_portfolio()
     portfolio = {t: v for t, v in portfolio.items() if t not in excluded}
-    print(f"  {len(portfolio)} open positions (excluding {excluded})\n")
+    logger.info(f"Portfolio loaded: {len(portfolio)} open positions (excluded: {sorted(excluded)})")
 
-    print("Fetching market data...")
-    market_data = get_market_data_bulk(list(portfolio.keys()))
+    with timer(f"Market data fetch ({len(portfolio)} tickers)", logger):
+        market_data = get_market_data_bulk(list(portfolio.keys()))
+
+    errors = [t for t, d in market_data.items() if "error" in d]
+    if errors:
+        logger.warning(f"Market data missing for {len(errors)} ticker(s): {errors}")
 
     portfolio_for_screen = (
         {single_ticker: portfolio.get(single_ticker, {})} if single_ticker else portfolio
     )
-    print()
 
-    print("Running strategy screens...")
-    signals = screen_all_positions(
-        portfolio_for_screen, market_data, convictions,
-        full_portfolio=portfolio if single_ticker else None,
-    )
+    with timer("Strategy screening", logger):
+        signals = screen_all_positions(
+            portfolio_for_screen, market_data, convictions,
+            full_portfolio=portfolio if single_ticker else None,
+        )
 
     history_context = memory.build_agent_context_summary()
 
     advisor_note = ""
     if use_ai and any(s["action"] in ("buy", "sell", "watch") for s in signals):
-        print("\nCalling Claude for narrative reasoning...")
-        advisor_note = call_claude_reasoning(
-            signals, portfolio, market_data, history_context, convictions
-        )
+        logger.info(f"Calling Claude for narrative reasoning  (model={REASONING_MODEL})")
+        with timer("Advisor Claude call", logger):
+            advisor_note = call_claude_reasoning(
+                signals, portfolio, market_data, history_context, convictions
+            )
 
-    # Print results
-    print("\n" + "="*60)
-    print("SIGNALS")
-    print("="*60)
-
+    # Log signals
     action_groups: dict[str, list] = {}
     for sig in signals:
         action_groups.setdefault(sig["action"], []).append(sig)
+
+    logger.info("-" * 60)
+    logger.info("SIGNALS")
+    logger.info("-" * 60)
 
     for action in ["buy", "sell", "watch", "blocked"]:
         group = action_groups.get(action, [])
@@ -211,26 +222,29 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
             continue
         label = {"buy": "BUY SIGNALS", "sell": "SELL SIGNALS",
                  "watch": "WATCHLIST", "blocked": "BLOCKED"}[action]
-        print(f"\n--- {label} ---")
+        logger.info(f"--- {label} ---")
         for sig in group:
-            pos = portfolio.get(sig["ticker"], {})
+            pos   = portfolio.get(sig["ticker"], {})
             mdata = market_data.get(sig["ticker"], {})
-            print(f"\n  {sig["ticker"]}")
-            print(f"    Shares: {pos.get('shares', 0):.2f}  "
-                  f"Avg cost: ${pos.get('avg_cost', 0):.2f}  "
-                  f"Current: ${mdata.get('current_price', 0):.2f}")
+            ticker = sig["ticker"]
+            shares = pos.get("shares", 0)
+            avg    = pos.get("avg_cost", 0)
+            price  = mdata.get("current_price", 0)
+            logger.info(f"  {ticker}  shares={shares:.2f}  avg=${avg:.2f}  price=${price:.2f}")
             for r in sig["reasons"]:
-                print(f"    ✓ {r}")
+                logger.info(f"    ✓ {r}")
             for rf in sig["risk_flags"]:
-                print(f"    ⚠ {rf}")
+                logger.warning(f"    ⚠ {rf}")
             if sig["suggested_position_pct"]:
-                print(f"    → Suggested size: {sig["suggested_position_pct"]:.0%} of portfolio")
+                pct = sig["suggested_position_pct"]
+                logger.info(f"    → Suggested size: {pct:.0%}")
 
     if advisor_note:
-        print(f"\n{'='*60}")
-        print("ADVISOR NOTE")
-        print("="*60)
-        print(advisor_note)
+        logger.info("-" * 60)
+        logger.info("ADVISOR NOTE")
+        logger.info("-" * 60)
+        for line in advisor_note.splitlines():
+            logger.info(line)
 
     # Log decisions + manage paper trades
     signals_by_ticker = {s["ticker"]: s for s in signals}
@@ -310,11 +324,17 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
     from src.exploration import screen_and_paper_trade_candidates
     screen_and_paper_trade_candidates(run_date)
 
-    print(f"Summary: {summary}")
+    total_elapsed = time.perf_counter() - run_start
+    logger.info("=" * 60)
+    logger.info(f"Run complete in {total_elapsed:.1f}s  |  {summary}")
+    logger.info(f"TIMING  {'Total agent run':<40}  {total_elapsed:.2f}s")
     return output
 
 
 if __name__ == "__main__":
+    from src.logger import setup as _setup_logging
+    _setup_logging()
+
     parser = argparse.ArgumentParser(description="ASTRA analysis run")
     parser.add_argument("--mode", choices=["simulation", "live"], default="simulation")
     parser.add_argument("--ticker", help="Analyze a single ticker only")

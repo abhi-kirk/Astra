@@ -9,6 +9,7 @@ Convictions come from Supabase convictions table (single source of truth).
 Market/fundamental data comes from yfinance (free, EOD).
 """
 
+import logging
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
@@ -18,6 +19,8 @@ import pandas as pd
 import yfinance as yf
 
 from src.config import MARKET_DATA_PERIOD_DAYS, MARKET_DATA_WORKERS
+
+logger = logging.getLogger(__name__)
 from src.db import rows as db_rows
 
 ROOT = Path(__file__).parent.parent
@@ -153,7 +156,7 @@ def save_mcp_portfolio_snapshot(positions: dict):
     """Called by Claude after reading Robinhood MCP. Persists to Supabase."""
     from src.memory import save_portfolio_snapshot
     save_portfolio_snapshot(positions)
-    print(f"Saved portfolio snapshot to Supabase: {len(positions)} positions")
+    logger.info(f"Saved portfolio snapshot to Supabase: {len(positions)} positions")
 
 
 # ---------------------------------------------------------------------------
@@ -232,11 +235,13 @@ def get_market_data_bulk(
             t = futures[fut]
             try:
                 results[t] = fut.result()
-                status = "error" if "error" in results[t] else "✓"
-                print(f"  {status} {t}")
+                if "error" in results[t]:
+                    logger.warning(f"Market data error for {t}: {results[t]['error']}")
+                else:
+                    logger.debug(f"Market data fetched: {t}")
             except Exception as e:
                 results[t] = {"ticker": t, "error": str(e)}
-                print(f"  ✗ {t}: {e}")
+                logger.error(f"Market data fetch failed for {t}: {e}")
     return results
 
 

@@ -15,7 +15,9 @@ Bridges to the exploitation pipeline (kept minimal):
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,6 +25,9 @@ import anthropic
 import chevron
 
 from src import mcp
+from src.logger import timer
+
+logger = logging.getLogger(__name__)
 from src.config import (
     ANTHROPIC_API_KEY,
     EXPLORATION_MAX_AV_CALLS,
@@ -164,6 +169,9 @@ def call_claude_exploration(
                 max_tokens=EXPLORATION_MAX_TOKENS,
                 messages=[{"role": "user", "content": prompt}],
             )
+        usage = getattr(msg, "usage", None)
+        if usage:
+            logger.info(f"Exploration tokens — input: {usage.input_tokens}  output: {usage.output_tokens}  total: {usage.input_tokens + usage.output_tokens}")
         return mcp.extract_text(msg) or ""
 
     return run_with_timeout(_call, EXPLORATION_TIMEOUT, label="Exploration Claude call") or ""
@@ -191,9 +199,9 @@ def check_graduations(portfolio_tickers: set[str]) -> None:
         for row in data:
             if row["ticker"] in portfolio_tickers:
                 update_exploration_status(row["ticker"], "graduated")
-                print(f"  [exploration] {row['ticker']} graduated → now in real portfolio")
-    except Exception as exc:
-        print(f"  [exploration] graduation check failed: {exc}")
+                logger.info(f"Exploration candidate {row['ticker']} graduated → now in real portfolio")
+    except Exception:
+        logger.error("Graduation check failed", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +223,7 @@ def screen_and_paper_trade_candidates(run_date: str) -> None:
         return
 
     tickers = [c["ticker"] for c in candidates]
-    print(f"\nScreening {len(tickers)} on-radar candidate(s): {', '.join(tickers)}")
+    logger.info(f"Screening {len(tickers)} on-radar candidate(s): {', '.join(tickers)}")
 
     market_data = get_market_data_bulk(tickers)
 
@@ -224,7 +232,7 @@ def screen_and_paper_trade_candidates(run_date: str) -> None:
         mdata  = market_data.get(ticker, {})
 
         if "error" in mdata:
-            print(f"  {ticker}: no market data — skipping")
+            logger.warning(f"{ticker}: no market data — skipping")
             continue
 
         quality_pass, quality_reasons, risk_flags = quality_filter(ticker, mdata)
@@ -233,7 +241,7 @@ def screen_and_paper_trade_candidates(run_date: str) -> None:
         price = mdata.get("current_price")
 
         if quality_pass and tech_pass and price:
-            print(f"  {ticker}: BUY signal → paper trading")
+            logger.info(f"{ticker}: BUY signal → paper trading")
             memory.log_paper_trade(
                 ticker=ticker,
                 price=price,
@@ -251,7 +259,7 @@ def screen_and_paper_trade_candidates(run_date: str) -> None:
             status_parts = []
             if not quality_pass: status_parts.append("quality fail")
             if not tech_pass:    status_parts.append("no technical signal")
-            print(f"  {ticker}: hold ({', '.join(status_parts)})")
+            logger.info(f"{ticker}: hold ({', '.join(status_parts)})")
 
 
 # ---------------------------------------------------------------------------
@@ -259,29 +267,26 @@ def screen_and_paper_trade_candidates(run_date: str) -> None:
 # ---------------------------------------------------------------------------
 
 def run() -> None:
-    run_date = datetime.now(timezone.utc).isoformat()
-    print(f"\n{'='*60}")
-    print(f"ASTRA EXPLORATION — weekly discovery run")
-    print(f"Date: {run_date[:10]}")
-    print(f"{'='*60}\n")
+    run_start = time.perf_counter()
+    run_date  = datetime.now(timezone.utc).isoformat()
+    logger.info("=" * 60)
+    logger.info(f"ASTRA EXPLORATION — weekly discovery run  |  {run_date[:10]}")
+    logger.info("=" * 60)
 
     from src.data_layer import load_convictions
     from src import memory
 
-    convictions      = load_convictions()
+    convictions       = load_convictions()
     exclusion_tickers = {e["ticker"] for e in convictions.get("exclusions", [])}
 
-    # Current portfolio — exclude from recommendations
     snapshot = memory.get_latest_portfolio_snapshot()
     portfolio_tickers: set[str] = set(
-        (snapshot.get("positions") or {}).keys()
-        if snapshot else set()
+        (snapshot.get("positions") or {}).keys() if snapshot else set()
     )
-    print(f"Portfolio tickers to exclude: {len(portfolio_tickers)}")
+    logger.info(f"Portfolio tickers to exclude: {len(portfolio_tickers)}")
 
-    # Already tracked — skip re-discovery
     already_tracked = memory.get_all_exploration_tickers()
-    print(f"Already tracked candidates: {len(already_tracked)}")
+    logger.info(f"Already tracked candidates: {len(already_tracked)}")
 
     active_themes = {
         k: v for k, v in convictions.get("themes", {}).items()
@@ -289,40 +294,46 @@ def run() -> None:
         and k not in EXPLORATION_EXCLUDED_THEMES
     }
     if not active_themes:
-        print("No high/very_high conviction themes found — nothing to explore.")
+        logger.warning("No high/very_high conviction themes found — nothing to explore.")
         return
-    print(f"Active themes for exploration: {', '.join(active_themes)}\n")
+    logger.info(f"Active themes: {', '.join(active_themes)}")
 
-    print("Calling Claude for candidate discovery...")
+    logger.info(f"Calling Claude for candidate discovery  (model={EXPLORATION_MODEL})")
     try:
-        raw_text   = call_claude_exploration(
-            convictions, portfolio_tickers, exclusion_tickers, already_tracked
-        )
+        with timer("Exploration Claude call", logger):
+            raw_text = call_claude_exploration(
+                convictions, portfolio_tickers, exclusion_tickers, already_tracked
+            )
         candidates = parse_candidates(raw_text)
     except Exception as exc:
-        print(f"Claude exploration call failed: {exc}")
+        logger.exception(f"Claude exploration call failed: {exc}")
         return
 
-    # Post-filter: remove known tickers and any candidate Claude misfiled under an excluded theme
     candidates = filter_known_tickers(
         candidates, portfolio_tickers, exclusion_tickers, already_tracked
     )
     candidates = [c for c in candidates if c.get("source_theme") not in EXPLORATION_EXCLUDED_THEMES]
-    # Normalise ticker to uppercase
     for c in candidates:
         c["ticker"] = c["ticker"].upper()
 
-    print(f"\nDiscovered {len(candidates)} new candidate(s):")
+    logger.info(f"Discovered {len(candidates)} new candidate(s):")
     for c in candidates:
-        print(f"  {c['ticker']:8s} ({c.get('source_theme','?'):12s}) "
-              f"conviction={c.get('claude_conviction','?')}  {c.get('rationale','')[:80]}…")
+        ticker     = c["ticker"]
+        theme      = c.get("source_theme", "?")
+        conviction = c.get("claude_conviction", "?")
+        rationale  = c.get("rationale", "")[:80]
+        logger.info(f"  {ticker:<8}  theme={theme:<14}  conviction={conviction:<6}  {rationale}")
 
     for candidate in candidates:
         memory.upsert_exploration_candidate(candidate)
-        print(f"  Saved: {candidate['ticker']}")
+        logger.info(f"Saved: {candidate['ticker']}")
 
-    print(f"\nExploration complete — {len(candidates)} candidate(s) saved to on_radar.")
+    total_elapsed = time.perf_counter() - run_start
+    logger.info(f"Exploration complete — {len(candidates)} candidate(s) saved to on_radar.")
+    logger.info(f"TIMING  {'Total exploration run':<40}  {total_elapsed:.2f}s")
 
 
 if __name__ == "__main__":
+    from src.logger import setup as _setup_logging
+    _setup_logging()
     run()

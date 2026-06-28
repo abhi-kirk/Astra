@@ -7,6 +7,7 @@ The agent reads recent history at the start of each run for continuity.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 
 from src.config import (
@@ -16,6 +17,8 @@ from src.config import (
 )
 from src.db import Rows, get_client
 from src.db import rows as db_rows
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -151,8 +154,7 @@ def log_paper_trade(
         "signal_data": signal_data or {},
         "is_open": True,
     }).execute()
-    print(f"  [paper] BUY  {ticker}: {virtual_shares:.4f} shares @ ${price:.2f}  "
-          f"(${virtual_cost:.0f} = {pct:.0%} of ${PAPER_PORTFOLIO_SIZE:.0f})")
+    logger.info(f"Paper BUY  {ticker}: {virtual_shares:.4f} shares @ ${price:.2f}  (${virtual_cost:.0f} = {pct:.0%} of ${PAPER_PORTFOLIO_SIZE:.0f})")
 
 
 def close_paper_trade(ticker: str, close_price: float, run_date: str, reason: str) -> None:
@@ -178,8 +180,7 @@ def close_paper_trade(ticker: str, close_price: float, run_date: str, reason: st
         "close_reason": reason,
     }).eq("id", t["id"]).execute()
 
-    print(f"  [paper] CLOSE {ticker}: ${close_price:.2f}  "
-          f"P&L ${pnl_d:+.2f} ({pnl_pct:+.1f}%)  reason={reason}")
+    logger.info(f"Paper CLOSE {ticker}: ${close_price:.2f}  P&L ${pnl_d:+.2f} ({pnl_pct:+.1f}%)  reason={reason}")
 
 
 def upsert_exploration_candidate(candidate: dict) -> None:

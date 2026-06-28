@@ -26,3 +26,6 @@ src/astra.egg-info/
 # tokens / local temp
 tokens.enc
 tmp/
+
+# log files (local dev only — ephemeral on GitHub Actions)
+logs/
