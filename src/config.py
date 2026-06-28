@@ -23,7 +23,7 @@ TAVILY_MCP_URL           = _cfg("TAVILY_MCP_URL",           default="")
 ALPHA_VANTAGE_API_KEY    = _cfg("ALPHA_VANTAGE_API_KEY",    default="")
 
 # ── AI reasoning ──────────────────────────────────────────────
-REASONING_MODEL      = _cfg("REASONING_MODEL",      default="claude-sonnet-4-6")
+REASONING_MODEL      = _cfg("REASONING_MODEL",      default="claude-opus-4-8")
 REASONING_MAX_TOKENS = _cfg("REASONING_MAX_TOKENS", cast=int, default=3000)
 TAVILY_MAX_SEARCHES  = _cfg("TAVILY_MAX_SEARCHES",  cast=int, default=5)
 # Alpha Vantage free tier: 25 calls/day, 5 calls/min
