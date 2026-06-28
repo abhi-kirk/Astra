@@ -24,6 +24,9 @@ You have access to the following data tools — use them selectively and efficie
 {{#has_alpha_vantage}}
 - **Alpha Vantage** (`NEWS_SENTIMENT`, `EARNINGS_CALENDAR`, `COMPANY_OVERVIEW`): Use `NEWS_SENTIMENT` for structured sentiment scores on key tickers. Use `EARNINGS_CALENDAR` to check if any held tickers have earnings this week. IMPORTANT: free tier allows only 25 calls/day total — limit yourself to {{max_av_calls}} Alpha Vantage calls this run, focusing on BUY, SELL, and WATCH signals first.
 {{/has_alpha_vantage}}
+{{#has_sec_edgar}}
+- **SEC EDGAR** (`secedgar_get_insider_transactions`): Check for Form 4 insider buying or selling on BUY and SELL signal tickers. Significant insider buying (especially by executives) strengthens a BUY signal; heavy insider selling is a red flag. One call per ticker — focus on BUY signals first.
+{{/has_sec_edgar}}
 
 Use what you find to make the note specific and grounded. If results are thin or unhelpful, write from the mechanical signals.
 {{/has_search}}

@@ -21,6 +21,8 @@ SUPABASE_ANON_KEY    = _cfg("SUPABASE_ANON_KEY",    default="")
 ANTHROPIC_API_KEY        = _cfg("ANTHROPIC_API_KEY",        default="")
 TAVILY_MCP_URL           = _cfg("TAVILY_MCP_URL",           default="")
 ALPHA_VANTAGE_API_KEY    = _cfg("ALPHA_VANTAGE_API_KEY",    default="")
+# Community-hosted, no auth. Falls back gracefully if unavailable.
+SEC_EDGAR_MCP_URL        = _cfg("SEC_EDGAR_MCP_URL",        default="https://secedgar.caseyjhand.com/mcp")
 
 # ── AI reasoning ──────────────────────────────────────────────
 REASONING_MODEL      = _cfg("REASONING_MODEL",      default="claude-opus-4-8")

@@ -27,7 +27,13 @@ from anthropic.types.beta import (
     BetaTextBlock,
 )
 
-from src.config import ALPHA_VANTAGE_API_KEY, ALPHA_VANTAGE_MAX_CALLS, TAVILY_MAX_SEARCHES, TAVILY_MCP_URL
+from src.config import (
+    ALPHA_VANTAGE_API_KEY,
+    ALPHA_VANTAGE_MAX_CALLS,
+    SEC_EDGAR_MCP_URL,
+    TAVILY_MAX_SEARCHES,
+    TAVILY_MCP_URL,
+)
 
 # Beta flags required for MCP client support
 BETA_FLAGS = ["mcp-client-2025-04-04"]
@@ -60,6 +66,18 @@ def _alpha_vantage() -> BetaRequestMCPServerURLDefinitionParam | None:
     return {"type": "url", "url": url, "name": "alpha_vantage", "tool_configuration": tool_config}
 
 
+def _sec_edgar() -> BetaRequestMCPServerURLDefinitionParam | None:
+    if not SEC_EDGAR_MCP_URL:
+        return None
+    # Community-hosted cyanheads/secedgar-mcp-server. No auth required.
+    # Rate limit: 10 req/sec. Tool covers Form 3/4/5 insider transactions.
+    tool_config: BetaRequestMCPServerToolConfigurationParam = {
+        "enabled": True,
+        "allowed_tools": ["secedgar_get_insider_transactions"],
+    }
+    return {"type": "url", "url": SEC_EDGAR_MCP_URL, "name": "sec_edgar", "tool_configuration": tool_config}
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -69,8 +87,8 @@ def build_servers() -> list[BetaRequestMCPServerURLDefinitionParam]:
     candidates = [
         _tavily(),
         _alpha_vantage(),
-        # _sec_edgar(),  # Phase 1.5 — no auth needed
-        # _fmp(),        # Phase 1.5 — add last
+        _sec_edgar(),
+        # _fmp(),  # Phase 1.5 — add last
     ]
     return [s for s in candidates if s is not None]
 
@@ -109,6 +127,7 @@ def search_context(max_searches: int = TAVILY_MAX_SEARCHES) -> dict[str, Any]:
         "has_search":        bool(servers),
         "has_tavily":        "tavily" in names,
         "has_alpha_vantage": "alpha_vantage" in names,
+        "has_sec_edgar":     "sec_edgar" in names,
         "max_searches":      max_searches,
         "max_av_calls":      ALPHA_VANTAGE_MAX_CALLS,
     }

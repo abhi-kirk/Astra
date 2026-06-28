@@ -80,6 +80,7 @@ class TestSearchContext:
     def _patch_none(self, monkeypatch):
         monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
         monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
+        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "")
 
     def test_no_search_when_both_empty(self, monkeypatch):
         self._patch_none(monkeypatch)
@@ -121,8 +122,36 @@ class TestSearchContext:
     def test_alpha_vantage_key_in_url(self, monkeypatch):
         monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
         monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "my-secret-key")
+        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "")
         from src.mcp import build_servers
         servers = build_servers()
         assert len(servers) == 1
         assert "my-secret-key" in servers[0]["url"]
         assert servers[0]["name"] == "alpha_vantage"
+
+    def test_sec_edgar_included_when_url_set(self, monkeypatch):
+        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
+        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
+        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "https://secedgar.caseyjhand.com/mcp")
+        ctx = search_context()
+        assert ctx["has_search"] is True
+        assert ctx["has_sec_edgar"] is True
+        assert ctx["has_tavily"] is False
+        assert ctx["has_alpha_vantage"] is False
+
+    def test_sec_edgar_excluded_when_url_empty(self, monkeypatch):
+        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
+        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
+        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "")
+        ctx = search_context()
+        assert ctx["has_search"] is False
+        assert ctx["has_sec_edgar"] is False
+
+    def test_sec_edgar_allowed_tools(self, monkeypatch):
+        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
+        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
+        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "https://secedgar.caseyjhand.com/mcp")
+        from src.mcp import build_servers
+        servers = build_servers()
+        edgar = next(s for s in servers if s["name"] == "sec_edgar")
+        assert edgar["tool_configuration"]["allowed_tools"] == ["secedgar_get_insider_transactions"]
