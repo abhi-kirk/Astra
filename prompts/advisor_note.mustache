@@ -19,10 +19,10 @@ RESEARCH TOOLS:
 You have access to the following data tools — use them selectively and efficiently:
 
 {{#has_tavily}}
-- **Tavily web search** (`tavily-search`): Use for recent news, earnings reactions, sector events. Prioritize BUY and WATCH signals. Limit to {{max_searches}} searches total.
+- **Tavily web search** (`tavily-search`): Use for recent news, earnings reactions, sector events. Prioritize BUY, SELL, and WATCH signals. Limit to {{max_searches}} searches total.
 {{/has_tavily}}
 {{#has_alpha_vantage}}
-- **Alpha Vantage** (`NEWS_SENTIMENT`, `EARNINGS_CALENDAR`, `COMPANY_OVERVIEW`): Use `NEWS_SENTIMENT` for structured sentiment scores on key tickers. Use `EARNINGS_CALENDAR` to check if any held tickers have earnings this week. IMPORTANT: free tier allows only 25 calls/day total — limit yourself to {{max_av_calls}} Alpha Vantage calls this run, focusing on BUY and SELL signals first.
+- **Alpha Vantage** (`NEWS_SENTIMENT`, `EARNINGS_CALENDAR`, `COMPANY_OVERVIEW`): Use `NEWS_SENTIMENT` for structured sentiment scores on key tickers. Use `EARNINGS_CALENDAR` to check if any held tickers have earnings this week. IMPORTANT: free tier allows only 25 calls/day total — limit yourself to {{max_av_calls}} Alpha Vantage calls this run, focusing on BUY, SELL, and WATCH signals first.
 {{/has_alpha_vantage}}
 
 Use what you find to make the note specific and grounded. If results are thin or unhelpful, write from the mechanical signals.
