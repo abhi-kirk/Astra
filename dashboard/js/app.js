@@ -321,58 +321,6 @@ async function fetchRecentDecisionHistory(sb) {
   return byTicker;
 }
 
-// ── Signals donut chart ──────────────────────────────────────
-
-let donutChart = null;
-
-function renderSignalsDonut(counts) {
-  const ctx = document.getElementById('signals-donut').getContext('2d');
-
-  const labels = ['Buy', 'Watch', 'Review', 'Hold', 'Blocked'];
-  const data   = [counts.buy, counts.watch, counts.review, counts.hold, counts.blocked];
-  const colors = [
-    'rgba(57,211,83,0.85)',   // buy → green
-    'rgba(0,212,255,0.75)',   // watch → cyan
-    'rgba(255,215,0,0.75)',   // review → yellow
-    'rgba(68,85,102,0.5)',    // hold → muted
-    'rgba(68,85,102,0.3)',    // blocked → dim
-  ];
-
-  if (donutChart) donutChart.destroy();
-
-  donutChart = new Chart(ctx, {
-    type: 'doughnut',
-    data: {
-      labels,
-      datasets: [{
-        data,
-        backgroundColor: colors,
-        borderColor: 'rgba(5,10,20,0.8)',
-        borderWidth: 2,
-      }],
-    },
-    options: {
-      cutout: '70%',
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: ctx => ` ${ctx.label}: ${ctx.parsed}`,
-          },
-          backgroundColor: 'rgba(13,30,53,0.95)',
-          borderColor: 'rgba(26,58,92,1)',
-          borderWidth: 1,
-          titleColor: '#8899aa',
-          bodyColor: '#e8f4fd',
-          titleFont: { family: 'JetBrains Mono', size: 10 },
-          bodyFont:  { family: 'JetBrains Mono', size: 12 },
-        },
-      },
-      animation: { duration: 800 },
-    },
-  });
-}
-
 // ── Paper portfolio ──────────────────────────────────────────
 
 function renderPaperPortfolio(paperTrades, marketData) {
@@ -497,9 +445,9 @@ function buildCard(ticker, mdata, signal, decision, paperTrade) {
 
   // For actionable signals: show top 2 reasons why ASTRA flagged this
   let bodyHtml = '';
-  if (['buy', 'watch', 'review'].includes(action) && signal?.reasons?.length) {
+  if (['buy', 'watch', 'sell'].includes(action) && signal?.reasons?.length) {
     const topReasons = signal.reasons.slice(0, 2);
-    const icons = { buy: '▲', watch: '◈', review: '◉' };
+    const icons = { buy: '▲', watch: '◈', sell: '↓' };
     const icon = icons[action] || '•';
     bodyHtml = `<div class="card-reasons">
       ${topReasons.map(r => `
@@ -592,7 +540,7 @@ function renderLanes(marketData, signalsByTicker, decisionsByTicker, paperTrades
     const grid = lane.querySelector('.cards-grid');
 
     // Sort: buy first, then watch, review, hold, blocked
-    const ORDER = { buy: 0, review: 1, watch: 2, hold: 3, blocked: 4 };
+    const ORDER = { buy: 0, sell: 1, watch: 2, hold: 3, blocked: 4 };
     tickersInLane.sort((a, b) => {
       const aAction = signalsByTicker[a]?.action ?? 'hold';
       const bAction = signalsByTicker[b]?.action ?? 'hold';
@@ -829,8 +777,8 @@ function openModal(ticker, mdata, signal, decision, paperTrade) {
       histEl.innerHTML = '<div class="signal-history-empty">No history yet — data builds up over daily runs.</div>';
       return;
     }
-    const ACTION_DOT = { buy: '▲', watch: '◈', review: '◉', blocked: '✕', hold: '·' };
-    const ACTION_CLS = { buy: 'sh-buy', watch: 'sh-watch', review: 'sh-review', blocked: 'sh-blocked', hold: 'sh-hold' };
+    const ACTION_DOT = { buy: '▲', sell: '↓', watch: '◈', blocked: '✕', hold: '·' };
+    const ACTION_CLS = { buy: 'sh-buy', sell: 'sh-sell', watch: 'sh-watch', blocked: 'sh-blocked', hold: 'sh-hold' };
     histEl.innerHTML = hist.slice(0, 12).map((d, i) => `
       <div class="sh-row">
         <span class="sh-date">${new Date(d.run_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
@@ -981,44 +929,51 @@ async function init() {
       raw.num_positions_screened ?? Object.keys(marketData).length;
 
     // ── Signals counts ──
-    const counts = { buy: 0, watch: 0, review: 0, hold: 0, blocked: 0 };
+    const counts = { buy: 0, sell: 0, watch: 0, hold: 0, blocked: 0 };
     const totalPositions = Object.keys(marketData).length;
     signals.forEach(s => { if (counts[s.action] !== undefined) counts[s.action]++; });
-    counts.hold = totalPositions - counts.buy - counts.watch - counts.review - counts.blocked;
+    counts.hold = totalPositions - counts.buy - counts.sell - counts.watch - counts.blocked;
 
-    renderSignalsDonut(counts);
-
-    const countsEl = document.getElementById('signals-counts');
-    countsEl.innerHTML = [
-      ['buy', 'BUY'],
-      ['watch', 'WATCH'],
-      ['review', 'REVIEW'],
-      ['hold', 'HOLD'],
-    ].map(([action, label]) => `
-      <div class="signal-count-item ${action}">
-        <span class="signal-count-num">${counts[action]}</span>
-        <span class="signal-count-label">${label}</span>
-      </div>
-    `).join('');
+    const heroSub = document.getElementById('hero-sub');
+    const parts = [];
+    if (counts.buy)  parts.push(`${counts.buy} buy signal${counts.buy !== 1 ? 's' : ''}`);
+    if (counts.sell) parts.push(`${counts.sell} sell signal${counts.sell !== 1 ? 's' : ''}`);
+    if (counts.watch) parts.push(`${counts.watch} on watch`);
+    heroSub.textContent = parts.length
+      ? parts.join(' · ') + ' across your conviction themes today'
+      : 'No new signals today — holding your conviction positions';
 
     // ── Structured signals summary ──
     const summaryEl = document.getElementById('run-summary-text');
     const byAction = {};
-    signals.forEach(s => { (byAction[s.action] = byAction[s.action] || []).push(s.ticker); });
+    signals.forEach(s => { (byAction[s.action] = byAction[s.action] || []).push(s); });
+
+    function signalBadge(action, sig) {
+      if (action === 'buy' && sig.suggested_position_pct) {
+        const pct = (sig.suggested_position_pct * 100).toFixed(0);
+        return `<span class="summary-signal-badge buy-size">${pct}%</span>`;
+      }
+      if (action === 'sell' && sig.reasons?.length) {
+        const m = sig.reasons[0].match(/Up (\d+)%/);
+        if (m) return `<span class="summary-signal-badge sell-gain">+${m[1]}%</span>`;
+      }
+      return '';
+    }
+
     const summaryRows = [
-      { action: 'buy',    label: '↑ BUY',    tickers: byAction.buy    || [] },
-      { action: 'review', label: '◉ REVIEW', tickers: byAction.review || [] },
-      { action: 'watch',  label: '◈ WATCH',  tickers: byAction.watch  || [] },
-    ].filter(r => r.tickers.length);
+      { action: 'buy',   label: '↑ BUY',   sigs: byAction.buy   || [] },
+      { action: 'sell',  label: '↓ SELL',  sigs: byAction.sell  || [] },
+      { action: 'watch', label: '◈ WATCH', sigs: byAction.watch || [] },
+    ].filter(r => r.sigs.length);
 
     if (summaryRows.length) {
       summaryEl.innerHTML = `<div class="summary-structured">${
         summaryRows.map(r => `
           <div class="summary-row">
             <span class="summary-action-label ${r.action}">${r.label}</span>
-            <span class="summary-tickers">${r.tickers.map(t =>
-              `<span class="ticker-link-plain" data-ticker="${t}">${t}</span>`
-            ).join('<span style="color:var(--text-dim)"> ·</span> ')}</span>
+            <span class="summary-tickers">${r.sigs.map(s =>
+              `<span class="summary-ticker-unit"><span class="ticker-link-plain" data-ticker="${s.ticker}">${s.ticker}</span>${signalBadge(r.action, s)}</span>`
+            ).join('<span class="summary-sep"> · </span>')}</span>
           </div>`).join('')
       }</div>`;
     } else {

@@ -260,7 +260,7 @@ def technical_signal(market_data: dict) -> tuple[bool, list[str]]:
 # ---------------------------------------------------------------------------
 
 def check_profit_take(ticker: str, position: dict, market_data: dict) -> Signal | None:
-    """Returns a 'review' signal if position is up >60% from avg cost."""
+    """Returns a 'sell' signal if position is up >60% from avg cost."""
     avg_cost = position.get("avg_cost", 0)
     current_price = market_data.get("current_price", 0)
     if not avg_cost or not current_price:
@@ -270,13 +270,13 @@ def check_profit_take(ticker: str, position: dict, market_data: dict) -> Signal 
     if gain_pct >= 60:
         return Signal(
             ticker=ticker,
-            action="review",
+            action="sell",
             conviction_match=True,
             quality_pass=True,
             technical_pass=True,
             hard_rule_block=None,
             reasons=[f"Up {gain_pct:.0f}% from avg cost (${avg_cost:.2f} → ${current_price:.2f})"],
-            risk_flags=["Profit-take trigger: consider trimming position"],
+            risk_flags=["Profit-take trigger: consider trimming or selling position"],
             suggested_position_pct=None,
         )
     return None
@@ -397,5 +397,5 @@ def screen_all_positions(
         sig = screen_position(ticker, position, mdata, convictions, portfolio_summary)
         signals.append(sig)
 
-    priority = {"buy": 0, "review": 1, "watch": 2, "hold": 3, "blocked": 4}
+    priority = {"buy": 0, "sell": 1, "watch": 2, "hold": 3, "blocked": 4}
     return sorted(signals, key=lambda s: priority.get(s.action, 5))

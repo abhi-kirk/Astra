@@ -67,10 +67,10 @@ def call_claude_reasoning(
         )
 
     signal_text = ""
-    for action in ["buy", "review", "watch"]:
+    for action in ["buy", "sell", "watch"]:
         group = action_groups.get(action, [])
         if group:
-            label = {"buy": "BUY SIGNALS", "review": "PROFIT-TAKE REVIEWS", "watch": "WATCHLIST"}[action]
+            label = {"buy": "BUY SIGNALS", "sell": "SELL SIGNALS", "watch": "WATCHLIST"}[action]
             signal_text += f"\n{label}:\n" + "\n".join(fmt_sig(s) for s in group)
 
     blocked = action_groups.get("blocked", [])
@@ -146,8 +146,8 @@ def build_public_output(output: dict) -> dict:
         action = s.get("action", "")
         reasons = s.get("reasons", [])
 
-        if action == "review":
-            public_reasons = ["Position has appreciated significantly — profit-take review triggered."]
+        if action == "sell":
+            public_reasons = ["Position has appreciated significantly — sell signal triggered."]
         elif action == "blocked":
             public_reasons = []
             for r in reasons:
@@ -208,7 +208,7 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
     history_context = memory.build_agent_context_summary()
 
     advisor_note = ""
-    if use_ai and any(s.action in ("buy", "review", "watch") for s in signals):
+    if use_ai and any(s.action in ("buy", "sell", "watch") for s in signals):
         print("\nCalling Claude for narrative reasoning...")
         advisor_note = call_claude_reasoning(
             signals, portfolio, market_data, history_context, convictions
@@ -223,11 +223,11 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
     for sig in signals:
         action_groups.setdefault(sig.action, []).append(sig)
 
-    for action in ["buy", "review", "watch", "blocked"]:
+    for action in ["buy", "sell", "watch", "blocked"]:
         group = action_groups.get(action, [])
         if not group:
             continue
-        label = {"buy": "BUY SIGNALS", "review": "PROFIT-TAKE REVIEW",
+        label = {"buy": "BUY SIGNALS", "sell": "SELL SIGNALS",
                  "watch": "WATCHLIST", "blocked": "BLOCKED"}[action]
         print(f"\n--- {label} ---")
         for sig in group:
@@ -265,7 +265,7 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
             memory.close_paper_trade(ticker, price, run_date, "signal_inactive")
         elif sig is not None and sig.action == "blocked":
             memory.close_paper_trade(ticker, price, run_date, "blocked")
-        elif sig is not None and sig.action == "review":
+        elif sig is not None and sig.action == "sell":
             memory.close_paper_trade(ticker, price, run_date, "profit_take")
         # buy / watch → keep open
 
@@ -273,7 +273,7 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
         pos = portfolio.get(sig.ticker, {})
         mdata = market_data.get(sig.ticker, {})
         price = mdata.get("current_price")
-        if sig.action in ("buy", "review", "watch"):
+        if sig.action in ("buy", "sell", "watch"):
             memory.log_decision(
                 ticker=sig.ticker,
                 action=sig.action,
@@ -294,10 +294,11 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
                 suggested_pct=sig.suggested_position_pct,
             )
 
-    buy_tickers = [s.ticker for s in signals if s.action == "buy"]
+    buy_tickers  = [s.ticker for s in signals if s.action == "buy"]
+    sell_tickers = [s.ticker for s in signals if s.action == "sell"]
     summary = (
         f"{len(buy_tickers)} buy signal(s): {', '.join(buy_tickers) or 'none'}. "
-        f"{len(action_groups.get('review', []))} profit-take review(s). "
+        f"{len(sell_tickers)} sell signal(s): {', '.join(sell_tickers) or 'none'}. "
         f"{len(action_groups.get('watch', []))} on watchlist."
     )
 
