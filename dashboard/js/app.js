@@ -93,14 +93,33 @@ function createSupabaseClient() {
   return factory(SUPABASE_URL, SUPABASE_ANON);
 }
 
-// Theme → tickers map (drives swim lanes)
-const THEME_MAP = {
-  space:     { label: 'Space',     conviction: 'very_high', tickers: ['RKLB','ASTS','ARKX','SPCX','NASA','SPCE','SMR'] },
-  core_tech: { label: 'Core Tech', conviction: 'high',      tickers: ['NVDA','GOOGL','AMZN','AAPL','MSFT','AMD','CRM','NFLX','CRSR','BB'] },
-  ev:        { label: 'EV',        conviction: 'high',      tickers: ['NIO','BYDDY','LCID','CHPT'] },
-  cannabis:  { label: 'Cannabis',  conviction: 'low',       tickers: ['CRON','SNDL','VFF'] },
-  other:     { label: 'Other',     conviction: null,         tickers: [] }, // catch-all
+// Theme → tickers map (drives swim lanes). Rebuilt from convictions DB on load + after saves.
+let THEME_MAP = {
+  space:        { label: 'Space',        conviction: 'very_high', tickers: ['RKLB','ASTS','ARKX','SPCX','NASA','SPCE','SMR'] },
+  core_tech:    { label: 'Core Tech',    conviction: 'high',      tickers: ['NVDA','GOOGL','AMZN','AAPL','MSFT','AMD','CRM','NFLX','CRSR','BB'] },
+  ev_transition:{ label: 'EV',          conviction: 'high',      tickers: ['NIO','BYDDY','LCID','CHPT'] },
+  cannabis:     { label: 'Cannabis',     conviction: 'low',       tickers: ['CRON','SNDL','VFF'] },
+  other:        { label: 'Other',        conviction: null,        tickers: [] },
 };
+
+// Stored render data so lanes can be re-rendered after conviction changes
+let _lastMarketData = {}, _lastSignalsByTicker = {}, _lastDecisionsByTicker = {}, _lastPaperByTicker = {};
+
+function buildThemeMapFromConvictions(convictions) {
+  const map = {};
+  for (const [key, theme] of Object.entries(convictions.themes || {})) {
+    const tickers = [
+      ...(theme.approved   || []),
+      ...(theme.preferred  || []),
+      ...(theme.hold_only  || []),
+      ...(theme.do_not_add || []),
+    ];
+    const label = key.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    map[key] = { label, conviction: theme.conviction || 'medium', tickers };
+  }
+  map.other = { label: 'Other', conviction: null, tickers: [] };
+  return map;
+}
 
 // ── Ticker linkification ──────────────────────────────────────
 
@@ -854,6 +873,467 @@ function closeModal() {
   if (modalBarChart) { modalBarChart.destroy(); modalBarChart = null; }
 }
 
+// ── Convictions Drawer ───────────────────────────────────────
+
+let _sb = null;
+let _convs = null;
+let _convRowId = null;
+let _saveTimer = null;
+
+const CONVICTION_LEVELS = ['low', 'medium', 'high', 'very_high'];
+const CONVICTION_LABELS  = { low: 'LOW', medium: 'MED', high: 'HIGH', very_high: 'V.HIGH' };
+const INTENT_OPTIONS = [
+  { val: 'thesis_hold',   icon: '🎯', line1: 'LONG',    line2: 'TERM'  },
+  { val: 'opportunistic', icon: '⚡', line1: 'OPP.',    line2: ''      },
+  { val: 'written_off',   icon: '✕',  line1: 'WRITTEN', line2: 'OFF'   },
+];
+
+function setSaveStatus(state, msg) {
+  const el = document.getElementById('conv-save-status');
+  if (!el) return;
+  el.className = 'conv-save-status ' + (state || '');
+  el.textContent = msg || '';
+}
+
+function scheduleAutosave() {
+  setSaveStatus('saving', '● Saving…');
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(doSaveConvictions, 900);
+}
+
+async function doSaveConvictions() {
+  if (!_sb || !_convs || !_convRowId) return;
+  try {
+    const { error } = await _sb.from('convictions')
+      .update({ content: _convs, updated_at: new Date().toISOString(), updated_by: 'dashboard' })
+      .eq('id', _convRowId);
+    if (error) throw error;
+    setSaveStatus('saved', '● Saved just now');
+    setTimeout(() => setSaveStatus('', ''), 3000);
+    // Rebuild swim lanes from updated convictions
+    THEME_MAP = buildThemeMapFromConvictions(_convs);
+    renderLanes(_lastMarketData, _lastSignalsByTicker, _lastDecisionsByTicker, _lastPaperByTicker);
+  } catch (err) {
+    setSaveStatus('error', '● Save failed');
+    console.error('Convictions save error:', err.message);
+    if (err.code === '42501' || (err.message || '').includes('policy')) {
+      console.warn(
+        'Add this in Supabase SQL Editor:\n' +
+        "CREATE POLICY \"owner update convictions\" ON convictions\n" +
+        "  FOR UPDATE TO authenticated USING (auth.email() = 'abhikirk@icloud.com');\n" +
+        "GRANT UPDATE ON convictions TO authenticated;"
+      );
+    }
+  }
+}
+
+function openConvictionsDrawer() {
+  document.getElementById('conv-backdrop').classList.remove('hidden');
+  document.getElementById('conv-drawer').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  loadAndRenderConvictions();
+}
+
+function closeConvictionsDrawer() {
+  document.getElementById('conv-backdrop').classList.add('hidden');
+  document.getElementById('conv-drawer').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+async function loadAndRenderConvictions() {
+  const body = document.getElementById('conv-body');
+  body.innerHTML = '<div class="conv-loading">Loading convictions…</div>';
+  try {
+    const { data, error } = await _sb
+      .from('convictions')
+      .select('id, content')
+      .order('id', { ascending: false })
+      .limit(1)
+      .single();
+    if (error) throw error;
+    _convs = JSON.parse(JSON.stringify(data.content));
+    _convRowId = data.id;
+    renderConvDrawer();
+  } catch (err) {
+    body.innerHTML = `<div class="conv-loading" style="color:var(--accent-red)">Failed to load: ${err.message}</div>`;
+  }
+}
+
+function renderConvDrawer() {
+  const body = document.getElementById('conv-body');
+  const themes   = _convs.themes || {};
+  const holdings = _convs.individual_holdings || {};
+  const tickerMeta = _convs.ticker_metadata || {};
+  const allMetaTickers = Object.keys(tickerMeta).sort();
+
+  body.innerHTML = '';
+
+  // THEMES section
+  {
+    const sec = document.createElement('div');
+    sec.innerHTML = '<div class="conv-section-label">THEMES</div>';
+    const list = document.createElement('div');
+    list.style.cssText = 'display:flex;flex-direction:column;gap:8px;';
+    for (const [key, theme] of Object.entries(themes)) {
+      list.appendChild(buildThemeCard(key, theme));
+    }
+    sec.appendChild(list);
+
+    // Add theme row
+    const addRow = document.createElement('div');
+    addRow.className = 'conv-add-theme-row';
+    addRow.innerHTML = `
+      <input class="conv-add-theme-input" id="conv-new-theme-key" placeholder="theme_name (snake_case)" spellcheck="false">
+      <button class="conv-add-theme-btn" id="conv-new-theme-btn">+ ADD THEME</button>
+    `;
+    addRow.querySelector('#conv-new-theme-btn').addEventListener('click', () => {
+      const inp = addRow.querySelector('#conv-new-theme-key');
+      addTheme(inp.value.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-z_]/g, ''));
+      inp.value = '';
+    });
+    addRow.querySelector('#conv-new-theme-key').addEventListener('keydown', e => {
+      if (e.key === 'Enter') addRow.querySelector('#conv-new-theme-btn').click();
+    });
+    sec.appendChild(addRow);
+    body.appendChild(sec);
+  }
+
+  // TICKER INTENT section
+  if (allMetaTickers.length) {
+    const sec = document.createElement('div');
+    sec.innerHTML = '<div class="conv-section-label">TICKER INTENT</div>';
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:flex;flex-direction:column;gap:2px;';
+    for (const ticker of allMetaTickers) {
+      grid.appendChild(buildIntentRow(ticker, tickerMeta[ticker] || {}));
+    }
+    sec.appendChild(grid);
+    body.appendChild(sec);
+  }
+
+  // INDIVIDUAL HOLDINGS section
+  const holdingEntries = Object.entries(holdings);
+  if (holdingEntries.length) {
+    const sec = document.createElement('div');
+    sec.innerHTML = `
+      <div class="conv-section-label">INDIVIDUAL HOLDINGS</div>
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--text-dim);letter-spacing:0.5px;margin-bottom:12px;line-height:1.6;">
+        Positions held for individual reasons outside of a conviction theme.
+        All are <span style="color:var(--text-muted)">HOLD</span> — intent and profit-take rules are managed via Ticker Intent above.
+      </div>`;
+    const list = document.createElement('div');
+    list.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
+    for (const [ticker, h] of holdingEntries) {
+      const item = document.createElement('div');
+      item.className = 'conv-holding-item';
+      const notes = DOMPurify.sanitize(h.thesis || '');
+      const actionNote = DOMPurify.sanitize(h.action || '');
+      item.innerHTML = `
+        <div class="conv-holding-top">
+          <span class="conv-holding-ticker">${ticker}</span>
+          <span class="conv-holding-status">${(h.status || 'hold').replace(/_/g,' ').toUpperCase()}</span>
+        </div>
+        ${notes ? `<div class="conv-holding-notes">${notes}</div>` : ''}
+        ${actionNote ? `<div class="conv-holding-action">${actionNote}</div>` : ''}
+      `;
+      list.appendChild(item);
+    }
+    sec.appendChild(list);
+    body.appendChild(sec);
+  }
+}
+
+function buildThemeCard(key, theme) {
+  const card = document.createElement('div');
+  card.className = 'conv-theme-card';
+
+  const approvedList  = theme.approved   || [];
+  const preferredList = theme.preferred  || [];
+  const holdList      = theme.hold_only  || [];
+  const dontList      = theme.do_not_add || [];
+  const totalTickers  = approvedList.length + preferredList.length + holdList.length + dontList.length;
+  const conv = theme.conviction || 'low';
+
+  const header = document.createElement('div');
+  header.className = 'conv-theme-header';
+  header.innerHTML = `
+    <span class="conv-theme-chevron">▶</span>
+    <span class="conv-theme-name">${key.replace(/_/g,' ')}</span>
+    <span class="conv-theme-ticker-count">${totalTickers} tickers</span>
+    <span class="lane-conviction conviction-${conv}" style="font-size:8px;padding:2px 8px;">
+      ${conv.replace('_',' ').toUpperCase()}
+    </span>
+    <button class="conv-theme-delete" title="Delete theme" data-key="${key}">✕</button>
+  `;
+  card.appendChild(header);
+
+  header.querySelector('.conv-theme-delete').addEventListener('click', e => {
+    e.stopPropagation();
+    deleteTheme(key);
+  });
+
+  const body = document.createElement('div');
+  body.className = 'conv-theme-body';
+
+  // Conviction segmented
+  const convRow = document.createElement('div');
+  convRow.className = 'conv-conviction-row';
+  convRow.innerHTML = '<div class="conv-field-label">CONVICTION</div>';
+  const seg = document.createElement('div');
+  seg.className = 'conv-segmented';
+  for (const lvl of CONVICTION_LEVELS) {
+    const btn = document.createElement('button');
+    btn.className = 'conv-seg-btn' + (conv === lvl ? ' active' : '');
+    btn.dataset.val = lvl;
+    btn.textContent = CONVICTION_LABELS[lvl];
+    btn.addEventListener('click', () => {
+      seg.querySelectorAll('.conv-seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      _convs.themes[key].conviction = lvl;
+      const badge = card.querySelector('.lane-conviction');
+      badge.className = `lane-conviction conviction-${lvl}`;
+      badge.textContent = lvl.replace('_',' ').toUpperCase();
+      badge.style.cssText = 'font-size:8px;padding:2px 8px;';
+      scheduleAutosave();
+    });
+    seg.appendChild(btn);
+  }
+  convRow.appendChild(seg);
+  body.appendChild(convRow);
+
+  // Thesis — bullet view with edit toggle
+  const thesisDiv = document.createElement('div');
+  thesisDiv.className = 'conv-field';
+
+  const labelRow = document.createElement('div');
+  labelRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;';
+  const fieldLabel = document.createElement('div');
+  fieldLabel.className = 'conv-field-label';
+  fieldLabel.style.marginBottom = '0';
+  fieldLabel.textContent = 'THESIS';
+  const editToggle = document.createElement('button');
+  editToggle.className = 'conv-edit-toggle';
+  editToggle.textContent = 'EDIT';
+  labelRow.appendChild(fieldLabel);
+  labelRow.appendChild(editToggle);
+  thesisDiv.appendChild(labelRow);
+
+  function parseThesisBullets(text) {
+    if (!text) return [];
+    if (text.includes('\n')) return text.split('\n').map(s => s.trim()).filter(Boolean);
+    return text.split(/\.\s+/).map(s => s.trim()).filter(Boolean)
+      .map(s => s.endsWith('.') ? s.slice(0,-1) : s);
+  }
+
+  let bullets = parseThesisBullets(theme.thesis || '');
+
+  const ul = document.createElement('ul');
+  ul.className = 'conv-thesis-list';
+  function rebuildList() {
+    ul.innerHTML = '';
+    if (bullets.length) {
+      bullets.forEach(b => { const li = document.createElement('li'); li.textContent = b; ul.appendChild(li); });
+    } else {
+      const li = document.createElement('li'); li.textContent = 'No thesis yet — click EDIT to add.';
+      li.style.color = 'var(--text-dim)'; li.style.fontStyle = 'italic'; ul.appendChild(li);
+    }
+  }
+  rebuildList();
+  thesisDiv.appendChild(ul);
+
+  const ta = document.createElement('textarea');
+  ta.className = 'conv-textarea';
+  ta.style.display = 'none';
+  ta.rows = 5;
+  ta.placeholder = 'One bullet per line…';
+  ta.value = bullets.join('\n');
+  ta.addEventListener('blur', () => {
+    bullets = ta.value.split('\n').map(s => s.trim()).filter(Boolean);
+    _convs.themes[key].thesis = bullets.join('\n');
+    rebuildList();
+    ta.style.display = 'none';
+    ul.style.display = '';
+    editToggle.textContent = 'EDIT';
+    scheduleAutosave();
+  });
+  thesisDiv.appendChild(ta);
+
+  editToggle.addEventListener('click', () => {
+    if (ta.style.display === 'none') {
+      ta.value = bullets.join('\n');
+      ta.style.display = 'block';
+      ul.style.display = 'none';
+      editToggle.textContent = 'DONE';
+      ta.focus();
+    } else {
+      ta.blur();
+    }
+  });
+
+  body.appendChild(thesisDiv);
+
+  // Ticker chip sections
+  const chipDefs = [
+    { label: 'APPROVED',   field: 'approved',   cls: 'approved'   },
+    { label: 'PREFERRED',  field: 'preferred',  cls: 'approved'   },
+    { label: 'HOLD ONLY',  field: 'hold_only',  cls: 'hold-only'  },
+    { label: 'DO NOT ADD', field: 'do_not_add', cls: 'do-not-add' },
+  ];
+
+  for (const cd of chipDefs) {
+    const currentList = () => _convs.themes[key][cd.field] || [];
+    if (!currentList().length && cd.field !== 'approved') continue;
+
+    const sec = document.createElement('div');
+    sec.className = 'conv-ticker-list-section';
+    sec.innerHTML = `<div class="conv-ticker-list-label">${cd.label}</div>`;
+    const chips = document.createElement('div');
+    chips.className = 'conv-chips';
+
+    function rebuildChips(chipsEl, def) {
+      chipsEl.innerHTML = '';
+      for (const t of (currentList())) {
+        const chip = document.createElement('span');
+        chip.className = `conv-chip ${def.cls}`;
+        chip.innerHTML = `${t}<button class="conv-chip-remove" title="Remove">✕</button>`;
+        chip.querySelector('.conv-chip-remove').addEventListener('click', () => {
+          _convs.themes[key][def.field] = (_convs.themes[key][def.field] || []).filter(x => x !== t);
+          rebuildChips(chipsEl, def);
+          scheduleAutosave();
+        });
+        chipsEl.appendChild(chip);
+      }
+      // Add input
+      const inp = document.createElement('input');
+      inp.type = 'text'; inp.className = 'conv-add-input'; inp.placeholder = '+ ADD';
+      inp.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+          const val = inp.value.trim().toUpperCase();
+          if (val && !currentList().includes(val)) {
+            if (!_convs.themes[key][def.field]) _convs.themes[key][def.field] = [];
+            _convs.themes[key][def.field].push(val);
+            rebuildChips(chipsEl, def);
+            scheduleAutosave();
+          } else { inp.value = ''; }
+        }
+        if (e.key === 'Escape') inp.blur();
+      });
+      chipsEl.appendChild(inp);
+    }
+
+    rebuildChips(chips, cd);
+    sec.appendChild(chips);
+    body.appendChild(sec);
+  }
+
+  card.appendChild(body);
+  header.addEventListener('click', () => card.classList.toggle('open'));
+  return card;
+}
+
+function buildIntentRow(ticker, meta) {
+  const row = document.createElement('div');
+  row.className = 'conv-intent-row';
+
+  const tickerEl = document.createElement('span');
+  tickerEl.className = 'conv-intent-ticker';
+  tickerEl.textContent = ticker;
+  row.appendChild(tickerEl);
+
+  const block = document.createElement('div');
+  block.className = 'conv-intent-block';
+
+  const cardsEl = document.createElement('div');
+  cardsEl.className = 'conv-intent-cards';
+
+  let currentIntent = meta.intent || 'opportunistic';
+
+  const catalystInp = document.createElement('input');
+  catalystInp.type = 'text';
+  catalystInp.className = 'conv-catalyst-input';
+  catalystInp.placeholder = 'Original catalyst (e.g. COVID recovery)';
+  catalystInp.value = meta.original_catalyst || '';
+  catalystInp.style.display = currentIntent === 'opportunistic' ? 'block' : 'none';
+  catalystInp.addEventListener('blur', () => {
+    if (!_convs.ticker_metadata[ticker]) _convs.ticker_metadata[ticker] = {};
+    _convs.ticker_metadata[ticker].original_catalyst = catalystInp.value.trim() || null;
+    scheduleAutosave();
+  });
+
+  for (const opt of INTENT_OPTIONS) {
+    const btn = document.createElement('button');
+    btn.className = 'conv-intent-card' + (currentIntent === opt.val ? ' active' : '');
+    btn.dataset.intent = opt.val;
+    btn.innerHTML = `<span style="display:block;margin-bottom:1px;font-size:11px">${opt.icon}</span><span style="display:block;font-size:8px;letter-spacing:0.5px">${opt.line1}</span>${opt.line2 ? `<span style="display:block;font-size:8px;letter-spacing:0.5px">${opt.line2}</span>` : ''}`;
+    btn.addEventListener('click', () => {
+      cardsEl.querySelectorAll('.conv-intent-card').forEach(c => c.classList.remove('active'));
+      btn.classList.add('active');
+      currentIntent = opt.val;
+      if (!_convs.ticker_metadata) _convs.ticker_metadata = {};
+      if (!_convs.ticker_metadata[ticker]) _convs.ticker_metadata[ticker] = {};
+      _convs.ticker_metadata[ticker].intent = opt.val;
+      if (opt.val !== 'opportunistic') {
+        _convs.ticker_metadata[ticker].original_catalyst = null;
+        catalystInp.value = '';
+      }
+      catalystInp.style.display = opt.val === 'opportunistic' ? 'block' : 'none';
+      scheduleAutosave();
+    });
+    cardsEl.appendChild(btn);
+  }
+
+  block.appendChild(cardsEl);
+  block.appendChild(catalystInp);
+  row.appendChild(block);
+  return row;
+}
+
+function addTheme(key) {
+  if (!key) return;
+  if (_convs.themes[key]) {
+    alert(`Theme "${key}" already exists.`);
+    return;
+  }
+  _convs.themes[key] = {
+    thesis: '', conviction: 'medium',
+    approved: [], preferred: [], hold_only: [], do_not_add: [], notes: {},
+  };
+  renderConvDrawer();
+  scheduleAutosave();
+  // Scroll to and expand the new card
+  requestAnimationFrame(() => {
+    const cards = document.querySelectorAll('.conv-theme-card');
+    const last = cards[cards.length - 2]; // last before add row
+    if (last) { last.classList.add('open'); last.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+  });
+}
+
+function deleteTheme(key) {
+  const theme = _convs.themes[key];
+  const tickerCount = [
+    ...(theme?.approved || []), ...(theme?.preferred || []),
+    ...(theme?.hold_only || []), ...(theme?.do_not_add || []),
+  ].length;
+  const msg = tickerCount > 0
+    ? `Delete theme "${key}"?\n\nThis will remove ${tickerCount} ticker(s) from their theme. They'll appear in the Other lane until reassigned. Ticker intent settings are preserved.`
+    : `Delete theme "${key}"?`;
+  if (!confirm(msg)) return;
+  delete _convs.themes[key];
+  renderConvDrawer();
+  scheduleAutosave();
+}
+
+function initConvictionsDrawer() {
+  document.getElementById('convictions-btn').addEventListener('click', openConvictionsDrawer);
+  document.getElementById('conv-close').addEventListener('click', closeConvictionsDrawer);
+  document.getElementById('conv-backdrop').addEventListener('click', closeConvictionsDrawer);
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !document.getElementById('conv-drawer').classList.contains('hidden')) {
+      closeConvictionsDrawer();
+    }
+  });
+}
+
 // ── Main render ──────────────────────────────────────────────
 
 function showError(msg) {
@@ -878,12 +1358,19 @@ async function init() {
     showError(err.message);
     return;
   }
+  _sb = sb;
 
   // Check existing session (Supabase auto-restores from localStorage JWT)
   const { data: { session } } = await sb.auth.getSession();
   isAuthenticated = !!session;
   updateLockBtn(isAuthenticated);
   initLockButton(sb);
+  initConvictionsDrawer();
+
+  // Show convictions button only when authenticated
+  if (isAuthenticated) {
+    document.getElementById('convictions-btn').classList.remove('hidden');
+  }
 
   try {
     let raw, decisions = [], runDate, paperTrades = [], signalHistory = {};
@@ -1051,6 +1538,17 @@ async function init() {
     // ── Paper portfolio (auth-gated) ──
     const paperTradesByTicker = Object.fromEntries(paperTrades.map(pt => [pt.ticker, pt]));
     if (isAuthenticated) renderPaperPortfolio(paperTrades, marketData);
+
+    // ── Fetch convictions → build dynamic theme map ──
+    const { data: convData } = await sb.from('convictions')
+      .select('content').order('id', { ascending: false }).limit(1).single();
+    if (convData?.content) THEME_MAP = buildThemeMapFromConvictions(convData.content);
+
+    // Cache for re-renders triggered by conviction saves
+    _lastMarketData        = marketData;
+    _lastSignalsByTicker   = signalsByTicker;
+    _lastDecisionsByTicker = decisionsByTicker;
+    _lastPaperByTicker     = paperTradesByTicker;
 
     // ── Swim lanes ──
     renderLanes(marketData, signalsByTicker, decisionsByTicker, paperTradesByTicker);

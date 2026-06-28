@@ -405,11 +405,12 @@ header, main, #modal-overlay { position: relative; z-index: 1; }
 
 .lane-count { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
 
-.lane[data-theme="space"]     { border-left: 3px solid rgba(57,211,83,0.6); }
-.lane[data-theme="core_tech"] { border-left: 3px solid rgba(0,212,255,0.5); }
-.lane[data-theme="ev"]        { border-left: 3px solid rgba(0,136,204,0.5); }
-.lane[data-theme="cannabis"]  { border-left: 3px solid rgba(90,122,148,0.35); }
-.lane[data-theme="other"]     { border-left: 3px solid rgba(56,78,98,0.5); }
+.lane[data-theme="space"]         { border-left: 3px solid rgba(57,211,83,0.6); }
+.lane[data-theme="core_tech"]     { border-left: 3px solid rgba(0,212,255,0.5); }
+.lane[data-theme="ev"],
+.lane[data-theme="ev_transition"] { border-left: 3px solid rgba(0,136,204,0.5); }
+.lane[data-theme="cannabis"]      { border-left: 3px solid rgba(90,122,148,0.35); }
+.lane[data-theme="other"]         { border-left: 3px solid rgba(56,78,98,0.5); }
 
 .cards-grid { display: flex; flex-wrap: wrap; gap: 12px; }
 
@@ -974,6 +975,389 @@ header, main, #modal-overlay { position: relative; z-index: 1; }
 .sh-sell  { color: var(--accent-red); }
 .sh-blocked { color: var(--accent-red); }
 .sh-hold    { color: var(--text-dim); }
+
+/* ============================================================
+   CONVICTIONS BUTTON (header)
+   ============================================================ */
+
+.convictions-btn {
+  background: none; border: 1px solid var(--border);
+  border-radius: 100px; padding: 5px 12px;
+  color: var(--text-muted); cursor: pointer;
+  font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: 1px; display: flex; align-items: center; gap: 6px;
+  transition: border-color 0.2s, color 0.2s, background 0.2s;
+}
+.convictions-btn:hover {
+  border-color: rgba(251,191,36,0.5); color: var(--accent-yellow);
+  background: rgba(251,191,36,0.05);
+}
+.convictions-btn-icon { font-size: 12px; }
+
+/* ============================================================
+   CONVICTIONS DRAWER
+   ============================================================ */
+
+#conv-backdrop {
+  position: fixed; inset: 0; z-index: 150;
+  background: rgba(5,10,20,0.72);
+  backdrop-filter: blur(3px);
+  animation: fade-in 0.2s ease;
+}
+
+#conv-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0;
+  width: 520px; max-width: 100vw;
+  z-index: 151;
+  background: var(--bg-modal);
+  border-left: 1px solid var(--border-bright);
+  display: flex; flex-direction: column;
+  box-shadow: -24px 0 80px rgba(0,0,0,0.6);
+  animation: drawer-in 0.28s cubic-bezier(0.22,1,0.36,1);
+  overflow: hidden;
+}
+
+@keyframes drawer-in {
+  from { transform: translateX(100%); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+#conv-drawer.hidden { display: none; }
+#conv-backdrop.hidden { display: none; }
+
+/* Drawer header */
+.conv-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 18px 22px 16px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(5,10,20,0.6);
+  backdrop-filter: blur(8px);
+  flex-shrink: 0;
+}
+
+.conv-title {
+  font-family: var(--font-mono); font-size: 11px;
+  font-weight: 700; letter-spacing: 3px; text-transform: uppercase;
+  color: var(--accent-yellow);
+}
+
+.conv-save-status {
+  font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: 1px; color: var(--text-dim);
+  flex: 1; text-align: right; padding-right: 4px;
+  transition: color 0.3s;
+}
+.conv-save-status.saving { color: var(--accent-yellow); }
+.conv-save-status.saved  { color: var(--accent-green); }
+.conv-save-status.error  { color: var(--accent-red); }
+
+.conv-close {
+  background: none; border: 1px solid var(--border);
+  border-radius: 50%; width: 28px; height: 28px;
+  color: var(--text-muted); cursor: pointer; font-size: 13px;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  flex-shrink: 0;
+}
+.conv-close:hover { background: var(--bg-card-hover); color: var(--text-primary); border-color: var(--border-bright); }
+
+/* Drawer body */
+.conv-body {
+  flex: 1; overflow-y: auto; padding: 20px 22px 40px;
+  display: flex; flex-direction: column; gap: 28px;
+}
+
+.conv-loading {
+  font-family: var(--font-mono); font-size: 12px;
+  color: var(--text-dim); letter-spacing: 1px;
+  padding: 40px 0; text-align: center;
+}
+
+/* Section header */
+.conv-section-label {
+  font-family: var(--font-mono); font-size: 9px;
+  letter-spacing: 3px; text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+  display: flex; align-items: center; gap: 8px;
+}
+.conv-section-label::after {
+  content: ''; flex: 1; height: 1px;
+  background: var(--border);
+}
+
+/* ── Theme cards ── */
+.conv-theme-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.conv-theme-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: background 0.15s;
+  user-select: none;
+}
+.conv-theme-header:hover { background: rgba(0,212,255,0.03); }
+
+.conv-theme-name {
+  font-family: var(--font-mono); font-size: 11px; font-weight: 700;
+  letter-spacing: 2px; text-transform: uppercase; color: var(--text-primary);
+  flex: 1;
+}
+
+.conv-theme-ticker-count {
+  font-family: var(--font-mono); font-size: 10px; color: var(--text-dim);
+}
+
+.conv-theme-chevron {
+  font-size: 10px; color: var(--text-dim);
+  transition: transform 0.22s; display: inline-block;
+}
+.conv-theme-card.open .conv-theme-chevron { transform: rotate(90deg); }
+
+.conv-theme-delete {
+  background: none; border: none; padding: 2px 6px; margin-left: 4px;
+  color: var(--text-dim); cursor: pointer; font-size: 11px; border-radius: 4px;
+  opacity: 0; transition: opacity 0.15s, color 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+.conv-theme-header:hover .conv-theme-delete { opacity: 1; }
+.conv-theme-delete:hover { color: var(--accent-red); background: rgba(248,113,113,0.1); }
+
+.conv-add-theme-row {
+  display: flex; gap: 8px; align-items: center;
+  margin-top: 10px;
+}
+.conv-add-theme-input {
+  flex: 1; background: var(--bg-deep);
+  border: 1px dashed var(--border); border-radius: var(--radius-sm);
+  color: var(--text-secondary); font-family: var(--font-mono); font-size: 11px;
+  letter-spacing: 0.5px; padding: 7px 10px; outline: none;
+  transition: border-color 0.2s;
+}
+.conv-add-theme-input:focus { border-color: rgba(251,191,36,0.4); }
+.conv-add-theme-input::placeholder { color: var(--text-dim); }
+.conv-add-theme-btn {
+  background: none; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 7px 12px;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 1px;
+  color: var(--text-muted); cursor: pointer; white-space: nowrap;
+  transition: border-color 0.2s, color 0.2s;
+}
+.conv-add-theme-btn:hover { border-color: rgba(251,191,36,0.4); color: var(--accent-yellow); }
+
+.conv-theme-body {
+  display: none; padding: 0 16px 16px;
+  border-top: 1px solid var(--border);
+}
+.conv-theme-card.open .conv-theme-body { display: block; }
+
+/* Thesis field */
+.conv-field { margin-top: 14px; }
+.conv-field-label {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 2px;
+  color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px;
+}
+.conv-textarea {
+  width: 100%; background: var(--bg-deep);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text-primary); font-family: var(--font-sans); font-size: 12px;
+  line-height: 1.6; padding: 10px 12px;
+  resize: vertical; min-height: 72px; outline: none;
+  transition: border-color 0.2s;
+}
+.conv-textarea:focus { border-color: rgba(251,191,36,0.5); }
+
+/* Conviction segmented control */
+.conv-conviction-row { margin-top: 14px; }
+.conv-segmented {
+  display: flex; gap: 0; margin-top: 6px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  overflow: hidden; width: 100%;
+}
+.conv-seg-btn {
+  flex: 1; padding: 7px 4px;
+  background: none; border: none; border-right: 1px solid var(--border);
+  color: var(--text-muted); cursor: pointer; font-family: var(--font-mono);
+  font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase;
+  transition: background 0.15s, color 0.15s;
+}
+.conv-seg-btn:last-child { border-right: none; }
+.conv-seg-btn:hover:not(.active) { background: rgba(0,212,255,0.04); color: var(--text-secondary); }
+.conv-seg-btn.active {
+  background: rgba(251,191,36,0.14); color: var(--accent-yellow);
+  font-weight: 700;
+}
+.conv-seg-btn.active[data-val="very_high"] { background: rgba(57,211,83,0.14); color: var(--accent-green); }
+.conv-seg-btn.active[data-val="high"]      { background: rgba(0,212,255,0.1);   color: var(--accent-cyan); }
+.conv-seg-btn.active[data-val="medium"]    { background: rgba(251,191,36,0.12); color: var(--accent-yellow); }
+.conv-seg-btn.active[data-val="low"]       { background: rgba(90,122,148,0.12); color: var(--text-secondary); }
+
+/* Ticker chip lists */
+.conv-ticker-list-section { margin-top: 14px; }
+.conv-ticker-list-label {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 1.5px;
+  color: var(--text-muted); text-transform: uppercase; margin-bottom: 7px;
+}
+.conv-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
+.conv-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 9px 4px 10px;
+  border-radius: 100px; font-family: var(--font-mono);
+  font-size: 11px; font-weight: 600; letter-spacing: 0.5px;
+  cursor: default;
+  border: 1px solid;
+}
+.conv-chip.approved  { background: rgba(57,211,83,0.08);  color: var(--accent-green);  border-color: rgba(57,211,83,0.25); }
+.conv-chip.hold-only { background: rgba(251,191,36,0.08); color: var(--accent-yellow); border-color: rgba(251,191,36,0.25); }
+.conv-chip.do-not-add{ background: rgba(248,113,113,0.08); color: var(--accent-red);   border-color: rgba(248,113,113,0.25); }
+
+.conv-chip-remove {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: inherit; opacity: 0.5; font-size: 11px; line-height: 1;
+  transition: opacity 0.15s;
+}
+.conv-chip-remove:hover { opacity: 1; }
+
+.conv-add-chip {
+  display: inline-flex; align-items: center; gap: 0;
+}
+.conv-add-input {
+  width: 62px; background: var(--bg-deep);
+  border: 1px dashed var(--border); border-radius: 100px;
+  color: var(--text-primary); font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: 1px; text-transform: uppercase;
+  padding: 4px 10px; outline: none; text-align: center;
+  transition: border-color 0.2s, width 0.2s;
+}
+.conv-add-input:focus { border-color: rgba(0,212,255,0.4); width: 80px; }
+.conv-add-input::placeholder { color: var(--text-dim); font-size: 9px; letter-spacing: 0.5px; }
+
+/* ── Intent rows (ticker metadata) ── */
+.conv-intent-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: var(--radius-sm);
+  transition: background 0.1s;
+}
+.conv-intent-row:hover { background: rgba(0,212,255,0.03); }
+
+.conv-intent-ticker {
+  font-family: var(--font-mono); font-size: 12px; font-weight: 700;
+  letter-spacing: 1px; color: var(--text-primary);
+  min-width: 56px;
+}
+
+.conv-intent-cards {
+  display: flex; gap: 4px; flex: 1;
+}
+
+.conv-intent-card {
+  flex: 1; padding: 6px 4px;
+  background: none; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); cursor: pointer;
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.5px;
+  color: var(--text-dim); text-align: center; line-height: 1.3;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.conv-intent-card:hover { border-color: var(--border-bright); color: var(--text-secondary); }
+
+.conv-intent-card.active[data-intent="thesis_hold"] {
+  background: rgba(0,212,255,0.1); border-color: rgba(0,212,255,0.5);
+  color: var(--accent-cyan); font-weight: 700;
+}
+.conv-intent-card.active[data-intent="opportunistic"] {
+  background: rgba(251,191,36,0.12); border-color: rgba(251,191,36,0.5);
+  color: var(--accent-yellow); font-weight: 700;
+}
+.conv-intent-card.active[data-intent="written_off"] {
+  background: rgba(248,113,113,0.08); border-color: rgba(248,113,113,0.35);
+  color: var(--accent-red); font-weight: 700;
+}
+
+.conv-catalyst-input {
+  background: var(--bg-deep); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text-secondary);
+  font-family: var(--font-sans); font-size: 11px;
+  padding: 4px 8px; width: 100%; outline: none;
+  transition: border-color 0.2s; margin-top: 4px;
+}
+.conv-catalyst-input:focus { border-color: rgba(251,191,36,0.4); }
+.conv-catalyst-input::placeholder { color: var(--text-dim); font-size: 11px; }
+
+.conv-intent-block {
+  display: flex; flex-direction: column; gap: 2px;
+  flex: 1;
+}
+
+/* ── Individual holdings ── */
+.conv-holding-item {
+  padding: 10px 12px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.conv-holding-top {
+  display: flex; align-items: center; gap: 8px;
+}
+.conv-holding-ticker {
+  font-family: var(--font-mono); font-size: 13px; font-weight: 700;
+  letter-spacing: 1px; color: var(--text-primary); min-width: 52px;
+}
+.conv-holding-status {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 1px;
+  padding: 2px 8px; border-radius: 100px;
+  background: rgba(90,122,148,0.12); color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+.conv-holding-notes {
+  font-size: 11px; color: var(--text-muted); font-style: italic;
+  line-height: 1.5; padding-left: 2px;
+  white-space: normal;
+}
+
+.conv-holding-action {
+  font-size: 11px; color: var(--text-dim);
+  line-height: 1.4; padding-left: 2px;
+}
+
+/* Thesis bullet list */
+.conv-thesis-list {
+  list-style: none; padding: 0; margin: 0;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.conv-thesis-list li {
+  font-size: 12px; color: var(--text-secondary); line-height: 1.55;
+  padding-left: 14px; position: relative;
+}
+.conv-thesis-list li::before {
+  content: '•'; position: absolute; left: 0;
+  color: var(--accent-yellow); font-size: 11px;
+}
+
+/* Edit toggle button */
+.conv-edit-toggle {
+  background: none; border: 1px solid var(--border);
+  border-radius: 4px; padding: 2px 8px;
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 1.5px;
+  color: var(--text-dim); cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.conv-edit-toggle:hover { border-color: rgba(251,191,36,0.4); color: var(--accent-yellow); }
+
+/* Schema note banner */
+.conv-schema-note {
+  background: rgba(251,191,36,0.06); border: 1px solid rgba(251,191,36,0.2);
+  border-radius: var(--radius-sm); padding: 10px 14px;
+  font-family: var(--font-mono); font-size: 10px; color: var(--text-muted);
+  letter-spacing: 0.5px; line-height: 1.6;
+}
+.conv-schema-note code {
+  color: var(--accent-cyan); font-size: 10px;
+}
 
 /* ============================================================
    SCROLLBAR

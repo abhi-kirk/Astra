@@ -54,6 +54,10 @@
     </div>
 
     <div class="header-right">
+      <button class="convictions-btn hidden" id="convictions-btn" title="Edit conviction settings">
+        <span class="convictions-btn-icon">✦</span>
+        <span>CONVICTIONS</span>
+      </button>
       <button class="lock-btn" id="lock-btn" title="Toggle private view">
         <span id="lock-icon">🔒</span>
         <span id="lock-label">PRIVATE</span>
@@ -64,6 +68,19 @@
       </div>
     </div>
   </header>
+
+  <!-- CONVICTIONS DRAWER -->
+  <div id="conv-backdrop" class="hidden"></div>
+  <div id="conv-drawer" class="hidden" role="dialog" aria-label="Convictions Editor">
+    <div class="conv-header">
+      <span class="conv-title">CONVICTIONS</span>
+      <span class="conv-save-status" id="conv-save-status"></span>
+      <button class="conv-close" id="conv-close" aria-label="Close">✕</button>
+    </div>
+    <div class="conv-body" id="conv-body">
+      <div class="conv-loading">Loading convictions…</div>
+    </div>
+  </div>
 
   <!-- MAIN -->
   <main id="app">
