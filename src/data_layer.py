@@ -5,11 +5,10 @@ Portfolio state comes from two sources:
   - Supabase portfolio_snapshots table (written by Claude after Robinhood MCP read)
   - data/portfolio_history.csv (local fallback for cost basis when no live snapshot)
 
-Convictions come from Supabase convictions table (fallback: local convictions.json).
+Convictions come from Supabase convictions table (single source of truth).
 Market/fundamental data comes from yfinance (free, EOD).
 """
 
-import json
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
@@ -22,26 +21,19 @@ from src.config import MARKET_DATA_PERIOD_DAYS, MARKET_DATA_WORKERS
 
 ROOT = Path(__file__).parent.parent
 HISTORY_CSV = ROOT / "data" / "portfolio_history.csv"
-CONVICTIONS_FALLBACK = ROOT / "convictions.json"
 
 
 # ---------------------------------------------------------------------------
-# Portfolio
+# Convictions
 # ---------------------------------------------------------------------------
 
 def load_convictions() -> dict:
-    """Load convictions from Supabase; fall back to local file if DB unavailable."""
-    try:
-        from src.memory import get_latest_convictions
-        remote = get_latest_convictions()
-        if remote:
-            return remote
-    except Exception:
-        pass
-    if CONVICTIONS_FALLBACK.exists():
-        with open(CONVICTIONS_FALLBACK) as f:
-            return json.load(f)
-    raise RuntimeError("No convictions available — Supabase unreachable and no local fallback")
+    """Load convictions from Supabase (single source of truth)."""
+    from src.memory import get_latest_convictions
+    convictions = get_latest_convictions()
+    if not convictions:
+        raise RuntimeError("No convictions found in Supabase — run seed.py or update via Claude Code")
+    return convictions
 
 
 def get_cost_basis_from_db() -> dict[str, dict]:

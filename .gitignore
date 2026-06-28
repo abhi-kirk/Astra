@@ -7,7 +7,6 @@ __pycache__/
 # Local only — never commit
 .env
 CLAUDE.md
-convictions.json
 
 # Personal financial data — lives in Supabase only
 data/
