@@ -49,61 +49,68 @@ def is_excluded(ticker: str, convictions: dict) -> str | None:
 def get_ticker_guidance(ticker: str, convictions: dict) -> dict:
     """
     Return the most specific guidance for a ticker — individual holding overrides theme.
-    Returns dict with keys: status, notes, theme, do_not_add, hold_only
+    Returns dict with keys: status, notes, theme, do_not_add, hold_only, intent, original_catalyst
     """
+    meta = convictions.get("ticker_metadata", {}).get(ticker, {})
+    intent = meta.get("intent", "opportunistic")  # default: apply profit-take logic
+    original_catalyst = meta.get("original_catalyst")
+
+    def _with_meta(base: dict) -> dict:
+        return {**base, "intent": intent, "original_catalyst": original_catalyst}
+
     # Check individual holdings first
     individual = convictions.get("individual_holdings", {}).get(ticker)
     if individual:
-        return {
+        return _with_meta({
             "status": individual.get("status", "hold"),
             "notes": individual.get("thesis", ""),
             "action_note": individual.get("action", ""),
             "theme": None,
             "do_not_add": individual.get("status") == "do_not_add",
             "hold_only": individual.get("status") == "hold",
-        }
+        })
 
     # Check themes
     for theme_name, theme in convictions.get("themes", {}).items():
         if ticker in theme.get("approved", []):
-            return {
+            return _with_meta({
                 "status": "approved",
                 "notes": theme.get("notes", {}).get(ticker, ""),
                 "action_note": "",
                 "theme": theme_name,
                 "do_not_add": False,
                 "hold_only": False,
-            }
+            })
         if ticker in theme.get("preferred", []):
-            return {
+            return _with_meta({
                 "status": "preferred",
                 "notes": theme.get("notes", {}).get(ticker, ""),
                 "action_note": "",
                 "theme": theme_name,
                 "do_not_add": False,
                 "hold_only": False,
-            }
+            })
         if ticker in theme.get("hold_only", []):
-            return {
+            return _with_meta({
                 "status": "hold_only",
                 "notes": theme.get("notes", {}).get(ticker, ""),
                 "action_note": "",
                 "theme": theme_name,
                 "do_not_add": True,
                 "hold_only": True,
-            }
+            })
         if ticker in theme.get("do_not_add", []):
-            return {
+            return _with_meta({
                 "status": "do_not_add",
                 "notes": theme.get("notes", {}).get(ticker, ""),
                 "action_note": "",
                 "theme": theme_name,
                 "do_not_add": True,
                 "hold_only": False,
-            }
+            })
 
-    return {"status": "unknown", "notes": "", "action_note": "", "theme": None,
-            "do_not_add": False, "hold_only": False}
+    return _with_meta({"status": "unknown", "notes": "", "action_note": "", "theme": None,
+                        "do_not_add": False, "hold_only": False})
 
 
 # ---------------------------------------------------------------------------
@@ -266,21 +273,36 @@ def technical_signal(market_data: dict) -> tuple[bool, list[str]]:
 # Profit-take check
 # ---------------------------------------------------------------------------
 
-def check_profit_take(ticker: str, position: dict, market_data: dict) -> Signal | None:
-    """Returns a sell signal if position is up more than RULE_PROFIT_TAKE_PCT."""
+def check_profit_take(ticker: str, position: dict, market_data: dict, guidance: dict) -> Signal | None:
+    """
+    Returns a sell signal based on intent:
+    - thesis_hold: exempt — sell only on thesis invalidation, not price appreciation
+    - opportunistic: fire at RULE_PROFIT_TAKE_PCT with original catalyst context
+    - written_off: no profit-take signal (already blocked from buying; opportunity cost
+      nudge is handled via intent field passed to the advisor note prompt)
+    """
+    intent = guidance.get("intent", "opportunistic")
+    if intent in ("thesis_hold", "written_off"):
+        return None
+
     avg_cost = position.get("avg_cost", 0)
     current_price = market_data.get("current_price", 0)
     if not avg_cost or not current_price:
         return None
+
     gain_pct = (current_price - avg_cost) / avg_cost * 100
     if gain_pct >= RULE_PROFIT_TAKE_PCT * 100:
+        reasons = [f"Up {gain_pct:.0f}% from avg cost (${avg_cost:.2f} → ${current_price:.2f})"]
+        risk_flags = ["Profit-take trigger: consider trimming or selling position"]
+        catalyst = guidance.get("original_catalyst")
+        if intent == "opportunistic" and catalyst:
+            risk_flags.append(f"Original catalyst: {catalyst}")
         return make_signal(
             ticker=ticker, action="sell",
             conviction_match=True, quality_pass=True, technical_pass=True,
-            hard_rule_block=None,
-            reasons=[f"Up {gain_pct:.0f}% from avg cost (${avg_cost:.2f} → ${current_price:.2f})"],
-            risk_flags=["Profit-take trigger: consider trimming or selling position"],
+            hard_rule_block=None, reasons=reasons, risk_flags=risk_flags,
             suggested_position_pct=None,
+            intent=intent, original_catalyst=catalyst,
         )
     return None
 
@@ -297,20 +319,27 @@ def screen_position(
     portfolio_summary: dict,
 ) -> Signal:
     """Run all checks for a single position. Returns a Signal dict."""
+    guidance = get_ticker_guidance(ticker, convictions)
+    intent = guidance.get("intent", "opportunistic")
+    original_catalyst = guidance.get("original_catalyst")
+
     block = check_hard_rules(ticker, position, market_data, convictions, portfolio_summary)
     if block:
+        risk_flags = []
+        if intent == "written_off":
+            risk_flags.append("Written-off position — consider redeploying capital into higher-conviction names")
         return make_signal(
             ticker=ticker, action="blocked",
             conviction_match=False, quality_pass=False, technical_pass=False,
-            hard_rule_block=block, reasons=[block], risk_flags=[],
+            hard_rule_block=block, reasons=[block], risk_flags=risk_flags,
             suggested_position_pct=None,
+            intent=intent, original_catalyst=original_catalyst,
         )
 
-    profit_signal = check_profit_take(ticker, position, market_data)
+    profit_signal = check_profit_take(ticker, position, market_data, guidance)
     if profit_signal:
         return profit_signal
 
-    guidance = get_ticker_guidance(ticker, convictions)
     conviction_match = guidance["status"] in ("approved", "preferred", "hold")
 
     if guidance["hold_only"]:
@@ -320,6 +349,7 @@ def screen_position(
             hard_rule_block=None,
             reasons=[f"Hold-only: {guidance['notes'][:120]}"],
             risk_flags=[], suggested_position_pct=None,
+            intent=intent, original_catalyst=original_catalyst,
         )
 
     quality_pass, quality_reasons, risk_flags = quality_filter(ticker, market_data)
@@ -341,6 +371,7 @@ def screen_position(
         conviction_match=conviction_match, quality_pass=quality_pass, technical_pass=tech_pass,
         hard_rule_block=None, reasons=all_reasons, risk_flags=risk_flags,
         suggested_position_pct=size,
+        intent=intent, original_catalyst=original_catalyst,
     )
 
 

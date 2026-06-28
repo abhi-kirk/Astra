@@ -24,6 +24,15 @@ def convictions():
                 "notes": {},
             },
         },
+        "ticker_metadata": {
+            "RKLB": {"intent": "thesis_hold",   "original_catalyst": None},
+            "ASTS": {"intent": "thesis_hold",   "original_catalyst": None},
+            "NVDA": {"intent": "thesis_hold",   "original_catalyst": None},
+            "GOOGL":{"intent": "thesis_hold",   "original_catalyst": None},
+            "NIO":  {"intent": "written_off",   "original_catalyst": None},
+            "SPCE": {"intent": "written_off",   "original_catalyst": None},
+            "DAL":  {"intent": "opportunistic", "original_catalyst": "COVID airline recovery"},
+        },
     }
 
 

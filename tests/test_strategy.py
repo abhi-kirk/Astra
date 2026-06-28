@@ -197,23 +197,37 @@ class TestTechnicalSignal:
 # ---------------------------------------------------------------------------
 
 class TestCheckProfitTake:
-    def test_triggers_at_65_pct_gain(self):
-        position = {"avg_cost": 50.0}
-        market_data = {"current_price": 82.5}  # +65%
-        sig = check_profit_take("RKLB", position, market_data)
+    _opportunistic = {"intent": "opportunistic", "original_catalyst": "COVID recovery"}
+    _thesis_hold   = {"intent": "thesis_hold",   "original_catalyst": None}
+    _written_off   = {"intent": "written_off",   "original_catalyst": None}
+
+    def test_triggers_at_65_pct_opportunistic(self):
+        sig = check_profit_take("DAL", {"avg_cost": 50.0}, {"current_price": 82.5}, self._opportunistic)
         assert sig is not None
         assert sig["action"] == "sell"
 
+    def test_catalyst_included_in_risk_flags(self):
+        sig = check_profit_take("DAL", {"avg_cost": 50.0}, {"current_price": 82.5}, self._opportunistic)
+        assert any("COVID recovery" in f for f in sig["risk_flags"])
+
+    def test_thesis_hold_exempt(self):
+        # RKLB up 65% — should NOT generate sell signal
+        sig = check_profit_take("RKLB", {"avg_cost": 50.0}, {"current_price": 82.5}, self._thesis_hold)
+        assert sig is None
+
+    def test_written_off_no_profit_take(self):
+        sig = check_profit_take("NIO", {"avg_cost": 50.0}, {"current_price": 82.5}, self._written_off)
+        assert sig is None
+
     def test_no_trigger_at_55_pct(self):
-        position = {"avg_cost": 50.0}
-        market_data = {"current_price": 77.5}  # +55%
-        assert check_profit_take("RKLB", position, market_data) is None
+        sig = check_profit_take("DAL", {"avg_cost": 50.0}, {"current_price": 77.5}, self._opportunistic)
+        assert sig is None
 
     def test_no_trigger_missing_avg_cost(self):
-        assert check_profit_take("RKLB", {"avg_cost": 0}, {"current_price": 100.0}) is None
+        assert check_profit_take("DAL", {"avg_cost": 0}, {"current_price": 100.0}, self._opportunistic) is None
 
     def test_no_trigger_missing_price(self):
-        assert check_profit_take("RKLB", {"avg_cost": 50.0}, {"current_price": 0}) is None
+        assert check_profit_take("DAL", {"avg_cost": 50.0}, {"current_price": 0}, self._opportunistic) is None
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +272,8 @@ class TestScreenPosition:
             "debt_to_equity": 40.0, "free_cashflow": 500_000_000,
             "pct_below_52w_high": 20.0, "rsi_14": 35.0, "price_vs_ma50_pct": -12.0,
         }
-        sig = screen_position("RKLB", position, market_data, convictions, portfolio_summary)
+        # DAL is opportunistic — profit-take fires even when technicals look like a buy
+        sig = screen_position("DAL", position, market_data, convictions, portfolio_summary)
         assert sig["action"] == "sell"
 
 

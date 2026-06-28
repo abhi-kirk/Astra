@@ -57,10 +57,13 @@ def call_claude_reasoning(
         avg = pos.get("avg_cost", 0)
         gain = ((price - avg) / avg * 100) if avg else 0
         reasons = "; ".join(sig["reasons"][:3])
+        intent = sig.get("intent", "opportunistic")
+        catalyst = sig.get("original_catalyst")
+        intent_note = f"\n    Intent: {intent}" + (f" — original catalyst: {catalyst}" if catalyst else "")
         return (
-            f"  {sig["ticker"]}: price=${price:.2f}, avg_cost=${avg:.2f}, "
+            f"  {sig['ticker']}: price=${price:.2f}, avg_cost=${avg:.2f}, "
             f"unrealized={gain:+.0f}%, shares={pos.get('shares', 0):.1f}\n"
-            f"    Reasons: {reasons}"
+            f"    Reasons: {reasons}{intent_note}"
         )
 
     signal_text = ""
