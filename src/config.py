@@ -18,13 +18,17 @@ SUPABASE_SERVICE_KEY = _cfg("SUPABASE_SERVICE_KEY", default="")
 SUPABASE_ANON_KEY    = _cfg("SUPABASE_ANON_KEY",    default="")
 
 # ── Anthropic / MCP ───────────────────────────────────────────
-ANTHROPIC_API_KEY = _cfg("ANTHROPIC_API_KEY", default="")
-TAVILY_MCP_URL    = _cfg("TAVILY_MCP_URL",    default="")
+ANTHROPIC_API_KEY        = _cfg("ANTHROPIC_API_KEY",        default="")
+TAVILY_MCP_URL           = _cfg("TAVILY_MCP_URL",           default="")
+ALPHA_VANTAGE_API_KEY    = _cfg("ALPHA_VANTAGE_API_KEY",    default="")
 
 # ── AI reasoning ──────────────────────────────────────────────
 REASONING_MODEL      = _cfg("REASONING_MODEL",      default="claude-sonnet-4-6")
 REASONING_MAX_TOKENS = _cfg("REASONING_MAX_TOKENS", cast=int, default=3000)
 TAVILY_MAX_SEARCHES  = _cfg("TAVILY_MAX_SEARCHES",  cast=int, default=5)
+# Alpha Vantage free tier: 25 calls/day, 5 calls/min
+# Claude will use tools selectively — cap to avoid blowing the daily limit in one run
+ALPHA_VANTAGE_MAX_CALLS  = _cfg("ALPHA_VANTAGE_MAX_CALLS",  cast=int, default=8)
 
 # ── Paper trading ─────────────────────────────────────────────
 PAPER_PORTFOLIO_SIZE       = _cfg("PAPER_PORTFOLIO_SIZE",       cast=float, default=10_000.0)

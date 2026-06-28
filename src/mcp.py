@@ -27,7 +27,7 @@ from anthropic.types.beta import (
     BetaTextBlock,
 )
 
-from src.config import TAVILY_MAX_SEARCHES, TAVILY_MCP_URL
+from src.config import ALPHA_VANTAGE_API_KEY, ALPHA_VANTAGE_MAX_CALLS, TAVILY_MAX_SEARCHES, TAVILY_MCP_URL
 
 # Beta flags required for MCP client support
 BETA_FLAGS = ["mcp-client-2025-04-04"]
@@ -47,6 +47,19 @@ def _tavily() -> BetaRequestMCPServerURLDefinitionParam | None:
     return {"type": "url", "url": TAVILY_MCP_URL, "name": "tavily", "tool_configuration": tool_config}
 
 
+def _alpha_vantage() -> BetaRequestMCPServerURLDefinitionParam | None:
+    if not ALPHA_VANTAGE_API_KEY:
+        return None
+    # Free tier: 25 calls/day, 5 calls/min — prompt instructs Claude to stay within limits
+    # Auth: API key passed as URL query param (legacy method; OAuth requires interactive flow)
+    url = f"https://mcp.alphavantage.co/mcp?apikey={ALPHA_VANTAGE_API_KEY}"
+    tool_config: BetaRequestMCPServerToolConfigurationParam = {
+        "enabled": True,
+        "allowed_tools": ["NEWS_SENTIMENT", "EARNINGS_CALENDAR", "COMPANY_OVERVIEW"],
+    }
+    return {"type": "url", "url": url, "name": "alpha_vantage", "tool_configuration": tool_config}
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -55,9 +68,9 @@ def build_servers() -> list[BetaRequestMCPServerURLDefinitionParam]:
     """Return the list of active MCP server dicts for the current config."""
     candidates = [
         _tavily(),
-        # _alpha_vantage(),  # Phase 1.5 — add when key is configured
-        # _sec_edgar(),      # Phase 1.5 — no auth needed
-        # _fmp(),            # Phase 1.5 — add last
+        _alpha_vantage(),
+        # _sec_edgar(),  # Phase 1.5 — no auth needed
+        # _fmp(),        # Phase 1.5 — add last
     ]
     return [s for s in candidates if s is not None]
 
@@ -90,7 +103,12 @@ def extract_text(message: Any) -> str:
 
 def search_context(max_searches: int = TAVILY_MAX_SEARCHES) -> dict[str, Any]:
     """Template vars for the news instruction block in advisor_note.mustache."""
+    servers = build_servers()
+    names = {s["name"] for s in servers}
     return {
-        "has_search": bool(build_servers()),
-        "max_searches": max_searches,
+        "has_search":        bool(servers),
+        "has_tavily":        "tavily" in names,
+        "has_alpha_vantage": "alpha_vantage" in names,
+        "max_searches":      max_searches,
+        "max_av_calls":      ALPHA_VANTAGE_MAX_CALLS,
     }

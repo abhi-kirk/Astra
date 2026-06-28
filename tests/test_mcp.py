@@ -85,6 +85,7 @@ class TestSearchContext:
 
     def test_no_search_when_url_empty(self, monkeypatch):
         monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
+        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
         ctx = search_context()
         assert ctx["has_search"] is False
 
