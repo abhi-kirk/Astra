@@ -21,7 +21,11 @@ import re
 from typing import Any
 
 from anthropic.types import TextBlock
-from anthropic.types.beta import BetaTextBlock
+from anthropic.types.beta import (
+    BetaRequestMCPServerToolConfigurationParam,
+    BetaRequestMCPServerURLDefinitionParam,
+    BetaTextBlock,
+)
 
 from src.config import TAVILY_MAX_SEARCHES, TAVILY_MCP_URL
 
@@ -33,25 +37,21 @@ BETA_FLAGS = ["mcp-client-2025-04-04"]
 # Server definitions — one function per integration
 # ---------------------------------------------------------------------------
 
-def _tavily() -> dict[str, Any] | None:
+def _tavily() -> BetaRequestMCPServerURLDefinitionParam | None:
     if not TAVILY_MCP_URL:
         return None
-    return {
-        "type": "url",
-        "url": TAVILY_MCP_URL,
-        "name": "tavily",
-        "tool_configuration": {
-            "enabled": True,
-            "allowed_tools": ["tavily-search"],
-        },
+    tool_config: BetaRequestMCPServerToolConfigurationParam = {
+        "enabled": True,
+        "allowed_tools": ["tavily-search"],
     }
+    return {"type": "url", "url": TAVILY_MCP_URL, "name": "tavily", "tool_configuration": tool_config}
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def build_servers() -> list[dict[str, Any]]:
+def build_servers() -> list[BetaRequestMCPServerURLDefinitionParam]:
     """Return the list of active MCP server dicts for the current config."""
     candidates = [
         _tavily(),
