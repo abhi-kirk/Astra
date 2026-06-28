@@ -306,8 +306,15 @@ async function fetchRecentDecisionHistory(sb) {
     .gte('run_date', since.toISOString())
     .order('run_date', { ascending: false })
     .limit(300);
+  // Deduplicate: keep only the most recent entry per ticker per local calendar day
+  // (UTC slice won't work — runs near midnight PT land on different UTC dates)
   const byTicker = {};
+  const seen = new Set();
   (data || []).forEach(d => {
+    const localDay = new Date(d.run_date).toLocaleDateString('en-CA'); // YYYY-MM-DD local tz
+    const key = `${d.ticker}:${localDay}`;
+    if (seen.has(key)) return;
+    seen.add(key);
     if (!byTicker[d.ticker]) byTicker[d.ticker] = [];
     byTicker[d.ticker].push(d);
   });
@@ -964,17 +971,10 @@ async function init() {
     const ageH = (Date.now() - runDateObj.getTime()) / 3600000;
     const isFresh = ageH < 28;
     const lastRunEl = document.getElementById('last-run-date');
-    lastRunEl.textContent = dataAgeText(runDateObj);
     lastRunEl.title = runDateObj.toLocaleString();
 
-    // Freshness badge — append to status item
-    const lastRunItem = lastRunEl.closest('.status-item');
-    if (lastRunItem && !lastRunItem.querySelector('.freshness-badge')) {
-      const badge = document.createElement('span');
-      badge.className = `freshness-badge ${isFresh ? 'fresh' : 'stale'}`;
-      badge.textContent = isFresh ? '● FRESH' : '● STALE';
-      lastRunItem.appendChild(badge);
-    }
+    // Freshness badge — inline with the value
+    lastRunEl.innerHTML = `${dataAgeText(runDateObj)} <span class="freshness-badge ${isFresh ? 'fresh' : 'stale'}">${isFresh ? '● FRESH' : '● STALE'}</span>`;
 
     document.getElementById('next-run-date').textContent = nextWeekdayRun();
     document.getElementById('positions-count').textContent =
@@ -1030,38 +1030,26 @@ async function init() {
     const noteText = raw.advisor_note ?? '';
     const allTickers = Object.keys(marketData);
 
-    if (!isAuthenticated) {
-      noteEl.innerHTML = `<div class="advisor-locked">
-        <div class="advisor-locked-icon">🔒</div>
-        <div>ASTRA's weekly analysis contains personal financial data.</div>
-        <button class="advisor-locked-btn" id="advisor-unlock-btn">SIGN IN TO VIEW</button>
-      </div>`;
-      document.getElementById('advisor-unlock-btn')?.addEventListener('click', showLoginModal);
-    } else if (noteText && window.marked) {
-      const rendered = linkifyText(DOMPurify.sanitize(marked.parse(noteText)), allTickers);
-      // Split after the first section (Priority Actions = second heading block).
-      // Claude uses ## headings — find index of each <h tag, split at the second one.
-      // Structure: h1 title → h2 PRIORITY ACTIONS → h2 RISK FLAGS → ...
-      // Always show title + Priority Actions; collapse everything from RISK FLAGS onward.
-      // That means split at the 3rd heading (index 2). Fall back to 2nd if only 2 exist.
+    function renderAdvisorNote(el, text, tickers, prefixHtml = '') {
+      const rendered = linkifyText(DOMPurify.sanitize(marked.parse(text)), tickers);
+      // Always show title + first section; collapse from 3rd heading onward
       const headingRe = /<h[1-6][\s>]/gi;
-      let hMatch, hPositions = [];
-      while ((hMatch = headingRe.exec(rendered)) !== null) hPositions.push(hMatch.index);
-      const splitIdx = hPositions.length >= 3 ? hPositions[2]
-                     : hPositions.length >= 2 ? hPositions[1]
+      let m, positions = [];
+      while ((m = headingRe.exec(rendered)) !== null) positions.push(m.index);
+      const splitIdx = positions.length >= 3 ? positions[2]
+                     : positions.length >= 2 ? positions[1]
                      : -1;
       if (splitIdx > -1) {
         const always      = rendered.slice(0, splitIdx);
         const collapsible = rendered.slice(splitIdx);
-        noteEl.innerHTML = `
+        el.innerHTML = `
+          ${prefixHtml}
           ${always}
           <button class="advisor-collapse-btn" id="advisor-toggle">
             <span>Show full analysis</span>
             <span class="advisor-collapse-arrow">▼</span>
           </button>
-          <div class="advisor-collapsible" id="advisor-collapsible">
-            ${collapsible}
-          </div>`;
+          <div class="advisor-collapsible" id="advisor-collapsible">${collapsible}</div>`;
         const btn  = document.getElementById('advisor-toggle');
         const body = document.getElementById('advisor-collapsible');
         btn.addEventListener('click', () => {
@@ -1070,15 +1058,36 @@ async function init() {
           btn.querySelector('span').textContent = open ? 'Hide full analysis' : 'Show full analysis';
         });
       } else {
-        noteEl.innerHTML = DOMPurify.sanitize(rendered);
+        el.innerHTML = prefixHtml + rendered;
       }
+    }
+
+    if (!isAuthenticated) {
+      noteEl.innerHTML = `<div class="advisor-locked">
+        <div class="advisor-locked-icon">🔒</div>
+        <div>ASTRA's weekly analysis contains personal financial data.</div>
+        <button class="advisor-locked-btn" id="advisor-unlock-btn">SIGN IN TO VIEW</button>
+      </div>`;
+      document.getElementById('advisor-unlock-btn')?.addEventListener('click', showLoginModal);
+    } else if (noteText && window.marked) {
+      renderAdvisorNote(noteEl, noteText, allTickers);
     } else if (noteText) {
       noteEl.textContent = noteText;
     } else if (isAuthenticated) {
-      noteEl.innerHTML = `<p class="advisor-no-note">
-        No advisor note for this run — the agent was run without the AI reasoning step.<br><br>
-        To generate one: <code>PYTHONPATH=. .venv/bin/python -m src.agent --mode simulation</code>
-      </p>`;
+      // No note for this run — surface the most recent run that has one
+      const { data: prevRuns } = await sb
+        .from('run_summaries')
+        .select('raw_output, run_date')
+        .order('id', { ascending: false })
+        .limit(10);
+      const prevWithNote = (prevRuns || []).find(r => r.raw_output?.advisor_note?.trim());
+      if (prevWithNote && window.marked) {
+        const prevDate  = new Date(prevWithNote.run_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        const prefix    = `<div class="advisor-prev-banner">Showing note from ${prevDate} — today's run was mechanical-only</div>`;
+        renderAdvisorNote(noteEl, prevWithNote.raw_output.advisor_note, allTickers, prefix);
+      } else {
+        noteEl.innerHTML = `<p class="advisor-no-note">No advisor note available yet.</p>`;
+      }
     }
 
     // Store signal history for modal access
