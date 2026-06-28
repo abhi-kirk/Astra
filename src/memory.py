@@ -10,6 +10,11 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
+from src.config import (
+    PAPER_PORTFOLIO_SIZE,
+    PAPER_MAX_POSITION_PCT,
+    PAPER_DEFAULT_POSITION_PCT,
+)
 from src.db import get_client
 
 
@@ -115,9 +120,6 @@ def save_portfolio_snapshot(positions: dict):
     }).execute()
 
 
-PAPER_PORTFOLIO_SIZE  = 10_000.0  # virtual portfolio baseline ($10K)
-PAPER_MAX_POSITION_PCT = 0.10     # hard cap: no single position > 10% of virtual portfolio
-
 def log_paper_trade(
     ticker: str,
     price: float,
@@ -144,7 +146,7 @@ def log_paper_trade(
     if existing.data:
         return  # already holding a virtual position — no pyramiding in paper mode
 
-    pct = suggested_pct if suggested_pct else 0.04
+    pct = suggested_pct if suggested_pct else PAPER_DEFAULT_POSITION_PCT
     raw_cost = pct * PAPER_PORTFOLIO_SIZE
     virtual_cost = min(raw_cost, PAPER_MAX_POSITION_PCT * PAPER_PORTFOLIO_SIZE)
     virtual_shares = round(virtual_cost / price, 6) if price else 0

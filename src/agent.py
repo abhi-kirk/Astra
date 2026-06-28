@@ -13,21 +13,25 @@ Usage:
 
 import argparse
 import json
-import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 import anthropic
-from dotenv import load_dotenv
+import chevron
 
-from src.data_layer import get_portfolio, get_market_data_bulk, load_convictions
-from src.strategy import screen_all_positions
 from src import memory
+from src.config import (
+    ANTHROPIC_API_KEY,
+    REASONING_MAX_TOKENS,
+    REASONING_MODEL,
+    TAVILY_MAX_SEARCHES,
+    TAVILY_MCP_URL,
+)
+from src.data_layer import get_market_data_bulk, get_portfolio, load_convictions
+from src.strategy import screen_all_positions
 
-load_dotenv(Path(__file__).parent.parent / ".env")
-
-REASONING_MODEL = "claude-sonnet-4-6"
+PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 
 def call_claude_reasoning(
@@ -42,11 +46,9 @@ def call_claude_reasoning(
     Uses Tavily MCP for live news search when available.
     Returns a markdown-formatted analysis string.
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not api_key:
+    if not ANTHROPIC_API_KEY:
         return "Claude API key not set — mechanical signals only."
 
-    # Build a compact signal summary to keep tokens low
     action_groups: dict[str, list] = {}
     for sig in signals:
         action_groups.setdefault(sig.action, []).append(sig)
@@ -60,7 +62,7 @@ def call_claude_reasoning(
         reasons = "; ".join(sig.reasons[:3])
         return (
             f"  {sig.ticker}: price=${price:.2f}, avg_cost=${avg:.2f}, "
-            f"unrealized={gain:+.0f}%, shares={pos.get('shares',0):.1f}\n"
+            f"unrealized={gain:+.0f}%, shares={pos.get('shares', 0):.1f}\n"
             f"    Reasons: {reasons}"
         )
 
@@ -75,74 +77,50 @@ def call_claude_reasoning(
     if blocked:
         signal_text += f"\nBLOCKED ({len(blocked)} positions): " + ", ".join(s.ticker for s in blocked)
 
-    # Theme conviction summary
     themes = {k: v.get("conviction") for k, v in convictions.get("themes", {}).items()}
 
-    tavily_mcp_url = os.environ.get("TAVILY_MCP_URL", "").strip()
     news_instruction = (
-        "You have access to a web search tool. Use it to look up recent news for the most "
-        "relevant tickers — prioritize BUY and WATCH signals, but also search any HOLD position "
-        "if it seems like something significant may have happened (earnings, big price move, "
-        "sector news). Limit yourself to a maximum of 5 searches total. Search for things like "
-        "'[TICKER] news' or '[TICKER] earnings'. Use what you find to make the note specific "
-        "and grounded — mention actual events if you find them. "
-        "If results are thin or unhelpful, skip and write from the mechanical signals."
-        if tavily_mcp_url else
+        f"You have access to a web search tool. Use it to look up recent news for the most "
+        f"relevant tickers — prioritize BUY and WATCH signals, but also search any HOLD position "
+        f"if it seems like something significant may have happened (earnings, big price move, "
+        f"sector news). Limit yourself to a maximum of {TAVILY_MAX_SEARCHES} searches total. "
+        f"Search for things like '[TICKER] news' or '[TICKER] earnings'. Use what you find to "
+        f"make the note specific and grounded — mention actual events if you find them. "
+        f"If results are thin or unhelpful, skip and write from the mechanical signals."
+        if TAVILY_MCP_URL else
         "No search tool available this run — write from the mechanical signals only."
     )
 
-    prompt = f"""You are ASTRA, a personal trading assistant for a non-finance-professional investor.
+    template = (PROMPTS_DIR / "advisor_note.mustache").read_text()
+    prompt = chevron.render(template, {
+        "themes_json":     json.dumps(themes),
+        "history_context": history_context,
+        "signal_text":     signal_text,
+        "news_instruction": news_instruction,
+        "date":            datetime.now().strftime("%B %-d, %Y"),
+    })
 
-INVESTOR PROFILE:
-- Software engineer at Tesla. Understands tech deeply, but does not have a finance background and does not trade daily.
-- Invests based on personal conviction in themes he follows (space, tech, EV) — not short-term trading signals.
-- Medium-term horizon: holds positions for weeks to months, sometimes longer if the thesis is strong.
-- TSLA excluded (employment equity + blackout restrictions).
-- Conviction themes: {json.dumps(themes)}
-- Key rule: no buying more of a stock that is already more than 35% below what he paid, if he has bought it more than 3 times already.
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-PRIOR DECISION HISTORY (for continuity):
-{history_context}
-
-TODAY'S MECHANICAL SIGNALS:
-{signal_text}
-
-NEWS RESEARCH INSTRUCTIONS:
-{news_instruction}
-
-Write a plain-English daily note (200-300 words) as if you're a knowledgeable friend explaining what's happening in his portfolio today. Avoid finance jargon — no terms like "D/E ratio", "RSI", "basis points", "technicals", "fundamentals", "unrealized P&L". Instead say things like "the stock is down 35% from what you paid" or "the company is growing revenue fast" or "this one has a lot of debt". Be conversational but specific — name actual tickers, prices, and real events where you found them. Structure the note as:
-
-1. PRIORITY ACTIONS: What he should actually consider doing today/this week, and the simple reason why.
-2. RISK FLAGS: Anything that looks concerning in plain terms.
-3. CONVICTION CHECK: Are the signals today in line with his long-term bets, or noise?
-4. ONE THING TO WATCH: One forward-looking thing to keep an eye on.
-
-Start your response IMMEDIATELY with the heading line — no preamble, no "I'll search...", no "Here's your note:". Begin with: ## 🛰️ ASTRA Daily Note — [date]
-
-No disclaimers. No "as always, consult a financial advisor." Just honest, clear, friend-level advice."""
-
-    client = anthropic.Anthropic(api_key=api_key)
-
-    tavily_mcp_url = os.environ.get("TAVILY_MCP_URL", "").strip()
-    if tavily_mcp_url:
+    if TAVILY_MCP_URL:
         message = client.beta.messages.create(
             model=REASONING_MODEL,
-            max_tokens=3000,
+            max_tokens=REASONING_MAX_TOKENS,
             mcp_servers=[{
                 "type": "url",
-                "url": tavily_mcp_url,
+                "url": TAVILY_MCP_URL,
                 "name": "tavily",
                 "tool_configuration": {"enabled": True, "allowed_tools": ["tavily-search"]},
             }],
             messages=[{"role": "user", "content": prompt}],
             betas=["mcp-client-2025-04-04"],
         )
-        # Extract text and strip inline MCP tool call/response XML
         text_blocks = [block.text for block in message.content if hasattr(block, "text")]
         raw_text = text_blocks[-1] if text_blocks else ""
+        # Strip inline MCP tool call/response XML blocks
         clean = re.sub(r"<tool_call>.*?</tool_call>", "", raw_text, flags=re.DOTALL)
         clean = re.sub(r"<tool_response>.*?</tool_response>", "", clean, flags=re.DOTALL)
-        # Drop any preamble before the first markdown heading (line-by-line, more reliable)
+        # Drop any preamble before the first markdown heading
         lines = clean.split("\n")
         first_heading = next((i for i, l in enumerate(lines) if re.match(r"^#{1,3} ", l)), None)
         if first_heading is not None:
@@ -151,7 +129,7 @@ No disclaimers. No "as always, consult a financial advisor." Just honest, clear,
     else:
         message = client.messages.create(
             model=REASONING_MODEL,
-            max_tokens=800,
+            max_tokens=REASONING_MAX_TOKENS,
             messages=[{"role": "user", "content": prompt}],
         )
         return message.content[0].text
@@ -159,9 +137,9 @@ No disclaimers. No "as always, consult a financial advisor." Just honest, clear,
 
 def build_public_output(output: dict) -> dict:
     """
-    Scrubbed version of the weekly output safe for public display.
+    Scrubbed version of the run output safe for public display.
     Strips: advisor note, avg_cost references in reasons, suggested position sizes,
-    portfolio % / dollar amounts from blocked reasons, history context.
+    portfolio %/dollar amounts from blocked reasons, history context.
     """
     public_signals = []
     for s in output.get("signals", []):
@@ -169,7 +147,6 @@ def build_public_output(output: dict) -> dict:
         reasons = s.get("reasons", [])
 
         if action == "review":
-            # Review reasons always embed avg_cost — replace with generic
             public_reasons = ["Position has appreciated significantly — profit-take review triggered."]
         elif action == "blocked":
             public_reasons = []
@@ -196,8 +173,6 @@ def build_public_output(output: dict) -> dict:
         "summary": output["summary"],
         "signals": public_signals,
         "market_data_snapshot": output.get("market_data_snapshot", {}),
-        # advisor_note excluded — references personal financial data
-        # history_context excluded — contains personal decision history
     }
 
 
@@ -208,17 +183,14 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
     print(f"Date: {run_date[:10]}")
     print(f"{'='*60}\n")
 
-    # 1. Load convictions
     convictions = load_convictions()
     excluded = {e["ticker"] for e in convictions.get("exclusions", [])}
 
-    # 2. Load full portfolio
     print("Loading portfolio...")
     portfolio = get_portfolio()
     portfolio = {t: v for t, v in portfolio.items() if t not in excluded}
     print(f"  {len(portfolio)} open positions (excluding {excluded})\n")
 
-    # 3. Fetch market data
     print("Fetching market data...")
     market_data = get_market_data_bulk(list(portfolio.keys()))
 
@@ -227,17 +199,14 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
     )
     print()
 
-    # 4. Run strategy screens
     print("Running strategy screens...")
     signals = screen_all_positions(
         portfolio_for_screen, market_data, convictions,
         full_portfolio=portfolio if single_ticker else None,
     )
 
-    # 5. Load memory context
     history_context = memory.build_agent_context_summary()
 
-    # 6. Claude reasoning
     advisor_note = ""
     if use_ai and any(s.action in ("buy", "review", "watch") for s in signals):
         print("\nCalling Claude for narrative reasoning...")
@@ -245,7 +214,7 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
             signals, portfolio, market_data, history_context, convictions
         )
 
-    # 7. Print results
+    # Print results
     print("\n" + "="*60)
     print("SIGNALS")
     print("="*60)
@@ -281,10 +250,10 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
         print("="*60)
         print(advisor_note)
 
-    # 8. Log decisions + paper trades to Supabase
+    # Log decisions + manage paper trades
     signals_by_ticker = {s.ticker: s for s in signals}
 
-    # 8a. Close paper trades whose signal is no longer active
+    # Close paper trades whose signal is no longer active
     open_paper_trades = memory.get_open_paper_trades()
     for pt in open_paper_trades:
         ticker = pt["ticker"]
@@ -293,7 +262,6 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
             continue
         sig = signals_by_ticker.get(ticker)
         if sig is None and not single_ticker:
-            # Ticker dropped from portfolio or no longer screened
             memory.close_paper_trade(ticker, price, run_date, "signal_inactive")
         elif sig is not None and sig.action == "blocked":
             memory.close_paper_trade(ticker, price, run_date, "blocked")
@@ -301,7 +269,6 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
             memory.close_paper_trade(ticker, price, run_date, "profit_take")
         # buy / watch → keep open
 
-    # 8b. Log decisions and open new paper trades for BUY signals
     for sig in signals:
         pos = portfolio.get(sig.ticker, {})
         mdata = market_data.get(sig.ticker, {})
@@ -327,7 +294,6 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
                 suggested_pct=sig.suggested_position_pct,
             )
 
-    # 9. Write analysis JSON
     buy_tickers = [s.ticker for s in signals if s.action == "buy"]
     summary = (
         f"{len(buy_tickers)} buy signal(s): {', '.join(buy_tickers) or 'none'}. "

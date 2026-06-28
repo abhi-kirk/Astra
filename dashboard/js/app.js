@@ -438,7 +438,7 @@ function renderPaperPortfolio(paperTrades, marketData) {
         <div class="paper-stat-divider"></div>
         <div class="paper-stat">
           <div class="paper-stat-label">VIRTUAL SIZE</div>
-          <div class="paper-stat-value">$1K / signal</div>
+          <div class="paper-stat-value">4–6% / signal</div>
         </div>
         <div class="paper-stat-divider"></div>
         <div class="paper-stat">

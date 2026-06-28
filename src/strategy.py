@@ -7,11 +7,7 @@ framework defined in CLAUDE.md. Returns structured signals for the agent layer.
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from dataclasses import dataclass, asdict
-
-ROOT = Path(__file__).parent.parent
 
 
 @dataclass
@@ -33,11 +29,6 @@ class Signal:
 # ---------------------------------------------------------------------------
 # Conviction helpers
 # ---------------------------------------------------------------------------
-
-def load_convictions() -> dict:
-    with open(ROOT / "convictions.json") as f:
-        return json.load(f)
-
 
 def is_excluded(ticker: str, convictions: dict) -> str | None:
     """Returns exclusion reason if ticker is hard-excluded, else None."""

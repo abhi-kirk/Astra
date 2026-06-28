@@ -10,11 +10,15 @@ Market/fundamental data comes from yfinance (free, EOD).
 """
 
 import json
-from pathlib import Path
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pandas as pd
 import yfinance as yf
+
+from src.config import MARKET_DATA_PERIOD_DAYS, MARKET_DATA_WORKERS
 
 ROOT = Path(__file__).parent.parent
 HISTORY_CSV = ROOT / "data" / "portfolio_history.csv"
@@ -34,7 +38,6 @@ def load_convictions() -> dict:
             return remote
     except Exception:
         pass
-    # Local fallback
     if CONVICTIONS_FALLBACK.exists():
         with open(CONVICTIONS_FALLBACK) as f:
             return json.load(f)
@@ -42,16 +45,12 @@ def load_convictions() -> dict:
 
 
 def get_cost_basis_from_db() -> dict[str, dict]:
-    """
-    Compute per-ticker cost basis from Supabase trades table.
-    Used by GitHub Actions and any environment without the local CSV.
-    """
+    """Compute per-ticker cost basis from Supabase trades table."""
     from src.db import get_client
     rows = get_client().table("trades").select(
         "ticker, trans_code, quantity, price, amount, activity_date"
     ).in_("trans_code", ["Buy", "Sell"]).execute().data or []
 
-    from collections import defaultdict
     buys: dict = defaultdict(lambda: {"qty": 0.0, "amt": 0.0, "count": 0, "last_price": None, "last_date": None})
     sells: dict = defaultdict(lambda: {"qty": 0.0, "amt": 0.0, "count": 0})
 
@@ -168,7 +167,7 @@ def save_mcp_portfolio_snapshot(positions: dict):
 # Market data
 # ---------------------------------------------------------------------------
 
-def get_market_data(ticker: str, period_days: int = 365) -> dict:
+def get_market_data(ticker: str, period_days: int = MARKET_DATA_PERIOD_DAYS) -> dict:
     """
     Fetch price history, technical indicators, and key fundamentals via yfinance.
     Returns a flat dict suitable for strategy screening.
@@ -212,8 +211,8 @@ def get_market_data(ticker: str, period_days: int = 365) -> dict:
             "pe_ratio": info.get("trailingPE"),
             "forward_pe": info.get("forwardPE"),
             "peg_ratio": info.get("pegRatio"),
-            "revenue_growth_yoy": info.get("revenueGrowth"),   # decimal e.g. 0.15 = 15%
-            "gross_margins": info.get("grossMargins"),          # decimal
+            "revenue_growth_yoy": info.get("revenueGrowth"),
+            "gross_margins": info.get("grossMargins"),
             "operating_margins": info.get("operatingMargins"),
             "debt_to_equity": info.get("debtToEquity"),
             "current_ratio": info.get("currentRatio"),
@@ -228,12 +227,23 @@ def get_market_data(ticker: str, period_days: int = 365) -> dict:
         return {"ticker": ticker, "error": str(e)}
 
 
-def get_market_data_bulk(tickers: list[str]) -> dict[str, dict]:
-    """Fetch market data for multiple tickers, skipping errors."""
-    results = {}
-    for ticker in tickers:
-        print(f"  Fetching {ticker}...")
-        results[ticker] = get_market_data(ticker)
+def get_market_data_bulk(
+    tickers: list[str],
+    period_days: int = MARKET_DATA_PERIOD_DAYS,
+) -> dict[str, dict]:
+    """Fetch market data for multiple tickers concurrently."""
+    results: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=MARKET_DATA_WORKERS) as pool:
+        futures = {pool.submit(get_market_data, t, period_days): t for t in tickers}
+        for fut in as_completed(futures):
+            t = futures[fut]
+            try:
+                results[t] = fut.result()
+                status = "error" if "error" in results[t] else "✓"
+                print(f"  {status} {t}")
+            except Exception as e:
+                results[t] = {"ticker": t, "error": str(e)}
+                print(f"  ✗ {t}: {e}")
     return results
 
 
