@@ -606,6 +606,24 @@ header, main, #modal-overlay { position: relative; z-index: 1; }
 .verdict-value.warn  { color: var(--accent-yellow); }
 .verdict-value.na    { color: var(--text-muted); }
 
+.verdict-sub {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.5px;
+  color: var(--text-dim); margin-top: 5px; line-height: 1.4;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Conviction note callout in modal */
+.modal-conv-note {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 14px; margin-bottom: 16px;
+  background: rgba(0,212,255,0.05);
+  border: 1px solid rgba(0,212,255,0.18); border-radius: var(--radius-sm);
+  font-size: 13px; color: var(--text-secondary); line-height: 1.5;
+}
+.modal-conv-note-icon {
+  color: var(--accent-cyan); font-size: 10px; flex-shrink: 0; margin-top: 3px;
+}
+
 /* ASTRA analysis block (reasons + risks) */
 .modal-analysis {
   display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
@@ -917,6 +935,36 @@ header, main, #modal-overlay { position: relative; z-index: 1; }
 .paper-pnl.positive { color: var(--accent-green); }
 .paper-pnl.negative { color: var(--accent-red); }
 .paper-pnl-pct { font-size: 11px; font-weight: 400; margin-left: 4px; }
+
+/* Paper portfolio tabs */
+.paper-tab-bar {
+  display: flex; gap: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 0 28px;
+}
+.paper-tab {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 2px;
+  text-transform: uppercase; color: var(--text-dim);
+  background: none; border: none; border-bottom: 2px solid transparent;
+  padding: 10px 16px; cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.paper-tab:hover { color: var(--text-secondary); }
+.paper-tab.active { color: var(--accent-cyan); border-bottom-color: var(--accent-cyan); }
+.paper-tab-count {
+  display: inline-block; margin-left: 6px;
+  font-size: 9px; padding: 1px 5px; border-radius: 9px;
+  background: rgba(0,212,255,0.12); color: var(--accent-cyan);
+}
+
+/* Closed trades rows (reuses .paper-row grid but with 4 explicit columns) */
+.paper-closed-header { grid-template-columns: 160px 180px 1fr 120px; }
+.paper-closed-row    { grid-template-columns: 160px 180px 1fr 120px; }
+
+.paper-close-reason {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 1px;
+  color: var(--text-muted); text-transform: uppercase;
+}
 
 /* Paper badge on position cards */
 .card-paper-badge {

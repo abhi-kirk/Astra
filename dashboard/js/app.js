@@ -11,6 +11,9 @@ const SUPABASE_ANON = 'sb_publishable_sSt4OK7825qQ-DZqf8o_Ow_JGbV2G7G';
 // for unauthenticated visitors, even if they inspect the source.
 let isAuthenticated = false;
 
+// Convictions data cached at startup for modal lookups (theme, status, per-ticker notes)
+let _convictions = null;
+
 const AUTH_EMAIL = 'abhikirk@icloud.com';
 
 function updateLockBtn(authed) {
@@ -316,6 +319,44 @@ async function fetchOpenPaperTrades(sb) {
   return data || [];
 }
 
+async function fetchClosedPaperTrades(sb) {
+  const since = new Date();
+  since.setDate(since.getDate() - 90);
+  const { data } = await sb
+    .from('paper_trades')
+    .select('*')
+    .eq('is_open', false)
+    .gte('run_date', since.toISOString())
+    .order('closed_at', { ascending: false })
+    .limit(30);
+  return data || [];
+}
+
+// Returns { theme, status } for a ticker from cached convictions, for display in modal
+function getTickerConvictionInfo(ticker) {
+  if (!_convictions) return { theme: null, status: null, note: null };
+  for (const [key, theme] of Object.entries(_convictions.themes || {})) {
+    const lists = [
+      { field: 'approved',   label: 'APPROVED'    },
+      { field: 'preferred',  label: 'PREFERRED'   },
+      { field: 'hold_only',  label: 'HOLD ONLY'   },
+      { field: 'do_not_add', label: 'DO NOT ADD'  },
+    ];
+    for (const { field, label } of lists) {
+      if ((theme[field] || []).includes(ticker)) {
+        return {
+          theme: key.replace(/_/g, ' ').toUpperCase(),
+          status: label,
+          note: theme.notes?.[ticker] || null,
+        };
+      }
+    }
+  }
+  const h = (_convictions.individual_holdings || {})[ticker];
+  if (h) return { theme: null, status: (h.status || 'hold').toUpperCase(), note: h.thesis || null };
+  return { theme: null, status: null, note: null };
+}
+
 async function fetchRecentDecisionHistory(sb) {
   const since = new Date();
   since.setDate(since.getDate() - 45);
@@ -389,6 +430,43 @@ function renderPaperPortfolio(paperTrades, marketData) {
   const totalPnlD   = totalValue - totalCost;
   const totalPnlPct = totalCost > 0 ? (totalValue - totalCost) / totalCost * 100 : 0;
 
+  const closedTrades = window._astraClosedPaperTrades || [];
+  const closedPnlD = closedTrades.reduce((sum, pt) => {
+    if (!pt.close_price || !pt.price_at_signal) return sum;
+    return sum + (pt.close_price - pt.price_at_signal) * (pt.virtual_shares || 0);
+  }, 0);
+  const CLOSE_REASON_LABEL = {
+    signal_inactive: 'Signal ended',
+    profit_take:     'Profit taken',
+    blocked:         'Blocked',
+  };
+
+  const closedRowsHtml = closedTrades.length === 0
+    ? '<div style="padding:24px 0;font-family:var(--font-mono);font-size:11px;color:var(--text-dim);text-align:center;letter-spacing:1px;">No closed paper trades in the last 90 days.</div>'
+    : closedTrades.map(pt => {
+        const pnlD   = pt.close_price ? (pt.close_price - pt.price_at_signal) * pt.virtual_shares : null;
+        const pnlPct = pt.close_price ? (pt.close_price - pt.price_at_signal) / pt.price_at_signal * 100 : null;
+        const cls    = pnlD != null ? (pnlD >= 0 ? 'positive' : 'negative') : '';
+        const openDate  = new Date(pt.run_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        const closeDate = pt.closed_at ? new Date(pt.closed_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
+        const reasonLabel = CLOSE_REASON_LABEL[pt.close_reason] || pt.close_reason || '—';
+        return `<div class="paper-row paper-closed-row">
+          <div class="paper-row-ticker">
+            <span class="paper-ticker">${pt.ticker}</span>
+            <span class="paper-since">${openDate} → ${closeDate}</span>
+          </div>
+          <div class="paper-row-prices">
+            <span class="paper-entry">${fmtPrice(pt.price_at_signal)}</span>
+            <span class="paper-arrow">→</span>
+            <span class="paper-cur">${pt.close_price ? fmtPrice(pt.close_price) : '—'}</span>
+          </div>
+          <div class="paper-close-reason">${reasonLabel}</div>
+          <div class="paper-pnl ${cls}">
+            ${pnlD != null ? (pnlD >= 0 ? '+' : '') + fmtBigNum(pnlD) + ' <span class="paper-pnl-pct">' + fmtPct(pnlPct) + '</span>' : '—'}
+          </div>
+        </div>`;
+      }).join('');
+
   section.innerHTML = `
     <div class="section-label">
       <span class="section-icon">◈</span>
@@ -398,7 +476,7 @@ function renderPaperPortfolio(paperTrades, marketData) {
     <div class="paper-card">
       <div class="paper-summary">
         <div class="paper-stat">
-          <div class="paper-stat-label">PAPER RETURN</div>
+          <div class="paper-stat-label">OPEN P&amp;L</div>
           <div class="paper-stat-value ${totalPnlD >= 0 ? 'positive' : 'negative'}">
             ${totalPnlD >= 0 ? '+' : ''}${fmtBigNum(totalPnlD)}
             <span class="paper-stat-pct">${fmtPct(totalPnlPct)}</span>
@@ -406,13 +484,15 @@ function renderPaperPortfolio(paperTrades, marketData) {
         </div>
         <div class="paper-stat-divider"></div>
         <div class="paper-stat">
-          <div class="paper-stat-label">OPEN TRADES</div>
-          <div class="paper-stat-value">${paperTrades.length}</div>
+          <div class="paper-stat-label">CLOSED P&amp;L</div>
+          <div class="paper-stat-value ${closedPnlD >= 0 ? 'positive' : 'negative'}" title="Realised P&amp;L on closed paper positions (last 90 days)">
+            ${closedTrades.length ? (closedPnlD >= 0 ? '+' : '') + fmtBigNum(closedPnlD) : '<span class="paper-stat-na">—</span>'}
+          </div>
         </div>
         <div class="paper-stat-divider"></div>
         <div class="paper-stat">
-          <div class="paper-stat-label">VIRTUAL SIZE</div>
-          <div class="paper-stat-value">4–6% / signal</div>
+          <div class="paper-stat-label">OPEN / CLOSED</div>
+          <div class="paper-stat-value">${paperTrades.length} <span style="color:var(--text-dim);font-size:13px;">/</span> ${closedTrades.length}</div>
         </div>
         <div class="paper-stat-divider"></div>
         <div class="paper-stat">
@@ -420,13 +500,33 @@ function renderPaperPortfolio(paperTrades, marketData) {
           <div class="paper-stat-value paper-stat-na" title="Need 30+ days of data for benchmark comparison">— <span class="paper-stat-note">&lt;30d</span></div>
         </div>
       </div>
-      <div class="paper-rows">
-        <div class="paper-rows-header">
-          <span>POSITION</span><span>ENTRY → NOW</span><span></span><span>P&amp;L</span>
-        </div>
+      <div class="paper-tab-bar">
+        <button class="paper-tab active" id="paper-tab-open">OPEN <span class="paper-tab-count">${paperTrades.length}</span></button>
+        <button class="paper-tab" id="paper-tab-closed">CLOSED <span class="paper-tab-count">${closedTrades.length}</span></button>
+      </div>
+      <div id="paper-open-panel" class="paper-rows">
+        <div class="paper-rows-header"><span>POSITION</span><span>ENTRY → NOW</span><span></span><span>P&amp;L</span></div>
         ${rows.join('')}
       </div>
+      <div id="paper-closed-panel" class="paper-rows hidden">
+        <div class="paper-rows-header paper-closed-header"><span>POSITION</span><span>ENTRY → EXIT</span><span>REASON</span><span>P&amp;L</span></div>
+        ${closedRowsHtml}
+      </div>
     </div>`;
+
+  // Tab switching
+  document.getElementById('paper-tab-open')?.addEventListener('click', () => {
+    document.getElementById('paper-tab-open').classList.add('active');
+    document.getElementById('paper-tab-closed').classList.remove('active');
+    document.getElementById('paper-open-panel').classList.remove('hidden');
+    document.getElementById('paper-closed-panel').classList.add('hidden');
+  });
+  document.getElementById('paper-tab-closed')?.addEventListener('click', () => {
+    document.getElementById('paper-tab-closed').classList.add('active');
+    document.getElementById('paper-tab-open').classList.remove('active');
+    document.getElementById('paper-closed-panel').classList.remove('hidden');
+    document.getElementById('paper-open-panel').classList.add('hidden');
+  });
 }
 
 // ── Position card ────────────────────────────────────────────
@@ -607,25 +707,42 @@ function openModal(ticker, mdata, signal, decision, paperTrade) {
   const risks   = signal?.risk_flags ?? [];
 
   // ASTRA verdict row
+  const convInfo = getTickerConvictionInfo(ticker);
+  const convLabel = signal?.conviction_match
+    ? (convInfo.theme && convInfo.status
+        ? `✓ ${convInfo.theme} · ${convInfo.status}`
+        : '✓ MATCH')
+    : signal ? '✗ NO MATCH' : '—';
+
+  const techSubParts = [];
+  if (rsi != null) techSubParts.push(`RSI ${rsi.toFixed(1)} ${rsi < 40 ? '< 40 ✓' : `(need <40)`}`);
+  if (pctBelow != null) techSubParts.push(`${pctBelow.toFixed(1)}% below 52w ${pctBelow >= 15 ? '✓' : `(need 15%)`}`);
+  const techSub = techSubParts.join(' · ') || null;
+
+  const qualSub = (revGrowth != null || grossMgn != null)
+    ? [revGrowth != null ? `Rev ${revGrowth >= 0 ? '+' : ''}${revGrowth.toFixed(0)}%` : null,
+       grossMgn  != null ? `Mgn ${grossMgn.toFixed(0)}%`  : null].filter(Boolean).join(' · ')
+    : null;
+
   const verdictItems = [
     {
       label: 'Conviction', cls: signal?.conviction_match ? 'pass' : signal ? 'fail' : 'na',
-      value: signal?.conviction_match ? '✓ MATCH' : signal ? '✗ NO MATCH' : '—',
+      value: convLabel, sub: null,
       tip: 'Does this ticker appear in your approved conviction themes? E.g. space, core tech, EV.',
     },
     {
       label: 'Quality', cls: signal?.quality_pass ? 'pass' : signal ? 'fail' : 'na',
-      value: signal?.quality_pass ? '✓ PASS' : signal ? '✗ FAIL' : '—',
+      value: signal?.quality_pass ? '✓ PASS' : signal ? '✗ FAIL' : '—', sub: qualSub,
       tip: 'Passes ASTRA quality filter: revenue growth >10% YoY, gross margin >30%, manageable debt.',
     },
     {
       label: 'Technical', cls: signal?.technical_pass ? 'pass' : signal ? 'warn' : 'na',
-      value: signal?.technical_pass ? '✓ ENTRY' : signal ? '✗ NOT YET' : '—',
+      value: signal?.technical_pass ? '✓ ENTRY' : signal ? '✗ NOT YET' : '—', sub: techSub,
       tip: 'Technical entry signal: price >15% below 52-week high AND RSI below 40 (oversold dip).',
     },
     {
       label: 'Hard Rules', cls: signal?.hard_rule_block ? 'fail' : signal ? 'pass' : 'na',
-      value: signal?.hard_rule_block ? '✗ BLOCKED' : signal ? '✓ CLEAR' : '—',
+      value: signal?.hard_rule_block ? '✗ BLOCKED' : signal ? '✓ CLEAR' : '—', sub: null,
       tip: 'Hard constraint check: not TSLA, not averaging down past 3x on positions >35% below cost, not a "hold only" ticker.',
     },
   ];
@@ -634,6 +751,7 @@ function openModal(ticker, mdata, signal, decision, paperTrade) {
     <div class="verdict-item" title="${v.tip}">
       <div class="verdict-label">${v.label}</div>
       <div class="verdict-value ${v.cls}">${v.value}</div>
+      ${v.sub ? `<div class="verdict-sub">${v.sub}</div>` : ''}
     </div>`).join('');
 
   // Signal reasons — split long single-string reasons into sentence bullets
@@ -701,6 +819,9 @@ function openModal(ticker, mdata, signal, decision, paperTrade) {
       </div>
       <span class="signal-badge badge-${action}" style="font-size:12px; padding:5px 14px; align-self:flex-start;">${action.toUpperCase()}</span>
     </div>
+
+    <!-- CONVICTION NOTE (auth-gated) -->
+    ${isAuthenticated && convInfo.note ? `<div class="modal-conv-note"><span class="modal-conv-note-icon">◆</span>${convInfo.note}</div>` : ''}
 
     <!-- ASTRA VERDICT -->
     <div class="modal-section-title">ASTRA VERDICT</div>
@@ -912,6 +1033,7 @@ async function doSaveConvictions() {
     setTimeout(() => setSaveStatus('', ''), 3000);
     // Rebuild swim lanes from updated convictions
     THEME_MAP = buildThemeMapFromConvictions(_convs);
+    _convictions = JSON.parse(JSON.stringify(_convs));
     renderLanes(_lastMarketData, _lastSignalsByTicker, _lastDecisionsByTicker, _lastPaperByTicker);
   } catch (err) {
     setSaveStatus('error', '● Save failed');
@@ -1386,6 +1508,7 @@ async function init() {
         fetchOpenPaperTrades(sb),
         fetchRecentDecisionHistory(sb),
       ]);
+      window._astraClosedPaperTrades = await fetchClosedPaperTrades(sb);
     } else {
       // Public data fetch — scrubbed public_output only, via RPC
       const { data: publicOutput, error } = await sb.rpc('get_latest_run_public');
@@ -1478,9 +1601,31 @@ async function init() {
       const headingRe = /<h[1-6][\s>]/gi;
       let m, positions = [];
       while ((m = headingRe.exec(rendered)) !== null) positions.push(m.index);
-      const splitIdx = positions.length >= 3 ? positions[2]
-                     : positions.length >= 2 ? positions[1]
-                     : -1;
+      // Primary: bold numbered section headers like **2. RISK FLAGS** inside a <p>.
+      // This is the format ASTRA commonly produces.
+      let splitIdx = rendered.search(/<p[^>]*>\s*<strong>2\./);
+      // Secondary: numbered list items — split at the second <li> or second <ol>.
+      if (splitIdx === -1) {
+        const firstOlClose = rendered.indexOf('</ol>');
+        const secondOl = firstOlClose !== -1 ? rendered.indexOf('<ol', firstOlClose) : -1;
+        if (secondOl !== -1) splitIdx = secondOl;
+      }
+      if (splitIdx === -1) {
+        const firstLiClose = rendered.indexOf('</li>');
+        const secondLi = firstLiClose !== -1 ? rendered.indexOf('<li>', firstLiClose + 5) : -1;
+        if (secondLi !== -1) splitIdx = secondLi;
+      }
+      // Tertiary: heading-based split (AI used ## for each section).
+      if (splitIdx === -1) {
+        splitIdx = positions.length >= 3 ? positions[2]
+                 : positions.length >= 2 ? positions[1]
+                 : -1;
+      }
+      // Last resort: first </p> after 200 chars.
+      if (splitIdx === -1 && rendered.length > 600) {
+        const idx = rendered.indexOf('</p>', 200);
+        if (idx !== -1) splitIdx = idx + 4;
+      }
       if (splitIdx > -1) {
         const always      = rendered.slice(0, splitIdx);
         const collapsible = rendered.slice(splitIdx);
@@ -1542,7 +1687,10 @@ async function init() {
     // ── Fetch convictions → build dynamic theme map ──
     const { data: convData } = await sb.from('convictions')
       .select('content').order('id', { ascending: false }).limit(1).single();
-    if (convData?.content) THEME_MAP = buildThemeMapFromConvictions(convData.content);
+    if (convData?.content) {
+      THEME_MAP = buildThemeMapFromConvictions(convData.content);
+      _convictions = convData.content;
+    }
 
     // Cache for re-renders triggered by conviction saves
     _lastMarketData        = marketData;
