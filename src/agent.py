@@ -13,22 +13,17 @@ Usage:
 
 import argparse
 import json
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 import anthropic
-from anthropic.types import TextBlock
-from anthropic.types.beta import BetaTextBlock
 import chevron
 
-from src import memory
+from src import memory, mcp
 from src.config import (
     ANTHROPIC_API_KEY,
     REASONING_MAX_TOKENS,
     REASONING_MODEL,
-    TAVILY_MAX_SEARCHES,
-    TAVILY_MCP_URL,
 )
 from src.data_layer import get_market_data_bulk, get_portfolio, load_convictions
 from src.strategy import screen_all_positions
@@ -86,45 +81,29 @@ def call_claude_reasoning(
         "themes_json":     json.dumps(themes),
         "history_context": history_context,
         "signal_text":     signal_text,
-        "has_search":      bool(TAVILY_MCP_URL),
-        "max_searches":    TAVILY_MAX_SEARCHES,
         "date":            datetime.now().strftime("%B %-d, %Y"),
+        **mcp.search_context(),
     })
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    servers = mcp.build_servers()
 
-    if TAVILY_MCP_URL:
+    if servers:
         message = client.beta.messages.create(
             model=REASONING_MODEL,
             max_tokens=REASONING_MAX_TOKENS,
-            mcp_servers=[{
-                "type": "url",
-                "url": TAVILY_MCP_URL,
-                "name": "tavily",
-                "tool_configuration": {"enabled": True, "allowed_tools": ["tavily-search"]},
-            }],
+            mcp_servers=servers,
             messages=[{"role": "user", "content": prompt}],
-            betas=["mcp-client-2025-04-04"],
+            betas=mcp.BETA_FLAGS,
         )
-        text_blocks = [b.text for b in message.content if isinstance(b, BetaTextBlock)]
-        raw_text = text_blocks[-1] if text_blocks else ""
-        # Strip inline MCP tool call/response XML blocks
-        clean = re.sub(r"<tool_call>.*?</tool_call>", "", raw_text, flags=re.DOTALL)
-        clean = re.sub(r"<tool_response>.*?</tool_response>", "", clean, flags=re.DOTALL)
-        # Drop any preamble before the first markdown heading
-        lines = clean.split("\n")
-        first_heading = next((i for i, l in enumerate(lines) if re.match(r"^#{1,3} ", l)), None)
-        if first_heading is not None:
-            clean = "\n".join(lines[first_heading:])
-        return clean.strip() or "No advisor note generated."
     else:
         message = client.messages.create(
             model=REASONING_MODEL,
             max_tokens=REASONING_MAX_TOKENS,
             messages=[{"role": "user", "content": prompt}],
         )
-        text = next((b.text for b in message.content if isinstance(b, TextBlock)), "")
-        return text or "No advisor note generated."
+
+    return mcp.extract_text(message) or "No advisor note generated."
 
 
 def build_public_output(output: dict) -> dict:
