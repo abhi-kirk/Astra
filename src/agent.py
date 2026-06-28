@@ -51,17 +51,17 @@ def call_claude_reasoning(
 
     action_groups: dict[str, list] = {}
     for sig in signals:
-        action_groups.setdefault(sig.action, []).append(sig)
+        action_groups.setdefault(sig["action"], []).append(sig)
 
     def fmt_sig(sig) -> str:
-        pos = portfolio.get(sig.ticker, {})
-        mdata = market_data.get(sig.ticker, {})
+        pos = portfolio.get(sig["ticker"], {})
+        mdata = market_data.get(sig["ticker"], {})
         price = mdata.get("current_price", 0)
         avg = pos.get("avg_cost", 0)
         gain = ((price - avg) / avg * 100) if avg else 0
-        reasons = "; ".join(sig.reasons[:3])
+        reasons = "; ".join(sig["reasons"][:3])
         return (
-            f"  {sig.ticker}: price=${price:.2f}, avg_cost=${avg:.2f}, "
+            f"  {sig["ticker"]}: price=${price:.2f}, avg_cost=${avg:.2f}, "
             f"unrealized={gain:+.0f}%, shares={pos.get('shares', 0):.1f}\n"
             f"    Reasons: {reasons}"
         )
@@ -75,7 +75,7 @@ def call_claude_reasoning(
 
     blocked = action_groups.get("blocked", [])
     if blocked:
-        signal_text += f"\nBLOCKED ({len(blocked)} positions): " + ", ".join(s.ticker for s in blocked)
+        signal_text += f"\nBLOCKED ({len(blocked)} positions): " + ", ".join(s["ticker"] for s in blocked)
 
     themes = {k: v.get("conviction") for k, v in convictions.get("themes", {}).items()}
 
@@ -208,7 +208,7 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
     history_context = memory.build_agent_context_summary()
 
     advisor_note = ""
-    if use_ai and any(s.action in ("buy", "sell", "watch") for s in signals):
+    if use_ai and any(s["action"] in ("buy", "sell", "watch") for s in signals):
         print("\nCalling Claude for narrative reasoning...")
         advisor_note = call_claude_reasoning(
             signals, portfolio, market_data, history_context, convictions
@@ -221,7 +221,7 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
 
     action_groups: dict[str, list] = {}
     for sig in signals:
-        action_groups.setdefault(sig.action, []).append(sig)
+        action_groups.setdefault(sig["action"], []).append(sig)
 
     for action in ["buy", "sell", "watch", "blocked"]:
         group = action_groups.get(action, [])
@@ -231,18 +231,18 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
                  "watch": "WATCHLIST", "blocked": "BLOCKED"}[action]
         print(f"\n--- {label} ---")
         for sig in group:
-            pos = portfolio.get(sig.ticker, {})
-            mdata = market_data.get(sig.ticker, {})
-            print(f"\n  {sig.ticker}")
+            pos = portfolio.get(sig["ticker"], {})
+            mdata = market_data.get(sig["ticker"], {})
+            print(f"\n  {sig["ticker"]}")
             print(f"    Shares: {pos.get('shares', 0):.2f}  "
                   f"Avg cost: ${pos.get('avg_cost', 0):.2f}  "
                   f"Current: ${mdata.get('current_price', 0):.2f}")
-            for r in sig.reasons:
+            for r in sig["reasons"]:
                 print(f"    ✓ {r}")
-            for rf in sig.risk_flags:
+            for rf in sig["risk_flags"]:
                 print(f"    ⚠ {rf}")
-            if sig.suggested_position_pct:
-                print(f"    → Suggested size: {sig.suggested_position_pct:.0%} of portfolio")
+            if sig["suggested_position_pct"]:
+                print(f"    → Suggested size: {sig["suggested_position_pct"]:.0%} of portfolio")
 
     if advisor_note:
         print(f"\n{'='*60}")
@@ -251,7 +251,7 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
         print(advisor_note)
 
     # Log decisions + manage paper trades
-    signals_by_ticker = {s.ticker: s for s in signals}
+    signals_by_ticker = {s["ticker"]: s for s in signals}
 
     # Close paper trades whose signal is no longer active
     open_paper_trades = memory.get_open_paper_trades()
@@ -263,39 +263,39 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
         sig = signals_by_ticker.get(ticker)
         if sig is None and not single_ticker:
             memory.close_paper_trade(ticker, price, run_date, "signal_inactive")
-        elif sig is not None and sig.action == "blocked":
+        elif sig is not None and sig["action"] == "blocked":
             memory.close_paper_trade(ticker, price, run_date, "blocked")
-        elif sig is not None and sig.action == "sell":
+        elif sig is not None and sig["action"] == "sell":
             memory.close_paper_trade(ticker, price, run_date, "profit_take")
         # buy / watch → keep open
 
     for sig in signals:
-        pos = portfolio.get(sig.ticker, {})
-        mdata = market_data.get(sig.ticker, {})
+        pos = portfolio.get(sig["ticker"], {})
+        mdata = market_data.get(sig["ticker"], {})
         price = mdata.get("current_price")
-        if sig.action in ("buy", "sell", "watch"):
+        if sig["action"] in ("buy", "sell", "watch"):
             memory.log_decision(
-                ticker=sig.ticker,
-                action=sig.action,
-                reasoning="; ".join(sig.reasons),
-                signal_data=sig.to_dict(),
+                ticker=sig["ticker"],
+                action=sig["action"],
+                reasoning="; ".join(sig["reasons"]),
+                signal_data=sig,
                 price_at_decision=price,
                 shares_held=pos.get("shares"),
                 avg_cost=pos.get("avg_cost"),
                 executed=(mode == "live"),
                 run_date=run_date,
             )
-        if sig.action == "buy" and price:
+        if sig["action"] == "buy" and price:
             memory.log_paper_trade(
-                ticker=sig.ticker,
+                ticker=sig["ticker"],
                 price=price,
                 run_date=run_date,
-                signal_data=sig.to_dict(),
-                suggested_pct=sig.suggested_position_pct,
+                signal_data=sig,
+                suggested_pct=sig["suggested_position_pct"],
             )
 
-    buy_tickers  = [s.ticker for s in signals if s.action == "buy"]
-    sell_tickers = [s.ticker for s in signals if s.action == "sell"]
+    buy_tickers  = [s["ticker"] for s in signals if s["action"] == "buy"]
+    sell_tickers = [s["ticker"] for s in signals if s["action"] == "sell"]
     summary = (
         f"{len(buy_tickers)} buy signal(s): {', '.join(buy_tickers) or 'none'}. "
         f"{len(sell_tickers)} sell signal(s): {', '.join(sell_tickers) or 'none'}. "
@@ -308,7 +308,7 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
         "num_positions_screened": len(portfolio),
         "summary": summary,
         "advisor_note": advisor_note,
-        "signals": [s.to_dict() for s in signals],
+        "signals": signals,
         "market_data_snapshot": {
             t: {k: v for k, v in d.items() if k != "fetched_at"}
             for t, d in market_data.items()
@@ -318,7 +318,7 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
     }
 
     memory.log_run_summary(
-        mode=mode, signals=[s.to_dict() for s in signals],
+        mode=mode, signals=signals,
         summary=summary, raw_output=output,
         public_output=build_public_output(output),
         run_date=run_date,
