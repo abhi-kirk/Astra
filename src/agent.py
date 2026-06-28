@@ -115,7 +115,7 @@ def call_claude_reasoning(
             messages=[{"role": "user", "content": prompt}],
             betas=["mcp-client-2025-04-04"],
         )
-        text_blocks = [block.text for block in message.content if hasattr(block, "text")]
+        text_blocks = [t for block in message.content if (t := getattr(block, "text", None))]
         raw_text = text_blocks[-1] if text_blocks else ""
         # Strip inline MCP tool call/response XML blocks
         clean = re.sub(r"<tool_call>.*?</tool_call>", "", raw_text, flags=re.DOTALL)
