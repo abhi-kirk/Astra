@@ -117,6 +117,8 @@ Write a plain-English daily note (200-300 words) as if you're a knowledgeable fr
 3. CONVICTION CHECK: Are the signals today in line with his long-term bets, or noise?
 4. ONE THING TO WATCH: One forward-looking thing to keep an eye on.
 
+Start your response IMMEDIATELY with the heading line — no preamble, no "I'll search...", no "Here's your note:". Begin with: ## 🛰️ ASTRA Daily Note — [date]
+
 No disclaimers. No "as always, consult a financial advisor." Just honest, clear, friend-level advice."""
 
     client = anthropic.Anthropic(api_key=api_key)
@@ -140,10 +142,11 @@ No disclaimers. No "as always, consult a financial advisor." Just honest, clear,
         raw_text = text_blocks[-1] if text_blocks else ""
         clean = re.sub(r"<tool_call>.*?</tool_call>", "", raw_text, flags=re.DOTALL)
         clean = re.sub(r"<tool_response>.*?</tool_response>", "", clean, flags=re.DOTALL)
-        # Drop any preamble before the first markdown heading
-        heading_match = re.search(r"^#{1,3} ", clean, flags=re.MULTILINE)
-        if heading_match:
-            clean = clean[heading_match.start():]
+        # Drop any preamble before the first markdown heading (line-by-line, more reliable)
+        lines = clean.split("\n")
+        first_heading = next((i for i, l in enumerate(lines) if re.match(r"^#{1,3} ", l)), None)
+        if first_heading is not None:
+            clean = "\n".join(lines[first_heading:])
         return clean.strip() or "No advisor note generated."
     else:
         message = client.messages.create(
@@ -279,6 +282,26 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
         print(advisor_note)
 
     # 8. Log decisions + paper trades to Supabase
+    signals_by_ticker = {s.ticker: s for s in signals}
+
+    # 8a. Close paper trades whose signal is no longer active
+    open_paper_trades = memory.get_open_paper_trades()
+    for pt in open_paper_trades:
+        ticker = pt["ticker"]
+        price = market_data.get(ticker, {}).get("current_price")
+        if not price:
+            continue
+        sig = signals_by_ticker.get(ticker)
+        if sig is None and not single_ticker:
+            # Ticker dropped from portfolio or no longer screened
+            memory.close_paper_trade(ticker, price, run_date, "signal_inactive")
+        elif sig is not None and sig.action == "blocked":
+            memory.close_paper_trade(ticker, price, run_date, "blocked")
+        elif sig is not None and sig.action == "review":
+            memory.close_paper_trade(ticker, price, run_date, "profit_take")
+        # buy / watch → keep open
+
+    # 8b. Log decisions and open new paper trades for BUY signals
     for sig in signals:
         pos = portfolio.get(sig.ticker, {})
         mdata = market_data.get(sig.ticker, {})
@@ -301,6 +324,7 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
                 price=price,
                 run_date=run_date,
                 signal_data=sig.to_dict(),
+                suggested_pct=sig.suggested_position_pct,
             )
 
     # 9. Write analysis JSON

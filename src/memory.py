@@ -115,16 +115,22 @@ def save_portfolio_snapshot(positions: dict):
     }).execute()
 
 
-PAPER_TRADE_VIRTUAL_SIZE = 1000.0  # dollars per BUY signal
+PAPER_PORTFOLIO_SIZE  = 10_000.0  # virtual portfolio baseline ($10K)
+PAPER_MAX_POSITION_PCT = 0.10     # hard cap: no single position > 10% of virtual portfolio
 
 def log_paper_trade(
     ticker: str,
     price: float,
     run_date: str,
     signal_data: dict | None = None,
+    suggested_pct: float | None = None,
 ) -> None:
     """Log a virtual BUY trade when ASTRA issues a BUY signal.
-    Only logs if no open paper position already exists for this ticker.
+
+    Position size = suggested_position_pct × PAPER_PORTFOLIO_SIZE,
+    capped at PAPER_MAX_POSITION_PCT × PAPER_PORTFOLIO_SIZE.
+    Defaults to 4% ($400) if no suggested_pct is provided.
+    Skips if an open paper position already exists for this ticker.
     """
     db = get_client()
     existing = (
@@ -136,20 +142,60 @@ def log_paper_trade(
         .execute()
     )
     if existing.data:
-        return  # already holding a virtual position
+        return  # already holding a virtual position — no pyramiding in paper mode
 
-    virtual_shares = round(PAPER_TRADE_VIRTUAL_SIZE / price, 6) if price else 0
+    pct = suggested_pct if suggested_pct else 0.04
+    raw_cost = pct * PAPER_PORTFOLIO_SIZE
+    virtual_cost = min(raw_cost, PAPER_MAX_POSITION_PCT * PAPER_PORTFOLIO_SIZE)
+    virtual_shares = round(virtual_cost / price, 6) if price else 0
+
     db.table("paper_trades").insert({
         "ticker": ticker,
         "action": "buy",
         "price_at_signal": price,
         "virtual_shares": virtual_shares,
-        "virtual_cost": PAPER_TRADE_VIRTUAL_SIZE,
+        "virtual_cost": round(virtual_cost, 2),
+        "suggested_position_pct": round(pct, 4),
         "run_date": run_date,
         "signal_data": signal_data or {},
         "is_open": True,
     }).execute()
-    print(f"  [paper] BUY {ticker}: {virtual_shares:.4f} virtual shares @ ${price:.2f}")
+    print(f"  [paper] BUY  {ticker}: {virtual_shares:.4f} shares @ ${price:.2f}  "
+          f"(${virtual_cost:.0f} = {pct:.0%} of ${PAPER_PORTFOLIO_SIZE:.0f})")
+
+
+def close_paper_trade(
+    ticker: str,
+    close_price: float,
+    run_date: str,
+    reason: str,
+) -> None:
+    """Close an open paper trade. Reason: signal_inactive | profit_take | blocked."""
+    db = get_client()
+    trade = (
+        db.table("paper_trades")
+        .select("id, price_at_signal, virtual_shares, virtual_cost")
+        .eq("ticker", ticker)
+        .eq("is_open", True)
+        .limit(1)
+        .execute()
+    )
+    if not trade.data:
+        return
+
+    t = trade.data[0]
+    pnl_d   = (close_price - t["price_at_signal"]) * t["virtual_shares"]
+    pnl_pct = (close_price - t["price_at_signal"]) / t["price_at_signal"] * 100
+
+    db.table("paper_trades").update({
+        "is_open":      False,
+        "closed_at":    run_date,
+        "close_price":  close_price,
+        "close_reason": reason,
+    }).eq("id", t["id"]).execute()
+
+    print(f"  [paper] CLOSE {ticker}: ${close_price:.2f}  "
+          f"P&L ${pnl_d:+.2f} ({pnl_pct:+.1f}%)  reason={reason}")
 
 
 def get_open_paper_trades() -> list[dict]:

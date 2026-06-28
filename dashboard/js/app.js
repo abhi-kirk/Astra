@@ -213,16 +213,22 @@ function fmtBigNum(val) {
   return sign + '$' + abs.toFixed(0);
 }
 
-function nextMonday6amPT() {
+function nextWeekdayRun() {
+  // Returns a short string like "Mon Jun 30 6am" for next weekday 6am PT
   const now = new Date();
-  // Monday = 1 in getDay(). PT is UTC-7 (PDT) or UTC-8 (PST).
-  // We'll just compute next Monday's date in local time for simplicity.
-  const day = now.getDay(); // 0=Sun, 1=Mon,...
-  const daysUntilMonday = day === 1 ? 7 : (1 - day + 7) % 7 || 7;
-  const nextMon = new Date(now);
-  nextMon.setDate(now.getDate() + daysUntilMonday);
-  nextMon.setHours(6, 0, 0, 0);
-  return nextMon;
+  const next = new Date(now);
+  // Advance to next weekday
+  do { next.setDate(next.getDate() + 1); } while ([0, 6].includes(next.getDay()));
+  next.setHours(6, 0, 0, 0);
+  return next.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) + ' 6am';
+}
+
+function dataAgeText(runDateObj) {
+  const ageMs = Date.now() - runDateObj.getTime();
+  const ageH  = ageMs / 3600000;
+  if (ageH < 1)  return 'Just now';
+  if (ageH < 24) return `${Math.floor(ageH)}h ago`;
+  return `${Math.floor(ageH / 24)}d ago`;
 }
 
 function rsiClass(rsi) {
@@ -281,6 +287,33 @@ async function fetchLatestDecisions(sb, runDate) {
   return data || [];
 }
 
+async function fetchOpenPaperTrades(sb) {
+  const { data, error } = await sb
+    .from('paper_trades')
+    .select('*')
+    .eq('is_open', true)
+    .order('run_date', { ascending: true });
+  if (error) console.warn('paper_trades fetch failed:', error.message);
+  return data || [];
+}
+
+async function fetchRecentDecisionHistory(sb) {
+  const since = new Date();
+  since.setDate(since.getDate() - 45);
+  const { data } = await sb
+    .from('decisions')
+    .select('ticker, action, run_date, price_at_decision')
+    .gte('run_date', since.toISOString())
+    .order('run_date', { ascending: false })
+    .limit(300);
+  const byTicker = {};
+  (data || []).forEach(d => {
+    if (!byTicker[d.ticker]) byTicker[d.ticker] = [];
+    byTicker[d.ticker].push(d);
+  });
+  return byTicker;
+}
+
 // ── Signals donut chart ──────────────────────────────────────
 
 let donutChart = null;
@@ -333,9 +366,98 @@ function renderSignalsDonut(counts) {
   });
 }
 
+// ── Paper portfolio ──────────────────────────────────────────
+
+function renderPaperPortfolio(paperTrades, marketData) {
+  const section = document.getElementById('paper-portfolio');
+  if (!paperTrades.length) { section.classList.add('hidden'); return; }
+  section.classList.remove('hidden');
+
+  let totalCost = 0, totalValue = 0;
+  const rows = paperTrades.map(pt => {
+    const mdata = marketData[pt.ticker] || {};
+    const cur   = mdata.current_price ?? pt.price_at_signal;
+    const pnlD  = (cur - pt.price_at_signal) * pt.virtual_shares;
+    const pnlPct = (cur - pt.price_at_signal) / pt.price_at_signal * 100;
+    totalCost  += pt.virtual_cost;
+    totalValue += cur * pt.virtual_shares;
+
+    // Bar: centred at 0, ±15% = full width
+    const clampedPct  = Math.max(-15, Math.min(15, pnlPct));
+    const barWidth    = Math.abs(clampedPct) / 15 * 50; // % of half-width
+    const barPos      = pnlPct >= 0 ? 'right' : 'left';
+    const barColor    = pnlPct >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+    const sinceDate   = new Date(pt.run_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+    return `
+      <div class="paper-row">
+        <div class="paper-row-ticker">
+          <span class="paper-ticker">${pt.ticker}</span>
+          <span class="paper-since">since ${sinceDate}</span>
+        </div>
+        <div class="paper-row-prices">
+          <span class="paper-entry">${fmtPrice(pt.price_at_signal)}</span>
+          <span class="paper-arrow">→</span>
+          <span class="paper-cur">${fmtPrice(cur)}</span>
+        </div>
+        <div class="paper-bar-wrap">
+          <div class="paper-bar-track">
+            <div class="paper-bar-center"></div>
+            <div class="paper-bar-fill" style="width:${barWidth}%; ${barPos}:50%; background:${barColor};"></div>
+          </div>
+        </div>
+        <div class="paper-pnl ${pnlD >= 0 ? 'positive' : 'negative'}">
+          ${pnlD >= 0 ? '+' : ''}${fmtBigNum(pnlD)} <span class="paper-pnl-pct">${fmtPct(pnlPct)}</span>
+        </div>
+      </div>`;
+  });
+
+  const totalPnlD   = totalValue - totalCost;
+  const totalPnlPct = totalCost > 0 ? (totalValue - totalCost) / totalCost * 100 : 0;
+
+  section.innerHTML = `
+    <div class="section-label">
+      <span class="section-icon">◈</span>
+      <span>PAPER PORTFOLIO</span>
+      <span class="section-badge">ASTRA SIMULATION</span>
+    </div>
+    <div class="paper-card">
+      <div class="paper-summary">
+        <div class="paper-stat">
+          <div class="paper-stat-label">PAPER RETURN</div>
+          <div class="paper-stat-value ${totalPnlD >= 0 ? 'positive' : 'negative'}">
+            ${totalPnlD >= 0 ? '+' : ''}${fmtBigNum(totalPnlD)}
+            <span class="paper-stat-pct">${fmtPct(totalPnlPct)}</span>
+          </div>
+        </div>
+        <div class="paper-stat-divider"></div>
+        <div class="paper-stat">
+          <div class="paper-stat-label">OPEN TRADES</div>
+          <div class="paper-stat-value">${paperTrades.length}</div>
+        </div>
+        <div class="paper-stat-divider"></div>
+        <div class="paper-stat">
+          <div class="paper-stat-label">VIRTUAL SIZE</div>
+          <div class="paper-stat-value">$1K / signal</div>
+        </div>
+        <div class="paper-stat-divider"></div>
+        <div class="paper-stat">
+          <div class="paper-stat-label">vs SPY</div>
+          <div class="paper-stat-value paper-stat-na" title="Need 30+ days of data for benchmark comparison">— <span class="paper-stat-note">&lt;30d</span></div>
+        </div>
+      </div>
+      <div class="paper-rows">
+        <div class="paper-rows-header">
+          <span>POSITION</span><span>ENTRY → NOW</span><span></span><span>P&amp;L</span>
+        </div>
+        ${rows.join('')}
+      </div>
+    </div>`;
+}
+
 // ── Position card ────────────────────────────────────────────
 
-function buildCard(ticker, mdata, signal, decision) {
+function buildCard(ticker, mdata, signal, decision, paperTrade) {
   const card = document.createElement('div');
   const action = signal ? signal.action : 'hold';
 
@@ -357,6 +479,14 @@ function buildCard(ticker, mdata, signal, decision) {
     : '';
 
   const badgeLabel = action.toUpperCase();
+
+  // Paper trade P&L badge (auth-gated, shows if ASTRA has an open virtual position)
+  let paperBadgeHtml = '';
+  if (paperTrade && mdata?.current_price) {
+    const pnlPct = (mdata.current_price - paperTrade.price_at_signal) / paperTrade.price_at_signal * 100;
+    const cls = pnlPct >= 0 ? 'positive' : 'negative';
+    paperBadgeHtml = `<span class="card-paper-badge ${cls}" title="ASTRA paper trade: ${fmtPct(pnlPct)} since ${new Date(paperTrade.run_date).toLocaleDateString('en-US',{month:'short',day:'numeric'})}">PAPER ${fmtPct(pnlPct)}</span>`;
+  }
 
   // For actionable signals: show top 2 reasons why ASTRA flagged this
   let bodyHtml = '';
@@ -399,6 +529,7 @@ function buildCard(ticker, mdata, signal, decision) {
       <span class="card-ticker">${ticker}</span>
       <span class="signal-badge badge-${action}">${badgeLabel}</span>
     </div>
+    ${paperBadgeHtml}
     <div class="card-name">${shortName}</div>
     <div class="card-price-row">
       <span class="card-price">${fmtPrice(price)}</span>
@@ -407,13 +538,13 @@ function buildCard(ticker, mdata, signal, decision) {
     ${bodyHtml}
   `;
 
-  card.addEventListener('click', () => openModal(ticker, mdata, signal, decision));
+  card.addEventListener('click', () => openModal(ticker, mdata, signal, decision, paperTrade));
   return card;
 }
 
 // ── Swim lanes ───────────────────────────────────────────────
 
-function renderLanes(marketData, signalsByTicker, decisionsByTicker) {
+function renderLanes(marketData, signalsByTicker, decisionsByTicker, paperTradesByTicker) {
   const container = document.getElementById('lanes-container');
   container.innerHTML = '';
 
@@ -467,6 +598,7 @@ function renderLanes(marketData, signalsByTicker, decisionsByTicker) {
         marketData[ticker],
         signalsByTicker[ticker] || null,
         decisionsByTicker[ticker] || null,
+        paperTradesByTicker?.[ticker] || null,
       );
       grid.appendChild(card);
     }
@@ -479,7 +611,7 @@ function renderLanes(marketData, signalsByTicker, decisionsByTicker) {
 
 let modalBarChart = null;
 
-function openModal(ticker, mdata, signal, decision) {
+function openModal(ticker, mdata, signal, decision, paperTrade) {
   const overlay = document.getElementById('modal-overlay');
   const content = document.getElementById('modal-content');
   overlay.classList.remove('hidden');
@@ -643,7 +775,64 @@ function openModal(ticker, mdata, signal, decision) {
     <!-- SUPPLEMENTAL FUNDAMENTALS -->
     <div class="modal-section-title">Fundamentals (supplemental — also in Robinhood)</div>
     <div class="modal-metrics-grid">${fundHtml}</div>
+
+    ${paperTrade ? `
+    <hr class="modal-divider">
+    <div class="modal-section-title">Paper Trade</div>
+    <div class="modal-paper-trade">
+      <div class="modal-paper-row">
+        <span class="modal-paper-label">Entry price</span>
+        <span class="modal-paper-val">${fmtPrice(paperTrade.price_at_signal)}</span>
+      </div>
+      <div class="modal-paper-row">
+        <span class="modal-paper-label">Virtual shares</span>
+        <span class="modal-paper-val">${paperTrade.virtual_shares.toFixed(4)}</span>
+      </div>
+      <div class="modal-paper-row">
+        <span class="modal-paper-label">Virtual cost</span>
+        <span class="modal-paper-val">${fmtPrice(paperTrade.virtual_cost)}</span>
+      </div>
+      ${mdata?.current_price ? (() => {
+        const pnlD   = (mdata.current_price - paperTrade.price_at_signal) * paperTrade.virtual_shares;
+        const pnlPct = (mdata.current_price - paperTrade.price_at_signal) / paperTrade.price_at_signal * 100;
+        return `<div class="modal-paper-row">
+          <span class="modal-paper-label">Current P&L</span>
+          <span class="modal-paper-val ${pnlD >= 0 ? 'positive' : 'negative'}">${pnlD >= 0 ? '+' : ''}${fmtBigNum(pnlD)} (${fmtPct(pnlPct)})</span>
+        </div>`;
+      })() : ''}
+      <div class="modal-paper-row">
+        <span class="modal-paper-label">Opened</span>
+        <span class="modal-paper-val">${new Date(paperTrade.run_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+      </div>
+    </div>` : ''}
+
+    <hr class="modal-divider">
+    <div class="modal-section-title">Signal History <span style="color:var(--text-dim);font-size:9px;margin-left:8px;">last 45 days</span></div>
+    <div class="modal-signal-history" id="modal-signal-history-${ticker}">
+      <div class="signal-history-empty">Loading…</div>
+    </div>
   `;
+
+  // Signal history timeline
+  requestAnimationFrame(() => {
+    const histEl = document.getElementById(`modal-signal-history-${ticker}`);
+    if (!histEl) return;
+    const hist = (window._astraSignalHistory || {})[ticker] || [];
+    if (!hist.length) {
+      histEl.innerHTML = '<div class="signal-history-empty">No history yet — data builds up over daily runs.</div>';
+      return;
+    }
+    const ACTION_DOT = { buy: '▲', watch: '◈', review: '◉', blocked: '✕', hold: '·' };
+    const ACTION_CLS = { buy: 'sh-buy', watch: 'sh-watch', review: 'sh-review', blocked: 'sh-blocked', hold: 'sh-hold' };
+    histEl.innerHTML = hist.slice(0, 12).map((d, i) => `
+      <div class="sh-row">
+        <span class="sh-date">${new Date(d.run_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+        <span class="sh-dot ${ACTION_CLS[d.action] || 'sh-hold'}">${ACTION_DOT[d.action] || '·'}</span>
+        <span class="sh-action ${ACTION_CLS[d.action] || 'sh-hold'}">${(d.action || 'hold').toUpperCase()}</span>
+        <span class="sh-price">${fmtPrice(d.price_at_decision)}</span>
+        ${i === 0 ? '<span class="sh-today">← today</span>' : ''}
+      </div>`).join('');
+  });
 
   // Bar chart
   requestAnimationFrame(() => {
@@ -742,7 +931,7 @@ async function init() {
   initLockButton(sb);
 
   try {
-    let raw, decisions = [], runDate;
+    let raw, decisions = [], runDate, paperTrades = [], signalHistory = {};
 
     if (isAuthenticated) {
       // Full data fetch — includes raw_output, advisor_note, decisions
@@ -750,7 +939,11 @@ async function init() {
       const rawFull = runRow.raw_output || {};
       raw = Array.isArray(rawFull) ? { signals: rawFull } : rawFull;
       runDate = runRow.run_date;
-      decisions = await fetchLatestDecisions(sb, runDate);
+      [decisions, paperTrades, signalHistory] = await Promise.all([
+        fetchLatestDecisions(sb, runDate),
+        fetchOpenPaperTrades(sb),
+        fetchRecentDecisionHistory(sb),
+      ]);
     } else {
       // Public data fetch — scrubbed public_output only, via RPC
       const { data: publicOutput, error } = await sb.rpc('get_latest_run_public');
@@ -768,13 +961,22 @@ async function init() {
 
     // ── Header ──
     const runDateObj = new Date(runDate);
-    document.getElementById('last-run-date').textContent =
-      runDateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const ageH = (Date.now() - runDateObj.getTime()) / 3600000;
+    const isFresh = ageH < 28;
+    const lastRunEl = document.getElementById('last-run-date');
+    lastRunEl.textContent = dataAgeText(runDateObj);
+    lastRunEl.title = runDateObj.toLocaleString();
 
-    const nextMon = nextMonday6amPT();
-    document.getElementById('next-run-date').textContent =
-      nextMon.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' 6am PT';
+    // Freshness badge — append to status item
+    const lastRunItem = lastRunEl.closest('.status-item');
+    if (lastRunItem && !lastRunItem.querySelector('.freshness-badge')) {
+      const badge = document.createElement('span');
+      badge.className = `freshness-badge ${isFresh ? 'fresh' : 'stale'}`;
+      badge.textContent = isFresh ? '● FRESH' : '● STALE';
+      lastRunItem.appendChild(badge);
+    }
 
+    document.getElementById('next-run-date').textContent = nextWeekdayRun();
     document.getElementById('positions-count').textContent =
       raw.num_positions_screened ?? Object.keys(marketData).length;
 
@@ -879,8 +1081,15 @@ async function init() {
       </p>`;
     }
 
+    // Store signal history for modal access
+    window._astraSignalHistory = signalHistory;
+
+    // ── Paper portfolio (auth-gated) ──
+    const paperTradesByTicker = Object.fromEntries(paperTrades.map(pt => [pt.ticker, pt]));
+    if (isAuthenticated) renderPaperPortfolio(paperTrades, marketData);
+
     // ── Swim lanes ──
-    renderLanes(marketData, signalsByTicker, decisionsByTicker);
+    renderLanes(marketData, signalsByTicker, decisionsByTicker, paperTradesByTicker);
 
     // Show content
     document.getElementById('loading-state').classList.add('hidden');

@@ -801,6 +801,167 @@ header, main, #modal-overlay { position: relative; z-index: 1; }
 .advisor-locked-btn:hover { background: rgba(0,212,255,0.08); border-color: rgba(0,212,255,0.4); }
 
 /* ============================================================
+   FRESHNESS BADGE
+   ============================================================ */
+
+.freshness-badge {
+  display: block;
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 1.5px;
+  margin-top: 4px;
+}
+.freshness-badge.fresh { color: var(--accent-green); }
+.freshness-badge.stale { color: var(--accent-yellow); }
+
+/* ============================================================
+   PAPER PORTFOLIO
+   ============================================================ */
+
+#paper-portfolio { }
+
+.paper-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.paper-summary {
+  display: flex; align-items: center; gap: 0;
+  padding: 20px 28px;
+  border-bottom: 1px solid var(--border);
+}
+
+.paper-stat { text-align: center; flex: 1; }
+
+.paper-stat-label {
+  font-family: var(--font-mono); font-size: 9px;
+  letter-spacing: 2px; color: var(--text-muted);
+  text-transform: uppercase; margin-bottom: 6px;
+}
+
+.paper-stat-value {
+  font-family: var(--font-mono); font-size: 20px; font-weight: 700;
+  color: var(--text-primary);
+}
+.paper-stat-value.positive { color: var(--accent-green); }
+.paper-stat-value.negative { color: var(--accent-red); }
+.paper-stat-pct { font-size: 13px; margin-left: 6px; font-weight: 400; }
+.paper-stat-na { color: var(--text-dim) !important; font-size: 16px; }
+.paper-stat-note { font-size: 10px; color: var(--text-dim); margin-left: 4px; }
+
+.paper-stat-divider { width: 1px; height: 40px; background: var(--border); flex-shrink: 0; }
+
+.paper-rows { padding: 0 28px 20px; }
+
+.paper-rows-header {
+  display: grid; grid-template-columns: 160px 180px 1fr 120px;
+  align-items: center; padding: 10px 0 6px;
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 2px;
+  color: var(--text-dim); text-transform: uppercase;
+  border-bottom: 1px solid var(--border); margin-bottom: 4px;
+}
+
+.paper-row {
+  display: grid; grid-template-columns: 160px 180px 1fr 120px;
+  align-items: center; padding: 10px 0;
+  border-bottom: 1px solid rgba(30,64,96,0.3);
+  transition: background 0.15s;
+}
+.paper-row:last-child { border-bottom: none; }
+.paper-row:hover { background: rgba(0,212,255,0.03); }
+
+.paper-row-ticker { display: flex; flex-direction: column; gap: 2px; }
+.paper-ticker { font-family: var(--font-mono); font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.paper-since { font-family: var(--font-mono); font-size: 9px; color: var(--text-dim); letter-spacing: 1px; }
+
+.paper-row-prices {
+  display: flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono); font-size: 13px;
+}
+.paper-entry { color: var(--text-muted); }
+.paper-arrow { color: var(--text-dim); }
+.paper-cur { color: var(--text-primary); font-weight: 500; }
+
+.paper-bar-wrap { padding: 0 16px; }
+.paper-bar-track {
+  position: relative; height: 4px;
+  background: rgba(30,64,96,0.4); border-radius: 2px;
+}
+.paper-bar-center {
+  position: absolute; top: 0; left: 50%;
+  width: 1px; height: 100%; background: var(--border-bright);
+}
+.paper-bar-fill {
+  position: absolute; top: 0; height: 100%; border-radius: 2px;
+  transition: width 0.4s ease;
+}
+
+.paper-pnl {
+  font-family: var(--font-mono); font-size: 13px; font-weight: 600;
+  text-align: right;
+}
+.paper-pnl.positive { color: var(--accent-green); }
+.paper-pnl.negative { color: var(--accent-red); }
+.paper-pnl-pct { font-size: 11px; font-weight: 400; margin-left: 4px; }
+
+/* Paper badge on position cards */
+.card-paper-badge {
+  display: inline-block;
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 1px;
+  padding: 2px 7px; border-radius: 3px; margin-top: 4px;
+  font-weight: 500;
+}
+.card-paper-badge.positive {
+  background: rgba(57,211,83,0.1); color: var(--accent-green);
+  border: 1px solid rgba(57,211,83,0.25);
+}
+.card-paper-badge.negative {
+  background: rgba(255,68,102,0.1); color: var(--accent-red);
+  border: 1px solid rgba(255,68,102,0.25);
+}
+
+/* Modal paper trade block */
+.modal-paper-trade {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 16px;
+  background: rgba(0,212,255,0.04);
+  border: 1px solid rgba(0,212,255,0.12); border-radius: var(--radius-sm);
+}
+.modal-paper-row { display: flex; justify-content: space-between; align-items: center; }
+.modal-paper-label { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+.modal-paper-val { font-family: var(--font-mono); font-size: 13px; color: var(--text-primary); }
+.modal-paper-val.positive { color: var(--accent-green); }
+.modal-paper-val.negative { color: var(--accent-red); }
+
+/* ============================================================
+   SIGNAL HISTORY (modal)
+   ============================================================ */
+
+.modal-signal-history {
+  display: flex; flex-direction: column; gap: 2px;
+}
+
+.sh-row {
+  display: grid; grid-template-columns: 64px 18px 80px 80px 1fr;
+  align-items: center; gap: 8px;
+  padding: 5px 8px; border-radius: 4px;
+  transition: background 0.1s;
+}
+.sh-row:hover { background: rgba(0,212,255,0.04); }
+
+.sh-date { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+.sh-dot { font-size: 11px; text-align: center; }
+.sh-action { font-family: var(--font-mono); font-size: 11px; font-weight: 600; letter-spacing: 1px; }
+.sh-price { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+.sh-today { font-family: var(--font-mono); font-size: 9px; color: var(--text-dim); }
+.signal-history-empty { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); padding: 8px 0; }
+
+.sh-buy     { color: var(--accent-green); }
+.sh-watch   { color: var(--accent-cyan); }
+.sh-review  { color: var(--accent-yellow); }
+.sh-blocked { color: var(--accent-red); }
+.sh-hold    { color: var(--text-dim); }
+
+/* ============================================================
    SCROLLBAR
    ============================================================ */
 
