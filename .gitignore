@@ -22,3 +22,6 @@ analysis/
 .DS_Store
 astra.egg-info/
 src/astra.egg-info/
+
+# tokens
+tokens.enc

@@ -15,6 +15,7 @@ dependencies = [
     "anthropic>=0.30.0",
     "chevron>=0.14.0",
     "starlette>=0.27.0",
+    "cryptography>=42.0.0",
 ]
 
 [project.optional-dependencies]

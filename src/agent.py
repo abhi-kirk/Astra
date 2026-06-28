@@ -160,6 +160,10 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
     convictions = load_convictions()
     excluded = {e["ticker"] for e in convictions.get("exclusions", [])}
 
+    print("Syncing live portfolio from Robinhood...")
+    from src.robinhood import sync_portfolio_to_supabase
+    sync_portfolio_to_supabase()
+
     print("Loading portfolio...")
     portfolio = get_portfolio()
     portfolio = {t: v for t, v in portfolio.items() if t not in excluded}

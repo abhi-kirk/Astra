@@ -63,6 +63,11 @@ TECH_MIN_PCT_BELOW_52W_HIGH = _cfg("TECH_MIN_PCT_BELOW_52W_HIGH", cast=float, de
 TECH_MAX_RSI                = _cfg("TECH_MAX_RSI",                cast=float, default=40.0)
 TECH_SIGNALS_REQUIRED       = _cfg("TECH_SIGNALS_REQUIRED",       cast=int,   default=2)
 
+# ── Robinhood live portfolio sync ─────────────────────────────
+ROBINHOOD_ACCOUNT_NUMBER = _cfg("ROBINHOOD_ACCOUNT_NUMBER", default="")   # primary account (read-only)
+ROBINHOOD_TOKEN_KEY      = _cfg("ROBINHOOD_TOKEN_KEY",      default="")   # base64 AES-256 key for tokens.enc
+ROBINHOOD_TOKENS_FILE    = _cfg("ROBINHOOD_TOKENS_FILE",    default="tokens.enc")
+
 # ── Strategy: position sizing ─────────────────────────────────
 SIZE_PREFERRED_PCT          = _cfg("SIZE_PREFERRED_PCT",          cast=float, default=0.06)
 SIZE_APPROVED_PCT           = _cfg("SIZE_APPROVED_PCT",           cast=float, default=0.04)
