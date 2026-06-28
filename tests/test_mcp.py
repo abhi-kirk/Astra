@@ -81,6 +81,7 @@ class TestSearchContext:
         monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
         monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
         monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "")
+        monkeypatch.setattr("src.mcp.FMP_API_KEY", "")
 
     def test_no_search_when_both_empty(self, monkeypatch):
         self._patch_none(monkeypatch)
@@ -123,6 +124,7 @@ class TestSearchContext:
         monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
         monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "my-secret-key")
         monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "")
+        monkeypatch.setattr("src.mcp.FMP_API_KEY", "")
         from src.mcp import build_servers
         servers = build_servers()
         assert len(servers) == 1
@@ -143,6 +145,7 @@ class TestSearchContext:
         monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
         monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
         monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "")
+        monkeypatch.setattr("src.mcp.FMP_API_KEY", "")
         ctx = search_context()
         assert ctx["has_search"] is False
         assert ctx["has_sec_edgar"] is False
@@ -151,7 +154,45 @@ class TestSearchContext:
         monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
         monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
         monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "https://secedgar.caseyjhand.com/mcp")
+        monkeypatch.setattr("src.mcp.FMP_API_KEY", "")
         from src.mcp import build_servers
         servers = build_servers()
         edgar = next(s for s in servers if s["name"] == "sec_edgar")
         assert edgar["tool_configuration"]["allowed_tools"] == ["secedgar_get_insider_transactions"]
+
+    def test_fmp_included_when_key_set(self, monkeypatch):
+        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
+        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
+        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "")
+        monkeypatch.setattr("src.mcp.FMP_API_KEY", "testkey123")
+        ctx = search_context()
+        assert ctx["has_search"] is True
+        assert ctx["has_fmp"] is True
+        assert ctx["has_tavily"] is False
+        assert ctx["has_alpha_vantage"] is False
+
+    def test_fmp_excluded_when_key_empty(self, monkeypatch):
+        self._patch_none(monkeypatch)
+        ctx = search_context()
+        assert ctx["has_fmp"] is False
+
+    def test_fmp_key_in_url_and_allowed_tools(self, monkeypatch):
+        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
+        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
+        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "")
+        monkeypatch.setattr("src.mcp.FMP_API_KEY", "mykey456")
+        from src.mcp import build_servers
+        servers = build_servers()
+        assert len(servers) == 1
+        fmp = servers[0]
+        assert fmp["name"] == "fmp"
+        assert "mykey456" in fmp["url"]
+        assert set(fmp["tool_configuration"]["allowed_tools"]) == {"analyst", "calendar"}
+
+    def test_fmp_max_calls_in_context(self, monkeypatch):
+        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
+        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
+        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "")
+        monkeypatch.setattr("src.mcp.FMP_API_KEY", "testkey123")
+        ctx = search_context()
+        assert ctx["max_fmp_calls"] > 0

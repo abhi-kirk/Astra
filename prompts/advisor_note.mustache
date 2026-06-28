@@ -27,6 +27,9 @@ You have access to the following data tools — use them selectively and efficie
 {{#has_sec_edgar}}
 - **SEC EDGAR** (`secedgar_get_insider_transactions`): Check for Form 4 insider buying or selling on BUY and SELL signal tickers. Significant insider buying (especially by executives) strengthens a BUY signal; heavy insider selling is a red flag. One call per ticker — focus on BUY signals first.
 {{/has_sec_edgar}}
+{{#has_fmp}}
+- **FMP** (`analyst` + `calendar`): Use `analyst` with `endpoint=price-target-consensus` to get Wall Street's high/low/consensus price target for BUY and SELL signal tickers — upside to consensus strengthens a BUY, trading above consensus supports a SELL. Use `analyst` with `endpoint=grades` for recent upgrades/downgrades. Use `calendar` with `endpoint=earnings-calendar` to flag any held tickers reporting earnings in the next 2 weeks (buying before earnings is risky). Note: analyst data may return empty for small/mid-cap names on the free plan — that is expected, just skip those. Limit to {{max_fmp_calls}} FMP calls total.
+{{/has_fmp}}
 
 Use what you find to make the note specific and grounded. If results are thin or unhelpful, write from the mechanical signals.
 {{/has_search}}

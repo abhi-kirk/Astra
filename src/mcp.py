@@ -30,6 +30,8 @@ from anthropic.types.beta import (
 from src.config import (
     ALPHA_VANTAGE_API_KEY,
     ALPHA_VANTAGE_MAX_CALLS,
+    FMP_API_KEY,
+    FMP_MAX_CALLS,
     SEC_EDGAR_MCP_URL,
     TAVILY_MAX_SEARCHES,
     TAVILY_MCP_URL,
@@ -66,6 +68,19 @@ def _alpha_vantage() -> BetaRequestMCPServerURLDefinitionParam | None:
     return {"type": "url", "url": url, "name": "alpha_vantage", "tool_configuration": tool_config}
 
 
+def _fmp() -> BetaRequestMCPServerURLDefinitionParam | None:
+    if not FMP_API_KEY:
+        return None
+    # Free tier: 250 calls/day. Analyst data (price targets, grades, earnings calendar)
+    # only available for large/mid caps — small caps gracefully return empty on free plan.
+    url = f"https://financialmodelingprep.com/mcp?apikey={FMP_API_KEY}"
+    tool_config: BetaRequestMCPServerToolConfigurationParam = {
+        "enabled": True,
+        "allowed_tools": ["analyst", "calendar"],
+    }
+    return {"type": "url", "url": url, "name": "fmp", "tool_configuration": tool_config}
+
+
 def _sec_edgar() -> BetaRequestMCPServerURLDefinitionParam | None:
     if not SEC_EDGAR_MCP_URL:
         return None
@@ -88,7 +103,7 @@ def build_servers() -> list[BetaRequestMCPServerURLDefinitionParam]:
         _tavily(),
         _alpha_vantage(),
         _sec_edgar(),
-        # _fmp(),  # Phase 1.5 — add last
+        _fmp(),
     ]
     return [s for s in candidates if s is not None]
 
@@ -128,6 +143,8 @@ def search_context(max_searches: int = TAVILY_MAX_SEARCHES) -> dict[str, Any]:
         "has_tavily":        "tavily" in names,
         "has_alpha_vantage": "alpha_vantage" in names,
         "has_sec_edgar":     "sec_edgar" in names,
+        "has_fmp":           "fmp" in names,
         "max_searches":      max_searches,
         "max_av_calls":      ALPHA_VANTAGE_MAX_CALLS,
+        "max_fmp_calls":     FMP_MAX_CALLS,
     }

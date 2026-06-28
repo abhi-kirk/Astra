@@ -23,6 +23,7 @@ TAVILY_MCP_URL           = _cfg("TAVILY_MCP_URL",           default="")
 ALPHA_VANTAGE_API_KEY    = _cfg("ALPHA_VANTAGE_API_KEY",    default="")
 # Community-hosted, no auth. Falls back gracefully if unavailable.
 SEC_EDGAR_MCP_URL        = _cfg("SEC_EDGAR_MCP_URL",        default="https://secedgar.caseyjhand.com/mcp")
+FMP_API_KEY              = _cfg("FMP_API_KEY",              default="")
 
 # ── AI reasoning ──────────────────────────────────────────────
 REASONING_MODEL      = _cfg("REASONING_MODEL",      default="claude-opus-4-8")
@@ -31,6 +32,9 @@ TAVILY_MAX_SEARCHES  = _cfg("TAVILY_MAX_SEARCHES",  cast=int, default=5)
 # Alpha Vantage free tier: 25 calls/day, 5 calls/min
 # Claude will use tools selectively — cap to avoid blowing the daily limit in one run
 ALPHA_VANTAGE_MAX_CALLS  = _cfg("ALPHA_VANTAGE_MAX_CALLS",  cast=int, default=8)
+# FMP free tier: 250 calls/day. Analyst data (price targets, grades) only available for
+# large/mid caps on the free plan — small caps (RKLB, ASTS) gracefully return nothing.
+FMP_MAX_CALLS            = _cfg("FMP_MAX_CALLS",            cast=int, default=10)
 
 # ── Paper trading ─────────────────────────────────────────────
 PAPER_PORTFOLIO_SIZE       = _cfg("PAPER_PORTFOLIO_SIZE",       cast=float, default=10_000.0)
