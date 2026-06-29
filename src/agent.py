@@ -202,10 +202,15 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
     advisor_note = ""
     if use_ai and any(s["action"] in ("buy", "sell", "watch") for s in signals):
         logger.info(f"Calling Claude for narrative reasoning  (model={REASONING_MODEL})")
-        with timer("Advisor Claude call", logger):
-            advisor_note = call_claude_reasoning(
-                signals, portfolio, market_data, history_context, convictions
-            )
+        try:
+            with timer("Advisor Claude call", logger):
+                advisor_note = call_claude_reasoning(
+                    signals, portfolio, market_data, history_context, convictions
+                )
+        except TimeoutError:
+            logger.warning(f"Advisor Claude call timed out after {ADVISOR_TIMEOUT}s — pipeline continues without advisor note")
+        except Exception:
+            logger.error("Advisor Claude call failed — pipeline continues without advisor note", exc_info=True)
 
     # Log signals
     action_groups: dict[str, list] = {}
