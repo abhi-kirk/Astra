@@ -132,18 +132,31 @@ def get_cost_basis_from_csv() -> dict[str, dict]:
 def get_portfolio() -> dict[str, dict]:
     """
     Best available portfolio data.
-    Priority: Supabase MCP snapshot (<24h) → Supabase trades table → local CSV.
+    Priority: Supabase portfolio snapshot (any age) → Supabase trades table → local CSV.
+
+    The trades table avg_cost is unreliable for tickers that had corporate actions
+    (reverse splits, restructuring) after the CSV seed — the snapshot from the
+    Robinhood API is always preferred even if stale, since daily runs keep it fresh.
     """
     from src.memory import get_latest_portfolio_snapshot
     try:
         snapshot = get_latest_portfolio_snapshot()
         if snapshot:
-            ts = datetime.fromisoformat(snapshot["snapshot_time"].replace("Z", ""))
-            if datetime.now() - ts < timedelta(hours=24):
-                return snapshot["positions"]
+            ts  = datetime.fromisoformat(snapshot["snapshot_time"].replace("Z", ""))
+            age = datetime.now() - ts
+            if age > timedelta(hours=24):
+                logger.warning(
+                    f"Portfolio snapshot is {age.days}d {age.seconds // 3600}h old — "
+                    "using it anyway (trades-table avg_cost unreliable for split/restructured tickers)"
+                )
+            return snapshot["positions"]
     except Exception:
         pass
 
+    logger.warning(
+        "No portfolio snapshot found — falling back to trades table. "
+        "avg_cost will be wrong for any ticker that had a corporate action after the CSV seed."
+    )
     try:
         return get_cost_basis_from_db()
     except Exception:
