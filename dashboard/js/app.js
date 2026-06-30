@@ -1456,6 +1456,244 @@ function initConvictionsDrawer() {
   });
 }
 
+// ── Trade Journal Drawer ──────────────────────────────────────
+
+let _journalSb = null;
+let _pendingJournalCount = 0;
+
+function openJournalDrawer() {
+  document.getElementById('journal-backdrop').classList.remove('hidden');
+  document.getElementById('journal-drawer').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  loadAndRenderJournal();
+}
+
+function closeJournalDrawer() {
+  document.getElementById('journal-backdrop').classList.add('hidden');
+  document.getElementById('journal-drawer').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+async function loadJournalBadge(sb) {
+  if (!isAuthenticated) return;
+  _journalSb = sb;
+  try {
+    const { data, error } = await sb
+      .from('user_trades_log')
+      .select('id')
+      .eq('feedback_status', 'pending');
+    if (error) { console.error('[Journal badge] query error:', error); return; }
+    const count = data?.length ?? 0;
+    _pendingJournalCount = count;
+    updateJournalBadge(count);
+    const btn = document.getElementById('journal-btn');
+    if (btn) btn.classList.remove('hidden');
+  } catch { /* silent */ }
+}
+
+function updateJournalBadge(count) {
+  const badge = document.getElementById('journal-badge');
+  const btn   = document.getElementById('journal-btn');
+  if (!badge || !btn) return;
+  if (count > 0) {
+    badge.textContent = count > 9 ? '9+' : String(count);
+    badge.classList.remove('hidden');
+    btn.classList.add('has-pending');
+  } else {
+    badge.classList.add('hidden');
+    btn.classList.remove('has-pending');
+  }
+}
+
+async function loadAndRenderJournal() {
+  const body = document.getElementById('journal-body');
+  body.innerHTML = '<div class="conv-loading">Loading trade history…</div>';
+
+  try {
+    const { data, error } = await _journalSb
+      .from('user_trades_log')
+      .select('*')
+      .eq('feedback_status', 'pending')
+      .order('detected_at', { ascending: false });
+    if (error) throw error;
+    renderJournalDrawer(data || []);
+  } catch (err) {
+    body.innerHTML = `<div class="conv-loading" style="color:var(--accent-red)">Failed to load: ${err.message}</div>`;
+  }
+}
+
+function renderJournalDrawer(items) {
+  const body = document.getElementById('journal-body');
+  body.innerHTML = '';
+
+  if (!items.length) {
+    body.innerHTML = `<div class="journal-empty">
+      No pending trade reviews.<br>
+      <span style="font-size:11px;opacity:0.5">Trades are auto-detected after each daily run.</span>
+    </div>`;
+    return;
+  }
+
+  items.forEach(item => {
+    const card = buildJournalCard(item);
+    body.appendChild(card);
+  });
+
+  const note = document.createElement('div');
+  note.className = 'journal-ttl-note';
+  note.textContent = 'Pending items expire after 30 days';
+  body.appendChild(note);
+}
+
+function buildJournalCard(item) {
+  const card = document.createElement('div');
+  card.className = 'journal-card';
+
+  const tradeDate  = item.trade_date ? new Date(item.trade_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
+  const actionCls  = item.action === 'buy' ? 'buy' : 'sell';
+  const suspCls    = item.astra_suspicion ? 'astra' : 'manual';
+  const suspIcon   = item.astra_suspicion ? '⚡' : '◦';
+  const suspText   = item.astra_suspicion_reason || '';
+  const priceStr   = item.price_estimated ? ` · ~$${Number(item.price_estimated).toFixed(2)}` : '';
+
+  card.innerHTML = `
+    <div class="journal-card-header">
+      <span class="journal-card-date">${tradeDate}${priceStr}</span>
+      <span class="journal-card-ticker">${item.ticker}</span>
+      <span class="journal-card-action ${actionCls}">${item.action}</span>
+    </div>
+    <div class="journal-suspicion ${suspCls}">
+      <span class="journal-suspicion-icon">${suspIcon}</span>${suspText}
+    </div>
+    <div class="journal-attribution">
+      <button class="journal-attr-btn" data-value="astra">ASTRA Recommendation</button>
+      <button class="journal-attr-btn" data-value="manual">My own call</button>
+    </div>
+    <input class="journal-reason-input" type="text" maxlength="120"
+      placeholder="Why this trade? (optional, ~100 chars)" spellcheck="true">
+    <button class="journal-submit-btn" disabled>SUBMIT →</button>
+  `;
+
+  const attrBtns  = card.querySelectorAll('.journal-attr-btn');
+  const reasonEl  = card.querySelector('.journal-reason-input');
+  const submitBtn = card.querySelector('.journal-submit-btn');
+  let selectedAttr = null;
+
+  attrBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      attrBtns.forEach(b => b.classList.remove('selected', 'astra', 'manual'));
+      btn.classList.add('selected', btn.dataset.value);
+      selectedAttr = btn.dataset.value;
+      submitBtn.disabled = false;
+    });
+  });
+
+  submitBtn.addEventListener('click', async () => {
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Saving…';
+    await submitTradeJournalEntry(item, selectedAttr === 'astra', reasonEl.value.trim(), card);
+  });
+
+  return card;
+}
+
+async function submitTradeJournalEntry(item, fromAstra, reason, card) {
+  try {
+    const now = new Date().toISOString();
+    const { error } = await _journalSb
+      .from('user_trades_log')
+      .update({
+        from_astra_recommendation: fromAstra,
+        user_reason: reason || null,
+        feedback_status: 'submitted',
+        feedback_given_at: now,
+      })
+      .eq('id', item.id);
+    if (error) throw error;
+
+    // If user confirmed an ASTRA recommendation, update the decisions row too
+    if (fromAstra && item.astra_signal_id) {
+      await _journalSb
+        .from('decisions')
+        .update({ user_acted: true, acted_at: now })
+        .eq('id', item.astra_signal_id);
+    } else if (!fromAstra && item.astra_signal_id) {
+      await _journalSb
+        .from('decisions')
+        .update({ user_acted: false })
+        .eq('id', item.astra_signal_id);
+    }
+
+    // Animate card out
+    card.style.transition = 'opacity 0.25s, transform 0.25s';
+    card.style.opacity = '0';
+    card.style.transform = 'translateX(20px)';
+    setTimeout(() => {
+      card.remove();
+      _pendingJournalCount = Math.max(0, _pendingJournalCount - 1);
+      updateJournalBadge(_pendingJournalCount);
+      // Show empty state if no cards left
+      const body = document.getElementById('journal-body');
+      if (!body.querySelector('.journal-card')) {
+        body.innerHTML = `<div class="journal-empty">All caught up!<br>
+          <span style="font-size:11px;opacity:0.5">New trades will appear here after each daily run.</span>
+        </div>`;
+      }
+    }, 280);
+  } catch (err) {
+    const submitBtn = card.querySelector('.journal-submit-btn');
+    submitBtn.textContent = 'Error — retry';
+    submitBtn.disabled = false;
+    console.error('Journal submit error:', err);
+  }
+}
+
+function initJournalDrawer() {
+  document.getElementById('journal-btn').addEventListener('click', openJournalDrawer);
+  document.getElementById('journal-close').addEventListener('click', closeJournalDrawer);
+  document.getElementById('journal-backdrop').addEventListener('click', closeJournalDrawer);
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !document.getElementById('journal-drawer').classList.contains('hidden')) {
+      closeJournalDrawer();
+    }
+  });
+}
+
+// ── Advisor Note Rating ───────────────────────────────────────
+
+function initAdvisorRating(sb, runSummaryId, existingRating) {
+  if (!isAuthenticated) return;
+  const row     = document.getElementById('advisor-rating-row');
+  const doneEl  = document.getElementById('advisor-rating-done');
+  const upBtn   = document.getElementById('advisor-rate-up');
+  const downBtn = document.getElementById('advisor-rate-down');
+
+  row.classList.remove('hidden');
+
+  if (existingRating != null) {
+    upBtn.classList.add('hidden');
+    downBtn.classList.add('hidden');
+    doneEl.classList.remove('hidden');
+    return;
+  }
+
+  async function submitRating(rating) {
+    upBtn.disabled = true; downBtn.disabled = true;
+    try {
+      await sb.from('run_summaries').update({ advisor_rating: rating }).eq('id', runSummaryId);
+      upBtn.classList.add('hidden');
+      downBtn.classList.add('hidden');
+      doneEl.classList.remove('hidden');
+    } catch (err) {
+      upBtn.disabled = false; downBtn.disabled = false;
+      console.error('Rating error:', err);
+    }
+  }
+
+  upBtn.addEventListener('click',   () => submitRating(1));
+  downBtn.addEventListener('click', () => submitRating(-1));
+}
+
 // ── Main render ──────────────────────────────────────────────
 
 function showError(msg) {
@@ -1635,14 +1873,17 @@ async function init() {
   updateLockBtn(isAuthenticated);
   initLockButton(sb);
   initConvictionsDrawer();
+  initJournalDrawer();
 
-  // Show convictions button only when authenticated
+  // Auth-gated header buttons
   if (isAuthenticated) {
     document.getElementById('convictions-btn').classList.remove('hidden');
+    loadJournalBadge(sb);  // loads count and shows journal button
   }
 
   try {
     let raw, decisions = [], runDate, paperTrades = [], signalHistory = {};
+    let runSummaryId = null, existingAdvisorRating = null;
 
     if (isAuthenticated) {
       // Full data fetch — includes raw_output, advisor_note, decisions
@@ -1650,6 +1891,8 @@ async function init() {
       const rawFull = runRow.raw_output || {};
       raw = Array.isArray(rawFull) ? { signals: rawFull } : rawFull;
       runDate = runRow.run_date;
+      runSummaryId = runRow.id;
+      existingAdvisorRating = runRow.advisor_rating ?? null;
       [decisions, paperTrades, signalHistory] = await Promise.all([
         fetchLatestDecisions(sb, runDate),
         fetchOpenPaperTrades(sb),
@@ -1822,6 +2065,11 @@ async function init() {
       } else {
         noteEl.innerHTML = `<p class="advisor-no-note">No advisor note available yet.</p>`;
       }
+    }
+
+    // Advisor rating (auth-gated, only when there's a current run note)
+    if (isAuthenticated && runSummaryId && noteText) {
+      initAdvisorRating(sb, runSummaryId, existingAdvisorRating);
     }
 
     // Store signal history for modal access

@@ -54,6 +54,11 @@
     </div>
 
     <div class="header-right">
+      <button class="journal-btn hidden" id="journal-btn" title="Trade journal — pending feedback">
+        <span class="journal-btn-icon">◎</span>
+        <span>JOURNAL</span>
+        <span class="journal-badge hidden" id="journal-badge">0</span>
+      </button>
       <button class="convictions-btn hidden" id="convictions-btn" title="Edit conviction settings">
         <span class="convictions-btn-icon">✦</span>
         <span>CONVICTIONS</span>
@@ -68,6 +73,19 @@
       </div>
     </div>
   </header>
+
+  <!-- TRADE JOURNAL DRAWER -->
+  <div id="journal-backdrop" class="hidden"></div>
+  <div id="journal-drawer" class="hidden" role="dialog" aria-label="Trade Journal">
+    <div class="conv-header">
+      <span class="conv-title">TRADE JOURNAL</span>
+      <span class="conv-save-status" id="journal-status"></span>
+      <button class="conv-close" id="journal-close" aria-label="Close">✕</button>
+    </div>
+    <div class="conv-body" id="journal-body">
+      <div class="conv-loading">Loading trade history…</div>
+    </div>
+  </div>
 
   <!-- CONVICTIONS DRAWER -->
   <div id="conv-backdrop" class="hidden"></div>
@@ -125,6 +143,12 @@
         </div>
         <div id="advisor-note" class="advisor-card">
           <!-- markdown rendered by JS -->
+        </div>
+        <div id="advisor-rating-row" class="advisor-rating-row hidden">
+          <span class="advisor-rating-label">Was this analysis useful?</span>
+          <button class="advisor-rating-btn" id="advisor-rate-up" data-rating="1" title="Useful">👍</button>
+          <button class="advisor-rating-btn" id="advisor-rate-down" data-rating="-1" title="Not useful">👎</button>
+          <span class="advisor-rating-done hidden" id="advisor-rating-done">Rated ✓</span>
         </div>
       </section>
 

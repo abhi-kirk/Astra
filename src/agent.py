@@ -340,6 +340,17 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
     from src.exploration import screen_and_paper_trade_candidates
     screen_and_paper_trade_candidates(run_date)
 
+    # Outcome tracking: forward returns + trade journal detection
+    from src.outcomes import backfill_outcomes, detect_portfolio_changes
+    try:
+        detect_portfolio_changes()
+    except Exception:
+        logger.error("Trade journal detection failed — pipeline continues", exc_info=True)
+    try:
+        backfill_outcomes()
+    except Exception:
+        logger.error("Outcome backfill failed — pipeline continues", exc_info=True)
+
     total_elapsed = time.perf_counter() - run_start
     logger.info("=" * 60)
     logger.info(f"Run complete in {total_elapsed:.1f}s  |  {summary}")

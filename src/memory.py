@@ -96,7 +96,7 @@ def record_outcome(
 
 
 def save_conviction_snapshot(content: dict) -> None:
-    """Overwrite the single convictions row (upsert pattern)."""
+    """Overwrite the single convictions row (upsert pattern) and append a history snapshot."""
     db = get_client()
     existing = db_rows(db.table("convictions").select("id").limit(1).execute().data)
     if existing:
@@ -109,6 +109,15 @@ def save_conviction_snapshot(content: dict) -> None:
             "content": content,
             "updated_at": datetime.now().isoformat(),
         }).execute()
+    save_conviction_history(content)
+
+
+def save_conviction_history(content: dict) -> None:
+    """Append a full conviction snapshot for audit/history purposes."""
+    get_client().table("conviction_history").insert({
+        "content": content,
+        "saved_at": datetime.now().isoformat(),
+    }).execute()
 
 
 def save_portfolio_snapshot(positions: dict) -> None:
@@ -276,6 +285,16 @@ def get_latest_convictions() -> dict | None:
         .order("updated_at", desc=True).limit(1).execute().data
     )
     return data[0]["content"] if data else None
+
+
+def get_pending_trade_feedback() -> Rows:
+    return db_rows(
+        get_client().table("user_trades_log")
+        .select("*")
+        .eq("feedback_status", "pending")
+        .order("detected_at", desc=True)
+        .execute().data
+    )
 
 
 def get_latest_portfolio_snapshot() -> dict | None:
