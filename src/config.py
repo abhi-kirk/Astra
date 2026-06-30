@@ -76,7 +76,7 @@ EXPLORATION_MAX_AV_CALLS  = _cfg("EXPLORATION_MAX_AV_CALLS",  cast=int, default=
 EXPLORATION_MAX_FMP_CALLS = _cfg("EXPLORATION_MAX_FMP_CALLS", cast=int, default=15)
 
 # ── Claude API call timeouts ──────────────────────────────────
-ADVISOR_TIMEOUT     = _cfg("ADVISOR_TIMEOUT",     cast=int, default=480)  # 8 min — 36 tickers + 4 MCP servers needs headroom
+ADVISOR_TIMEOUT     = _cfg("ADVISOR_TIMEOUT",     cast=int, default=600)  # 10 min — 36 tickers + 4 MCP servers needs headroom
 EXPLORATION_TIMEOUT = _cfg("EXPLORATION_TIMEOUT", cast=int, default=480)  # 8 min
 
 # ── Strategy: position sizing ─────────────────────────────────
