@@ -100,13 +100,24 @@ def call_claude_reasoning(
 
     def _call() -> str:
         if servers:
-            msg = client.beta.messages.create(
-                model=REASONING_MODEL,
-                max_tokens=REASONING_MAX_TOKENS,
-                mcp_servers=servers,
-                messages=[{"role": "user", "content": prompt}],
-                betas=mcp.BETA_FLAGS,
-            )
+            try:
+                msg = client.beta.messages.create(
+                    model=REASONING_MODEL,
+                    max_tokens=REASONING_MAX_TOKENS,
+                    mcp_servers=servers,
+                    messages=[{"role": "user", "content": prompt}],
+                    betas=mcp.BETA_FLAGS,
+                )
+            except anthropic.BadRequestError as exc:
+                if "Connection error while communicating with MCP server" in str(exc):
+                    logger.warning("MCP server unreachable — retrying advisor call without MCP")
+                    msg = client.messages.create(
+                        model=REASONING_MODEL,
+                        max_tokens=REASONING_MAX_TOKENS,
+                        messages=[{"role": "user", "content": prompt}],
+                    )
+                else:
+                    raise
         else:
             msg = client.messages.create(
                 model=REASONING_MODEL,
