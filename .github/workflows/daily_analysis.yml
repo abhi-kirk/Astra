@@ -2,7 +2,7 @@ name: Daily Analysis
 
 on:
   schedule:
-    - cron: "0 13 * * 1-5"   # Weekdays 6am PT (13:00 UTC) — after US pre-market
+    - cron: "17 13 * * 1-5"  # Weekdays 6:17am PT (13:17 UTC) — offset off :00 to dodge GitHub's top-of-hour scheduler contention; still before 6:30am market open
   workflow_dispatch:           # Allow manual trigger from GitHub Actions UI
 
 jobs:
