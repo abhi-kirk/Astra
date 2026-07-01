@@ -1516,6 +1516,10 @@ async function loadAndRenderJournal() {
       .eq('feedback_status', 'pending')
       .order('detected_at', { ascending: false });
     if (error) throw error;
+    // Reconcile the header badge with the authoritative pending count — self-heals a
+    // stale count left behind when an item was resolved in another tab/device or expired.
+    _pendingJournalCount = (data || []).length;
+    updateJournalBadge(_pendingJournalCount);
     renderJournalDrawer(data || []);
   } catch (err) {
     body.innerHTML = `<div class="conv-loading" style="color:var(--accent-red)">Failed to load: ${err.message}</div>`;
