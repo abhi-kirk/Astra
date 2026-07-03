@@ -1,0 +1,60 @@
+name: DB Backup
+
+# Free-tier Supabase has no automated backups, and tables like decisions,
+# run_summaries, paper_trades, and conviction_history exist nowhere else.
+# Daily this dumps the public schema (custom format) to a Cloudflare R2 bucket —
+# off-provider, versioned by date, plus a rolling latest.dump. Scheduler drift is
+# irrelevant for backups, so GitHub's native cron is fine here.
+#
+# SUPABASE_DB_URL must be the SESSION POOLER string (host *.pooler.supabase.com,
+# user postgres.<ref>): the direct db.<ref>.supabase.co host is IPv6-only and
+# GitHub runners are IPv4. The password is passed via PGPASSWORD (not the URI) so
+# special chars (%, &, *) don't need percent-encoding.
+# Restore:  pg_restore --clean --if-exists -d "<target_db_url>" latest.dump
+on:
+  schedule:
+    - cron: "0 8 * * *"   # daily 08:00 UTC / 1:00am PT (after the trading day's writes)
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install PostgreSQL 17 client
+        run: |
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+      - name: Dump public schema
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          STAMP=$(date -u +%Y-%m-%d)
+          # Parse the URL so the password goes via PGPASSWORD, not the URI (avoids
+          # percent-encoding issues). Split on the last '@' (host has none) and the
+          # first ':' of userinfo (user has none) — robust to any symbol in the password.
+          rest="${SUPABASE_DB_URL#*://}"
+          userinfo="${rest%@*}"; hostpart="${rest##*@}"
+          db_user="${userinfo%%:*}"; export PGPASSWORD="${userinfo#*:}"
+          hostport="${hostpart%%/*}"; db_name="${hostpart##*/}"; db_name="${db_name%%\?*}"
+          db_host="${hostport%%:*}"; db_port="${hostport##*:}"
+          # Custom format (-Fc): compressed and restorable with pg_restore.
+          # --schema=public covers all ASTRA data; skips Supabase-managed
+          # schemas (auth/storage/vault) we don't own and can't fully dump.
+          pg_dump -h "$db_host" -p "$db_port" -U "$db_user" -d "$db_name" --schema=public -Fc -f "astra-${STAMP}.dump"
+          echo "STAMP=$STAMP" >> "$GITHUB_ENV"
+          ls -lh "astra-${STAMP}.dump"
+
+      - name: Upload to Cloudflare R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_S3_ENDPOINT }}
+          BUCKET: astra-db-backups
+        run: |
+          # aws-cli v2 is preinstalled on ubuntu-latest. R2 speaks the S3 API.
+          aws s3 cp "astra-${STAMP}.dump" "s3://${BUCKET}/daily/astra-${STAMP}.dump" --endpoint-url "$R2_ENDPOINT"
+          aws s3 cp "astra-${STAMP}.dump" "s3://${BUCKET}/latest.dump"            --endpoint-url "$R2_ENDPOINT"
