@@ -17,21 +17,21 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import anthropic
 import chevron
 
-from src import memory, mcp
+from src import mcp, memory
 from src.config import (
     ADVISOR_TIMEOUT,
     ANTHROPIC_API_KEY,
     REASONING_MAX_TOKENS,
     REASONING_MODEL,
 )
-from src.logger import timer
-from src.timeout import run_with_timeout
 from src.data_layer import get_market_data_bulk, get_portfolio, load_convictions
 from src.strategy import screen_all_positions
+from src.timeout import run_with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -44,14 +44,15 @@ def call_claude_reasoning(
     market_data: dict,
     history_context: str,
     convictions: dict,
-) -> str:
+) -> tuple[str, Any]:
     """
     Call Claude API to synthesize mechanical signals into advisor narrative.
+    Returns (advisor_note, token_usage) — usage is the Anthropic Usage object or None.
     Uses Tavily MCP for live news search when available.
     Returns a markdown-formatted analysis string.
     """
     if not ANTHROPIC_API_KEY:
-        return "Claude API key not set — mechanical signals only."
+        return ("Claude API key not set — mechanical signals only.", None)
 
     action_groups: dict[str, list] = {}
     for sig in signals:
@@ -98,7 +99,7 @@ def call_claude_reasoning(
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     servers = mcp.build_servers()
 
-    def _call() -> str:
+    def _call() -> tuple[str, Any]:
         if servers:
             try:
                 msg = client.beta.messages.create(
@@ -127,9 +128,12 @@ def call_claude_reasoning(
         usage = getattr(msg, "usage", None)
         if usage:
             logger.info(f"Advisor tokens — input: {usage.input_tokens}  output: {usage.output_tokens}  total: {usage.input_tokens + usage.output_tokens}")
-        return mcp.extract_text(msg) or ""
+        return (mcp.extract_text(msg) or "", usage)
 
-    return run_with_timeout(_call, ADVISOR_TIMEOUT, label="Advisor Claude call") or "No advisor note generated."
+    result = run_with_timeout(_call, ADVISOR_TIMEOUT, label="Advisor Claude call")
+    if not result or not result[0]:
+        return ("No advisor note generated.", result[1] if result else None)
+    return result
 
 
 def build_public_output(output: dict) -> dict:
@@ -174,8 +178,22 @@ def build_public_output(output: dict) -> dict:
 
 
 def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool = True):
-    run_start = time.perf_counter()
+    """Public entry point — wraps _run with observability (metrics + health)."""
+    from src.observability import RunObserver
     run_date = datetime.now(timezone.utc).isoformat()
+    obs = RunObserver(run_date, mode)
+    try:
+        return _run(obs, mode, single_ticker, use_ai)
+    except Exception as e:
+        obs.fail(e)
+        raise
+    finally:
+        obs.flush()
+
+
+def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
+    run_start = time.perf_counter()
+    run_date = obs.run_date
     logger.info("=" * 60)
     logger.info(f"ASTRA — {mode.upper()} run  |  {run_date[:10]}")
     logger.info("=" * 60)
@@ -184,14 +202,19 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
     excluded = {e["ticker"] for e in convictions.get("exclusions", [])}
 
     from src.robinhood import sync_portfolio_to_supabase
-    with timer("Robinhood portfolio sync", logger):
-        sync_portfolio_to_supabase()
+    with obs.phase("robinhood_sync"):
+        try:
+            sync_portfolio_to_supabase()
+            obs.record_service("robinhood", ok=True)
+        except Exception as e:
+            obs.record_service("robinhood", ok=False, detail=str(e))
+            raise
 
     portfolio = get_portfolio()
     portfolio = {t: v for t, v in portfolio.items() if t not in excluded}
     logger.info(f"Portfolio loaded: {len(portfolio)} open positions (excluded: {sorted(excluded)})")
 
-    with timer(f"Market data fetch ({len(portfolio)} tickers)", logger):
+    with obs.phase("market_data"):
         market_data = get_market_data_bulk(list(portfolio.keys()))
 
     errors = [t for t, d in market_data.items() if "error" in d]
@@ -202,7 +225,7 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
         {single_ticker: portfolio.get(single_ticker, {})} if single_ticker else portfolio
     )
 
-    with timer("Strategy screening", logger):
+    with obs.phase("screening"):
         signals = screen_all_positions(
             portfolio_for_screen, market_data, convictions,
             full_portfolio=portfolio if single_ticker else None,
@@ -214,14 +237,18 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
     if use_ai and any(s["action"] in ("buy", "sell", "watch") for s in signals):
         logger.info(f"Calling Claude for narrative reasoning  (model={REASONING_MODEL})")
         try:
-            with timer("Advisor Claude call", logger):
-                advisor_note = call_claude_reasoning(
+            with obs.phase("advisor"):
+                advisor_note, advisor_usage = call_claude_reasoning(
                     signals, portfolio, market_data, history_context, convictions
                 )
+            obs.record_advisor(REASONING_MODEL, advisor_usage)
+            obs.record_service("anthropic", ok=bool(advisor_note))
         except TimeoutError:
             logger.warning(f"Advisor Claude call timed out after {ADVISOR_TIMEOUT}s — pipeline continues without advisor note")
-        except Exception:
+            obs.record_service("anthropic", ok=False, detail="timeout")
+        except Exception as e:
             logger.error("Advisor Claude call failed — pipeline continues without advisor note", exc_info=True)
+            obs.record_service("anthropic", ok=False, detail=str(e))
 
     # Log signals
     action_groups: dict[str, list] = {}
@@ -359,6 +386,23 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
         backfill_outcomes()
     except Exception:
         logger.error("Outcome backfill failed — pipeline continues", exc_info=True)
+
+    # Observability: capture run metrics + active infra/MCP health probes
+    from src.observability import probe_endpoints
+    obs.record(
+        positions_screened=len(portfolio),
+        num_signals=len(signals),
+        buy_count=len(buy_tickers),
+        sell_count=len(sell_tickers),
+        watch_count=len(action_groups.get("watch", [])),
+        market_data_errors=len(errors),
+    )
+    obs.record_service(
+        "yfinance",
+        ok=(len(errors) < max(1, len(portfolio)) * 0.5),
+        detail=f"{len(errors)}/{len(portfolio)} tickers errored",
+    )
+    probe_endpoints(obs)
 
     total_elapsed = time.perf_counter() - run_start
     logger.info("=" * 60)
