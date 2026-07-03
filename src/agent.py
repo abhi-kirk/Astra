@@ -339,10 +339,8 @@ def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool
     # Push the tally + advisor note to Telegram (no-op if unconfigured; never fatal)
     from src import notify
     notify.notify_run(
-        run_date=run_date,
         buy_tickers=buy_tickers,
         sell_tickers=sell_tickers,
-        watch_count=len(action_groups.get("watch", [])),
         advisor_note=advisor_note,
         mode=mode,
     )

@@ -10,7 +10,6 @@ never breaks the run.
 """
 
 import logging
-from datetime import datetime
 
 import requests
 from telegramify_markdown import markdownify
@@ -44,43 +43,37 @@ def _extract_gist(md: str, max_chars: int = _GIST_MAX) -> str:
     return ""
 
 
-def _fmt_date(run_date) -> str:
-    """Format a run_date to 'Mon Jul 6'. Accepts a plain date ('2026-07-06') or a
-    full ISO timestamp ('2026-07-06T15:17:...+00:00'). Falls back to the raw value."""
-    s = str(run_date)
-    for parse in (lambda: datetime.fromisoformat(s),
-                  lambda: datetime.strptime(s[:10], "%Y-%m-%d")):
-        try:
-            return parse().strftime("%a %b %-d")
-        except (ValueError, TypeError):
-            continue
-    return s
+def format_message(buy_tickers, sell_tickers, advisor_note, mode="simulation") -> str:
+    """Compose the run message as Markdown and convert it to Telegram MarkdownV2.
 
-
-def format_message(run_date, buy_tickers, sell_tickers, watch_count,
-                   advisor_note, mode="simulation") -> str:
-    """Compose the run message as Markdown and convert it to Telegram MarkdownV2."""
+    No date/title line: the bot name ("ASTRA Signals") and Telegram's own timestamp
+    already supply that, so that scarce banner space goes to the advisor note instead.
+    Buy/sell use 🟢/🔴 — Telegram text can't be colored, so a colored emoji is the only
+    way to carry the green/red cue (arrow/chart emoji are monochrome or mis-colored).
+    """
     buys = ", ".join(buy_tickers) if buy_tickers else "none"
     sells = ", ".join(sell_tickers) if sell_tickers else "none"
 
-    head = [f"🛰️ **ASTRA — {_fmt_date(run_date)}**"]
+    head = []
     if mode and mode != "simulation":
         head.append(f"_mode: {mode}_")
-    head += [f"🟢 **BUY:** {buys}", f"🔴 **SELL:** {sells}", f"👀 {watch_count} watching"]
+    head += [f"🟢 **BUY:** {buys}", f"🔴 **SELL:** {sells}"]
     header = "\n".join(head)
     footer = f"[Open dashboard →]({DASHBOARD_URL})"
 
     note = (advisor_note or "").strip()
     if not note:
-        body = "_No advisor note (AI skipped)._"
+        md = f"{header}\n\n_No advisor note (AI skipped)._\n\n{footer}"
     else:
         gist = _extract_gist(note)
         if len(note) > _NOTE_BUDGET:
             note = note[:_NOTE_BUDGET].rstrip() + "…"
-        # Gist leads (visible in the collapsed banner); full formatted note follows.
-        body = f"{gist}\n\n{note}" if gist else note
+        # Gist hugs the tally (single newline, no blank line) so it lands within the
+        # phone's ~4-line collapsed banner; the full formatted note follows after a gap.
+        lead = f"{header}\n{gist}" if gist else header
+        md = f"{lead}\n\n{note}\n\n{footer}"
 
-    converted = markdownify(f"{header}\n\n{body}\n\n{footer}")
+    converted = markdownify(md)
     if len(converted) > _MAX_LEN:
         # Note too long even after the budget — drop it, keep the actionable header.
         converted = markdownify(f"{header}\n\n_Full advisor note on the dashboard._\n\n{footer}")
@@ -112,8 +105,6 @@ def send(text: str) -> bool:
         return False
 
 
-def notify_run(run_date, buy_tickers, sell_tickers, watch_count,
-               advisor_note, mode="simulation") -> bool:
+def notify_run(buy_tickers, sell_tickers, advisor_note, mode="simulation") -> bool:
     """Format and send the daily run notification."""
-    return send(format_message(run_date, buy_tickers, sell_tickers,
-                               watch_count, advisor_note, mode))
+    return send(format_message(buy_tickers, sell_tickers, advisor_note, mode))

@@ -15,59 +15,55 @@ from src import notify
 # ---------------------------------------------------------------------------
 
 class TestFormatMessage:
-    def test_includes_tickers_and_counts(self):
-        msg = notify.format_message(
-            "2026-07-06", ["MSFT", "NVDA"], ["DAL"], 7, "All good here")
+    def test_includes_tickers(self):
+        msg = notify.format_message(["MSFT", "NVDA"], ["DAL"], "All good here")
         assert "MSFT" in msg and "NVDA" in msg
         assert "DAL" in msg
-        assert "watching" in msg
         assert "All good here" in msg
 
     def test_empty_signals_show_none(self):
-        msg = notify.format_message("2026-07-06", [], [], 0, "note text")
+        msg = notify.format_message([], [], "note text")
         assert "BUY" in msg and "SELL" in msg
         assert "none" in msg
 
+    def test_no_watching_line(self):
+        msg = notify.format_message([], ["DAL"], "note")
+        assert "watching" not in msg
+
+    def test_no_redundant_astra_date_header(self):
+        # The bot name + Telegram timestamp cover this; message must not add its own.
+        msg = notify.format_message([], ["DAL"], "Sell now")
+        assert "ASTRA —" not in msg and "ASTRA \\—" not in msg
+
     def test_markdown_note_is_converted(self):
-        # Advisor notes are Markdown; the converter must render, not pass through.
-        msg = notify.format_message(
-            "2026-07-06", [], ["DAL"], 0, "## Priority\n\nSell **DAL** now")
+        msg = notify.format_message([], ["DAL"], "## Priority\n\nSell **DAL** now")
         assert "##" not in msg          # header converted, not literal
         assert "**DAL**" not in msg     # bold converted to MarkdownV2
         assert "Priority" in msg and "Sell" in msg
 
     def test_empty_note_placeholder(self):
-        msg = notify.format_message("2026-07-06", ["MSFT"], [], 1, "")
+        msg = notify.format_message(["MSFT"], [], "")
         assert "No advisor note" in msg
 
     def test_includes_dashboard_link(self):
-        msg = notify.format_message("2026-07-06", [], [], 0, "n")
+        msg = notify.format_message([], [], "n")
         assert "abhi-kirk.github.io" in msg
 
     def test_truncates_long_note_within_limit(self):
-        msg = notify.format_message("2026-07-06", [], [], 0, "x" * 6000)
+        msg = notify.format_message([], [], "x" * 6000)
         assert len(msg) <= notify._MAX_LEN
 
     def test_live_mode_tagged(self):
-        msg = notify.format_message("2026-07-06", [], [], 0, "n", mode="live")
+        msg = notify.format_message([], [], "n", mode="live")
         assert "mode: live" in msg
 
-    def test_iso_timestamp_date_formatted(self):
-        msg = notify.format_message("2026-07-03T15:17:12.853144+00:00", [], [], 0, "n")
-        assert "Fri Jul 3" in msg
-        assert "T15:17" not in msg
-
-    def test_bad_date_falls_back(self):
-        # tested on the helper directly — MarkdownV2 would escape the hyphens
-        assert notify._fmt_date("not-a-date") == "not-a-date"
-
-    def test_output_is_mardownv2_string(self):
-        msg = notify.format_message("2026-07-06", ["MSFT"], [], 3, "hello")
+    def test_output_is_markdownv2_string(self):
+        msg = notify.format_message(["MSFT"], [], "hello")
         assert isinstance(msg, str) and msg
 
     def test_gist_leads_before_note_body(self):
         note = "## Title\n\n---\n\n### 1. PRIORITY ACTIONS\n\nThe five must sell now. More detail follows."
-        msg = notify.format_message("2026-07-06", [], ["DAL"], 0, note)
+        msg = notify.format_message([], ["DAL"], note)
         # gist (first prose sentence) appears before the note's section header
         assert msg.index("must sell now") < msg.index("PRIORITY")
 
@@ -137,6 +133,6 @@ class TestSend:
 class TestNotifyRun:
     def test_formats_then_sends(self):
         with patch.object(notify, "send", return_value=True) as send:
-            assert notify.notify_run("2026-07-06", ["MSFT"], [], 3, "note text") is True
+            assert notify.notify_run(["MSFT"], [], "note text") is True
             sent_text = send.call_args.args[0]
             assert "MSFT" in sent_text and "note text" in sent_text
