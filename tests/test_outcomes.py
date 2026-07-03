@@ -7,13 +7,10 @@ DB and yfinance calls are mocked — tests cover the diff/attribution logic only
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from src.outcomes import (
     _parse_snapshot_date,
     detect_portfolio_changes,
 )
-
 
 # ---------------------------------------------------------------------------
 # _parse_snapshot_date

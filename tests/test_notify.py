@@ -5,10 +5,7 @@ Telegram send gating. No network: requests.post is mocked.
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from src import notify
-
 
 # ---------------------------------------------------------------------------
 # format_message

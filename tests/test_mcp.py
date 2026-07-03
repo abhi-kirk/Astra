@@ -4,13 +4,10 @@ Unit tests for src/mcp.py — pure utility functions only.
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from anthropic.types import TextBlock
 from anthropic.types.beta import BetaTextBlock
 
 from src.mcp import extract_text, search_context
-
 
 # ---------------------------------------------------------------------------
 # extract_text

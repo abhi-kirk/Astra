@@ -2,7 +2,6 @@
 Unit tests for src/strategy.py — all pure functions, no I/O.
 """
 
-import pytest
 
 from src.strategy import (
     check_hard_rules,
@@ -14,7 +13,6 @@ from src.strategy import (
     screen_position,
     technical_signal,
 )
-
 
 # ---------------------------------------------------------------------------
 # is_excluded

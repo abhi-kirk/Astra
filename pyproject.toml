@@ -23,6 +23,8 @@ dependencies = [
 dev = [
     "pytest>=7.4",
     "pytest-mock>=3.12",
+    "ruff>=0.15",
+    "pyright>=1.1.400",
 ]
 
 [tool.setuptools.packages.find]
@@ -33,3 +35,18 @@ include = ["src*"]
 testpaths = ["tests"]
 addopts = "-q --tb=short"
 pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501", "E402"]
+
+[tool.pyright]
+include = ["src"]
+pythonVersion = "3.13"
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "basic"

@@ -1,6 +1,7 @@
 """Tests for src/timeout.py — shared daemon-thread timeout utility."""
 
 import time
+
 import pytest
 
 from src.timeout import run_with_timeout

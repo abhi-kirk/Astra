@@ -9,6 +9,10 @@ Convictions come from Supabase convictions table (single source of truth).
 Market/fundamental data comes from yfinance (free, EOD).
 """
 
+# pandas' type stubs are imprecise about Series-vs-scalar, producing false positives
+# on the numeric coercions below. Suppress those specific rules for this file only.
+# pyright: reportArgumentType=false, reportAttributeAccessIssue=false, reportCallIssue=false
+
 import logging
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed

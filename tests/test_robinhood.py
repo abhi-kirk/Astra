@@ -2,20 +2,17 @@
 Tests for src/robinhood.py — pure functions only (no credentials needed).
 """
 
+import base64
 import json
 import os
-import base64
-import tempfile
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from src.robinhood import (
-    _positions_to_portfolio,
     _enrich_num_buys,
+    _positions_to_portfolio,
 )
-
 
 # ---------------------------------------------------------------------------
 # _positions_to_portfolio
@@ -110,7 +107,6 @@ class TestDecryptTokens:
     def test_decrypt_round_trip(self, monkeypatch, tmp_path):
         """Encrypt a known payload and verify decrypt_tokens recovers it."""
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-        import os
 
         key = os.urandom(32)
         iv  = os.urandom(12)

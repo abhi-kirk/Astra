@@ -186,8 +186,9 @@ def check_graduations(portfolio_tickers: set[str]) -> None:
     Mark on_radar / paper_trading candidates as graduated when they appear
     in the real Robinhood portfolio. Called by sync_portfolio_to_supabase().
     """
-    from src.memory import get_all_exploration_tickers, update_exploration_status
-    from src.db import get_client, rows as db_rows
+    from src.db import get_client
+    from src.db import rows as db_rows
+    from src.memory import update_exploration_status
 
     try:
         data = db_rows(
@@ -257,8 +258,10 @@ def screen_and_paper_trade_candidates(run_date: str) -> None:
             memory.update_exploration_status(ticker, "paper_trading")
         else:
             status_parts = []
-            if not quality_pass: status_parts.append("quality fail")
-            if not tech_pass:    status_parts.append("no technical signal")
+            if not quality_pass:
+                status_parts.append("quality fail")
+            if not tech_pass:
+                status_parts.append("no technical signal")
             logger.info(f"{ticker}: hold ({', '.join(status_parts)})")
 
 
@@ -273,8 +276,8 @@ def run() -> None:
     logger.info(f"ASTRA EXPLORATION — weekly discovery run  |  {run_date[:10]}")
     logger.info("=" * 60)
 
-    from src.data_layer import load_convictions
     from src import memory
+    from src.data_layer import load_convictions
 
     convictions       = load_convictions()
     exclusion_tickers = {e["ticker"] for e in convictions.get("exclusions", [])}

@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/py_check.sh",
+            "timeout": 30,
+            "statusMessage": "ruff + pyright"
+          }
+        ]
+      }
+    ]
+  }
+}

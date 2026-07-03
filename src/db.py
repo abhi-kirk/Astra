@@ -8,9 +8,8 @@ Dashboard JS uses the anon key directly — never import service key client-side
 from functools import lru_cache
 from typing import Any, cast
 
+from src.config import SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY, SUPABASE_URL
 from supabase import Client, create_client
-
-from src.config import SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_ANON_KEY
 
 # The Supabase SDK types APIResponse.data as List[JSON] — a broad recursive union
 # that includes None, bool, int, float, etc. This alias + helper are the single

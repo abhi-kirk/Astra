@@ -26,7 +26,6 @@ from src.config import (
     TECH_SIGNALS_REQUIRED,
 )
 
-
 Signal = dict[str, Any]
 
 

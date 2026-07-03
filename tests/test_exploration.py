@@ -5,10 +5,10 @@ No network, no Supabase, no Anthropic — all I/O mocked or untouched.
 """
 
 import json
+
 import pytest
 
 from src.exploration import build_theme_queries, filter_known_tickers, parse_candidates
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
