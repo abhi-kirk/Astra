@@ -1,9 +1,9 @@
 name: Daily Analysis
 
 on:
-  schedule:
-    - cron: "17 13 * * 1-5"  # Weekdays 6:17am PT (13:17 UTC) — offset off :00 to dodge GitHub's top-of-hour scheduler contention; still before 6:30am market open
-  workflow_dispatch:           # Allow manual trigger from GitHub Actions UI
+  # Daily trigger is Supabase pg_cron → net.http_post → workflow_dispatch (migration 006),
+  # which fires on time (GitHub's own scheduler drifted 2–3.5 hrs). Also allows manual runs.
+  workflow_dispatch:
 
 jobs:
   analyze:
