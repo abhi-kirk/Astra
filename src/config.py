@@ -82,3 +82,8 @@ EXPLORATION_TIMEOUT = _cfg("EXPLORATION_TIMEOUT", cast=int, default=480)  # 8 mi
 # ── Strategy: position sizing ─────────────────────────────────
 SIZE_PREFERRED_PCT          = _cfg("SIZE_PREFERRED_PCT",          cast=float, default=0.06)
 SIZE_APPROVED_PCT           = _cfg("SIZE_APPROVED_PCT",           cast=float, default=0.04)
+
+# ── Notifications (Telegram) ──────────────────────────────────
+# Bot token from @BotFather; chat id of the destination chat. Both unset = no-op.
+TELEGRAM_BOT_TOKEN = _cfg("TELEGRAM_BOT_TOKEN", default="")
+TELEGRAM_CHAT_ID   = _cfg("TELEGRAM_CHAT_ID",   default="")

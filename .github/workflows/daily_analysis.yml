@@ -44,6 +44,8 @@ jobs:
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
           ROBINHOOD_TOKEN_KEY: ${{ secrets.ROBINHOOD_TOKEN_KEY }}
           ROBINHOOD_ACCOUNT_NUMBER: ${{ secrets.ROBINHOOD_ACCOUNT_NUMBER }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python -m src.agent --mode simulation
 
       # Analysis output goes to Supabase only — no files committed back to repo.
