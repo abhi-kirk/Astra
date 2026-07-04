@@ -63,13 +63,17 @@
         <span class="convictions-btn-icon">✦</span>
         <span>CONVICTIONS</span>
       </button>
+      <a class="header-link" href="https://github.com/abhi-kirk/Astra" target="_blank" rel="noopener" title="Source + full write-up on GitHub">
+        <span class="header-link-icon">↗</span>
+        <span>GITHUB</span>
+      </a>
       <button class="lock-btn" id="lock-btn" title="Toggle private view">
         <span id="lock-icon">🔒</span>
         <span id="lock-label">PRIVATE</span>
       </button>
       <div id="live-indicator" class="live-badge">
         <span class="pulse-dot"></span>
-        <span>SIMULATION</span>
+        <span>LIVE · APPROVAL-GATED</span>
       </div>
     </div>
   </header>
@@ -128,10 +132,66 @@
             <span class="hero-tag">CANNABIS</span>
           </div>
           <h1 class="hero-headline">Systematic conviction trading.</h1>
+          <p class="hero-standfirst intro-public">
+            A personal AI advisor that turns <b>my own investment convictions</b> into disciplined
+            daily signals and enforces the risk rules emotion tends to override — now trading
+            <b>real money, with my approval on every trade</b>, after earning its way up from simulation.
+            <a class="standfirst-link" href="https://github.com/abhi-kirk/Astra/blob/main/README.md" target="_blank" rel="noopener">Read the full story&nbsp;→</a>
+          </p>
           <p class="hero-sub" id="hero-sub">Loading signals…</p>
         </div>
         <div class="hero-right">
           <span id="run-summary-text" class="summary-text"></span>
+        </div>
+      </section>
+
+      <!-- MISSION INTRO (public-only — hidden for the owner) -->
+      <section id="astra-intro" class="intro-public">
+        <div class="phase-track" role="img" aria-label="Roadmap: Phases 1 and 1.5 complete, Phase 2 current (real money, approval-gated), Phases 3 and 4 ahead">
+          <div class="phase-node done">
+            <span class="phase-dot"></span>
+            <span class="phase-lbl">P1 · Simulation</span>
+          </div>
+          <span class="phase-line done"></span>
+          <div class="phase-node done">
+            <span class="phase-dot"></span>
+            <span class="phase-lbl">P1.5 · Paper trading</span>
+          </div>
+          <span class="phase-line done"></span>
+          <div class="phase-node now">
+            <span class="phase-dot"></span>
+            <span class="phase-lbl">P2 · Real $, approval</span>
+          </div>
+          <span class="phase-line"></span>
+          <div class="phase-node">
+            <span class="phase-dot"></span>
+            <span class="phase-lbl">P3 · Partial auto</span>
+          </div>
+          <span class="phase-line"></span>
+          <div class="phase-node">
+            <span class="phase-dot"></span>
+            <span class="phase-lbl">P4 · Full auto</span>
+          </div>
+        </div>
+        <p class="phase-caption">Currently <b>Phase 2 of 4</b> — real money, with my approval on every trade and a <b>$1,000</b> per-trade cap. Autonomy expands only as the track record justifies it.</p>
+
+        <div class="intro-pillars">
+          <div class="intro-pillar">
+            <div class="intro-pillar-h">Earns autonomy</div>
+            <div class="intro-pillar-t">On probation, not a black box — it works up to full autonomy by proving itself.</div>
+          </div>
+          <div class="intro-pillar">
+            <div class="intro-pillar-h">My convictions</div>
+            <div class="intro-pillar-t">Systematizes my judgment across space, tech &amp; EV — it doesn't replace it.</div>
+          </div>
+          <div class="intro-pillar">
+            <div class="intro-pillar-h">Rules in code</div>
+            <div class="intro-pillar-t">Hard risk guardrails the deterministic screen enforces — the AI never overrides them.</div>
+          </div>
+          <div class="intro-pillar">
+            <div class="intro-pillar-h">Auditable</div>
+            <div class="intro-pillar-t">Every signal is logged and scored against its forward return.</div>
+          </div>
         </div>
       </section>
 
@@ -163,6 +223,15 @@
         <div class="section-label">
           <span class="section-icon">◈</span>
           <span>FLEET STATUS</span>
+        </div>
+
+        <div class="signal-legend intro-public">
+          <span class="signal-legend-lab">Signals</span>
+          <span class="lg-item"><span class="lg-badge lg-buy">BUY</span>opens a paper position</span>
+          <span class="lg-item"><span class="lg-badge lg-sell">SELL</span>trim / exit</span>
+          <span class="lg-item"><span class="lg-badge lg-watch">WATCH</span>one condition met</span>
+          <span class="lg-item"><span class="lg-badge lg-hold">HOLD</span>no action</span>
+          <span class="lg-item"><span class="lg-badge lg-block">BLOCKED</span>a hard rule forbids it</span>
         </div>
 
         <!-- Lanes injected by JS -->

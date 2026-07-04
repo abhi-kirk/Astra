@@ -44,7 +44,7 @@ flowchart TD
     linkStyle default stroke:#888888,stroke-width:2px;
 ```
 
-Every position resolves to one signal: **BUY · SELL · WATCH · HOLD · BLOCKED**. A BUY opens a fractional paper trade automatically; it closes when the signal changes — building a live, auditable track record before any real money is involved. A separate weekly **discovery** run searches within each conviction theme for new names ASTRA hasn't seen, scores its own confidence in them, and surfaces the strongest as candidates.
+Every position resolves to one signal: **BUY · SELL · WATCH · HOLD · BLOCKED**. A BUY opens a fractional paper trade automatically; it closes when the signal changes — an auditable track record that now runs in parallel with approval-gated real-money trades. A separate weekly **discovery** run searches within each conviction theme for new names ASTRA hasn't seen, scores its own confidence in them, and surfaces the strongest as candidates.
 
 <p align="center">
   <img src="images/astra-on-radar.png" alt="ASTRA discovery — On Radar candidates" width="900"/>
@@ -97,13 +97,13 @@ The dashboard serves two tiers. **Public** visitors see tickers, signals, and sc
 
 ## Roadmap
 
-Autonomy expands only as the paper-trading track record justifies it.
+Autonomy expands only as the track record justifies it.
 
 | Phase | Goal | Status |
 |---|---|---|
 | **1** | Simulation — data pipeline, strategy engine, AI reasoning, logging, dashboard | Complete ✅ |
 | **1.5** | Daily runs · MCP-enriched analysis · paper trading · discovery engine · trade journal | Complete ✅ |
-| **2** | Real money · human approval for every buy and sell · small initial budget | Planned |
+| **2** | Real money · human approval for every buy and sell · ~$1,000 per-trade cap | Current 🟢 |
 | **3** | Expanded limits · partial automation for high-conviction, clear-signal trades | Future |
 | **4** | Full automation within defined guardrails (themes, position caps, per-trade limits) | Future |
 

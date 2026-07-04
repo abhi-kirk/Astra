@@ -350,6 +350,7 @@ header, main, #modal-overlay { position: relative; z-index: 1; }
 .summary-tickers { color: var(--text-secondary); display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .summary-ticker-unit { white-space: nowrap; display: inline-flex; align-items: center; gap: 2px; }
 .summary-sep { color: var(--text-dim); white-space: nowrap; }
+.summary-empty { color: var(--text-dim); font-family: var(--font-mono); }
 
 .advisor-no-note {
   color: var(--text-secondary);
@@ -1676,4 +1677,111 @@ header, main, #modal-overlay { position: relative; z-index: 1; }
   .header-center { display: none; }
   .pos-card { width: 160px; }
   #modal-content { padding: 16px 20px 28px; }
+}
+
+/* ============================================================
+   MISSION INTRO (public-only briefing for cold visitors)
+   standfirst · phase tracker · differentiator pillars · signal legend
+   ============================================================ */
+
+/* Header GitHub link — mirrors .lock-btn */
+.header-link {
+  display: flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border); border-radius: 100px;
+  padding: 5px 12px;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 1px;
+  color: var(--text-muted); text-decoration: none;
+  transition: border-color 0.2s, color 0.2s;
+}
+.header-link:hover { border-color: var(--accent-cyan); color: var(--accent-cyan); }
+.header-link-icon { font-size: 12px; }
+
+/* Standfirst — one-line "what is this", under the headline */
+.hero-standfirst {
+  font-family: var(--font-body); font-size: 15px; line-height: 1.55;
+  color: var(--text-secondary); max-width: 66ch; margin: 4px 0 0;
+}
+.hero-standfirst b { color: var(--text-primary); font-weight: 600; }
+.standfirst-link {
+  color: var(--accent-cyan); text-decoration: none; white-space: nowrap;
+  border-bottom: 1px solid rgba(56,189,248,0.35);
+}
+.standfirst-link:hover { border-bottom-color: var(--accent-cyan); }
+
+/* Intro section wrapper */
+#astra-intro {
+  display: flex; flex-direction: column; gap: 18px;
+  padding-bottom: 4px;
+}
+
+/* Phase tracker */
+.phase-track {
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: 4px 2px;
+}
+.phase-node { display: flex; align-items: center; gap: 8px; }
+.phase-dot {
+  width: 11px; height: 11px; border-radius: 50%;
+  border: 1.5px solid var(--text-dim); flex: none;
+}
+.phase-node.done .phase-dot { background: var(--accent-cyan); border-color: var(--accent-cyan); }
+.phase-node.now  .phase-dot {
+  background: var(--accent-green); border-color: var(--accent-green);
+  box-shadow: 0 0 0 4px rgba(74,222,128,0.15), 0 0 12px rgba(74,222,128,0.5);
+}
+.phase-lbl {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.5px;
+  color: var(--text-muted); white-space: nowrap;
+}
+.phase-node.done .phase-lbl { color: var(--text-secondary); }
+.phase-node.now  .phase-lbl { color: var(--accent-green); }
+.phase-line { width: 30px; height: 1px; background: var(--border); margin: 0 8px; }
+.phase-line.done { background: var(--accent-cyan); }
+.phase-caption {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.3px;
+  color: var(--text-muted); margin: -6px 0 0;
+}
+.phase-caption b { color: var(--accent-green); font-weight: 500; }
+
+/* Differentiator pillars */
+.intro-pillars {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+}
+.intro-pillar {
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  padding: 13px 14px; background: rgba(13,30,53,0.5);
+}
+.intro-pillar-h {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 1px;
+  text-transform: uppercase; color: var(--accent-cyan); margin-bottom: 7px;
+}
+.intro-pillar-t { font-size: 12.5px; line-height: 1.45; color: var(--text-secondary); }
+
+/* Signal legend */
+.signal-legend {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px;
+  padding: 10px 14px; margin-bottom: 18px;
+  border: 1px dashed var(--border); border-radius: var(--radius-md);
+  background: rgba(8,20,34,0.4);
+}
+.signal-legend-lab {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 1.5px;
+  text-transform: uppercase; color: var(--text-muted); margin-right: 2px;
+}
+.lg-item {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
+}
+.lg-badge { font-size: 9px; letter-spacing: 1px; padding: 2px 7px; border-radius: 4px; }
+.lg-buy   { color: var(--accent-green);  border: 1px solid rgba(74,222,128,0.5); }
+.lg-sell  { color: var(--accent-red);    border: 1px solid rgba(248,113,113,0.5); }
+.lg-watch { color: var(--accent-purple); border: 1px solid rgba(167,139,250,0.5); }
+.lg-hold  { color: var(--text-secondary); border: 1px solid var(--border); }
+.lg-block { color: var(--text-dim);      border: 1px solid var(--text-dim); }
+
+@media (max-width: 900px) {
+  .intro-pillars { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 600px) {
+  .phase-line { width: 16px; margin: 0 5px; }
 }

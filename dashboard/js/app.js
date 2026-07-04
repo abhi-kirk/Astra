@@ -1885,6 +1885,11 @@ async function init() {
     loadJournalBadge(sb);  // loads count and shows journal button
   }
 
+  // Mission-intro scaffolding (standfirst, phase tracker, pillars, legend) is
+  // for cold visitors — hide it for the owner, who already knows what ASTRA is.
+  document.querySelectorAll('.intro-public').forEach(el =>
+    el.classList.toggle('hidden', isAuthenticated));
+
   try {
     let raw, decisions = [], runDate, paperTrades = [], signalHistory = {};
     let runSummaryId = null, existingAdvisorRating = null;
@@ -1964,25 +1969,25 @@ async function init() {
       return '';
     }
 
+    // Always render all three action rows (even when empty) so BUY/SELL/WATCH
+    // labels stay vertically aligned; empty rows show a "—" placeholder.
     const summaryRows = [
       { action: 'buy',   label: '↑ BUY',   sigs: byAction.buy   || [] },
       { action: 'sell',  label: '↓ SELL',  sigs: byAction.sell  || [] },
       { action: 'watch', label: '◈ WATCH', sigs: byAction.watch || [] },
-    ].filter(r => r.sigs.length);
+    ];
 
-    if (summaryRows.length) {
-      summaryEl.innerHTML = `<div class="summary-structured">${
-        summaryRows.map(r => `
-          <div class="summary-row">
-            <span class="summary-action-label ${r.action}">${r.label}</span>
-            <span class="summary-tickers">${r.sigs.map(s =>
-              `<span class="summary-ticker-unit"><span class="ticker-link-plain" data-ticker="${s.ticker}">${s.ticker}</span>${signalBadge(r.action, s)}</span>`
-            ).join('<span class="summary-sep"> · </span>')}</span>
-          </div>`).join('')
-      }</div>`;
-    } else {
-      summaryEl.textContent = raw.summary ?? '';
-    }
+    summaryEl.innerHTML = `<div class="summary-structured">${
+      summaryRows.map(r => `
+        <div class="summary-row">
+          <span class="summary-action-label ${r.action}">${r.label}</span>
+          <span class="summary-tickers">${r.sigs.length
+            ? r.sigs.map(s =>
+                `<span class="summary-ticker-unit"><span class="ticker-link-plain" data-ticker="${s.ticker}">${s.ticker}</span>${signalBadge(r.action, s)}</span>`
+              ).join('<span class="summary-sep"> · </span>')
+            : '<span class="summary-empty">—</span>'}</span>
+        </div>`).join('')
+    }</div>`;
 
     // ── Advisor note ──
     const noteEl = document.getElementById('advisor-note');
