@@ -7,6 +7,8 @@ __pycache__/
 # Local only — never commit
 .env
 CLAUDE.md
+# CLAUDE.md companion docs (architecture/ops/research/portfolio) — internal, public repo
+docs/
 
 # Personal financial data — lives in Supabase only
 data/
