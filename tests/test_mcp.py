@@ -128,15 +128,16 @@ class TestSearchContext:
         assert "my-secret-key" in servers[0]["url"]
         assert servers[0]["name"] == "alpha_vantage"
 
-    def test_sec_edgar_included_when_url_set(self, monkeypatch):
+    def test_sec_edgar_excluded_from_live_servers(self, monkeypatch):
+        # SEC EDGAR is intentionally excluded from live MCP (flaky community host),
+        # even when its URL is configured.
         monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
         monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
         monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "https://secedgar.caseyjhand.com/mcp")
+        monkeypatch.setattr("src.mcp.FMP_API_KEY", "")
         ctx = search_context()
-        assert ctx["has_search"] is True
-        assert ctx["has_sec_edgar"] is True
-        assert ctx["has_tavily"] is False
-        assert ctx["has_alpha_vantage"] is False
+        assert ctx["has_sec_edgar"] is False
+        assert ctx["has_search"] is False  # no reliable server configured
 
     def test_sec_edgar_excluded_when_url_empty(self, monkeypatch):
         monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
@@ -147,41 +148,34 @@ class TestSearchContext:
         assert ctx["has_search"] is False
         assert ctx["has_sec_edgar"] is False
 
-    def test_sec_edgar_allowed_tools(self, monkeypatch):
-        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
-        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
+    def test_sec_edgar_definition_allowed_tools(self, monkeypatch):
+        # Definition kept for future REST pre-fetch, though excluded from live MCP.
         monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "https://secedgar.caseyjhand.com/mcp")
-        monkeypatch.setattr("src.mcp.FMP_API_KEY", "")
-        from src.mcp import build_servers
-        servers = build_servers()
-        edgar = next(s for s in servers if s["name"] == "sec_edgar")
+        from src.mcp import _sec_edgar
+        edgar = _sec_edgar()
+        assert edgar["name"] == "sec_edgar"
         assert edgar["tool_configuration"]["allowed_tools"] == ["secedgar_get_insider_transactions"]
 
-    def test_fmp_included_when_key_set(self, monkeypatch):
+    def test_fmp_excluded_from_live_servers(self, monkeypatch):
+        # FMP is intentionally excluded from live MCP (intermittent, empty for small caps).
         monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
         monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
         monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "")
         monkeypatch.setattr("src.mcp.FMP_API_KEY", "testkey123")
         ctx = search_context()
-        assert ctx["has_search"] is True
-        assert ctx["has_fmp"] is True
-        assert ctx["has_tavily"] is False
-        assert ctx["has_alpha_vantage"] is False
+        assert ctx["has_fmp"] is False
+        assert ctx["has_search"] is False
 
     def test_fmp_excluded_when_key_empty(self, monkeypatch):
         self._patch_none(monkeypatch)
         ctx = search_context()
         assert ctx["has_fmp"] is False
 
-    def test_fmp_key_in_url_and_allowed_tools(self, monkeypatch):
-        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
-        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
-        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "")
+    def test_fmp_definition_key_in_url_and_allowed_tools(self, monkeypatch):
+        # Definition kept for future REST pre-fetch, though excluded from live MCP.
         monkeypatch.setattr("src.mcp.FMP_API_KEY", "mykey456")
-        from src.mcp import build_servers
-        servers = build_servers()
-        assert len(servers) == 1
-        fmp = servers[0]
+        from src.mcp import _fmp
+        fmp = _fmp()
         assert fmp["name"] == "fmp"
         assert "mykey456" in fmp["url"]
         assert set(fmp["tool_configuration"]["allowed_tools"]) == {"analyst", "calendar"}

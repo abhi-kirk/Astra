@@ -98,12 +98,18 @@ def _sec_edgar() -> BetaRequestMCPServerURLDefinitionParam | None:
 # ---------------------------------------------------------------------------
 
 def build_servers() -> list[BetaRequestMCPServerURLDefinitionParam]:
-    """Return the list of active MCP server dicts for the current config."""
+    """Active MCP servers for live Claude calls — reliable providers only (Tavily + AV).
+
+    SEC EDGAR (community-hosted, no SLA) and FMP (intermittent) are intentionally
+    EXCLUDED: as live MCP tools the model calls mid-generation, an unresponsive server
+    hangs the whole non-streaming response until the advisor wall-clock timeout (600s),
+    wasting the call and the spend. Their _sec_edgar()/_fmp() definitions are kept for
+    future use via direct REST pre-fetch (with our own timeout), not live MCP — see the
+    "Flaky MCP servers" note in CLAUDE.md.
+    """
     candidates = [
         _tavily(),
         _alpha_vantage(),
-        _sec_edgar(),
-        _fmp(),
     ]
     return [s for s in candidates if s is not None]
 
