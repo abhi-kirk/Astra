@@ -135,24 +135,26 @@ def log_paper_trade(
     run_date: str,
     signal_data: dict | None = None,
     suggested_pct: float | None = None,
-) -> None:
+) -> int | None:
     """Log a virtual BUY trade when ASTRA issues a BUY signal.
 
     Size = suggested_pct × PAPER_PORTFOLIO_SIZE, capped at PAPER_MAX_POSITION_PCT.
     Skips if an open paper position already exists for this ticker.
+    Returns the paper_trade id (existing or newly inserted) so Autotrader can link
+    agent_trades.mirrors_paper_trade_id; None only if the insert returns no row.
     """
     db = get_client()
     existing = db_rows(
         db.table("paper_trades").select("id").eq("ticker", ticker).eq("is_open", True).limit(1).execute().data
     )
     if existing:
-        return  # no pyramiding in paper mode
+        return existing[0].get("id")  # no pyramiding in paper mode — return the open lot's id
 
     pct = suggested_pct or PAPER_DEFAULT_POSITION_PCT
     virtual_cost = min(pct * PAPER_PORTFOLIO_SIZE, PAPER_MAX_POSITION_PCT * PAPER_PORTFOLIO_SIZE)
     virtual_shares = round(virtual_cost / price, 6) if price else 0
 
-    db.table("paper_trades").insert({
+    result = db.table("paper_trades").insert({
         "ticker": ticker,
         "action": "buy",
         "price_at_signal": price,
@@ -164,6 +166,8 @@ def log_paper_trade(
         "is_open": True,
     }).execute()
     logger.info(f"Paper BUY  {ticker}: {virtual_shares:.4f} shares @ ${price:.2f}  (${virtual_cost:.0f} = {pct:.0%} of ${PAPER_PORTFOLIO_SIZE:.0f})")
+    data = db_rows(result.data)
+    return data[0].get("id") if data else None
 
 
 def close_paper_trade(ticker: str, close_price: float, run_date: str, reason: str) -> None:
@@ -245,11 +249,189 @@ def get_open_paper_trades() -> Rows:
     )
 
 
+def get_paper_trades_opened_on(day: str) -> Rows:
+    """Paper BUYs opened on the calendar day of `day` (Autotrader buy-mirror source)."""
+    d = str(day)[:10]
+    return db_rows(
+        get_client().table("paper_trades").select("*")
+        .gte("run_date", f"{d}T00:00:00").lte("run_date", f"{d}T23:59:59.999999")
+        .order("run_date", desc=True).execute().data
+    )
+
+
+def get_paper_trades_closed_on(day: str) -> Rows:
+    """Paper positions closed on the calendar day of `day` (Autotrader sell-mirror source)."""
+    d = str(day)[:10]
+    return db_rows(
+        get_client().table("paper_trades").select("*").eq("is_open", False)
+        .gte("closed_at", f"{d}T00:00:00").lte("closed_at", f"{d}T23:59:59.999999")
+        .order("closed_at", desc=True).execute().data
+    )
+
+
 def get_paper_trades_history() -> Rows:
     return db_rows(
         get_client().table("paper_trades").select("*")
         .order("run_date", desc=True).execute().data
     )
+
+
+# ---------------------------------------------------------------------------
+# Autotrader — autonomous agentic trading (agent_trades / snapshots / control)
+# ---------------------------------------------------------------------------
+
+def log_agent_trade(
+    ticker: str,
+    side: str,
+    run_date: str,
+    order_type: str = "limit",
+    quantity: float | None = None,
+    limit_price: float | None = None,
+    fill_price: float | None = None,
+    dollar_amount: float | None = None,
+    order_id: str | None = None,
+    ref_id: str | None = None,
+    status: str = "pending",
+    rule_checks: dict | None = None,
+    mirrors_paper_trade_id: int | None = None,
+    source: str = "mirror",
+    submitted_at: str | None = None,
+    is_open: bool | None = None,
+) -> int | None:
+    """Insert one real (or dry-run) agentic order row. Returns the new row id.
+
+    `is_open` marks a live long position for dashboard P&L; defaults to True only for a
+    genuinely placed BUY (not blocked/dry-run/rejected).
+    """
+    if is_open is None:
+        is_open = side == "buy" and status in ("pending", "submitted", "filled")
+    result = get_client().table("agent_trades").insert({
+        "ticker": ticker,
+        "side": side,
+        "order_type": order_type,
+        "quantity": quantity,
+        "limit_price": limit_price,
+        "fill_price": fill_price,
+        "dollar_amount": dollar_amount,
+        "order_id": order_id,
+        "ref_id": ref_id,
+        "status": status,
+        "submitted_at": submitted_at,
+        "rule_checks": rule_checks or {},
+        "mirrors_paper_trade_id": mirrors_paper_trade_id,
+        "source": source,
+        "run_date": run_date,
+        "is_open": is_open,
+    }).execute()
+    data = db_rows(result.data)
+    return data[0].get("id") if data else None
+
+
+def update_agent_trade_status(
+    trade_id: int,
+    status: str,
+    order_id: str | None = None,
+    fill_price: float | None = None,
+    executed_at: str | None = None,
+) -> None:
+    """Update an agent_trades row after the broker responds (fill / cancel / reject)."""
+    patch: dict = {"status": status}
+    if order_id is not None:
+        patch["order_id"] = order_id
+    if fill_price is not None:
+        patch["fill_price"] = fill_price
+    if executed_at is not None:
+        patch["executed_at"] = executed_at
+    get_client().table("agent_trades").update(patch).eq("id", trade_id).execute()
+
+
+def close_agent_trade(trade_id: int, close_price: float, run_date: str, realized_pnl: float | None = None) -> None:
+    """Mark an open agent position closed (after a mirrored SELL fills)."""
+    get_client().table("agent_trades").update({
+        "is_open": False,
+        "closed_at": run_date,
+        "close_price": close_price,
+        "realized_pnl": realized_pnl,
+    }).eq("id", trade_id).execute()
+
+
+def get_open_agent_trades() -> Rows:
+    return db_rows(
+        get_client().table("agent_trades").select("*").eq("is_open", True)
+        .order("run_date", desc=True).execute().data
+    )
+
+
+def get_agent_trades_today(run_date: str) -> Rows:
+    """All agent orders submitted on the calendar day of run_date (for the max-trades/day cap)."""
+    day = str(run_date)[:10]
+    return db_rows(
+        get_client().table("agent_trades").select("*")
+        .gte("run_date", f"{day}T00:00:00")
+        .lte("run_date", f"{day}T23:59:59.999999")
+        .order("run_date", desc=True).execute().data
+    )
+
+
+def get_last_agent_buy(ticker: str) -> dict | None:
+    """Most recent BUY for a ticker in the agentic account (for the min-hold check)."""
+    data = db_rows(
+        get_client().table("agent_trades").select("*")
+        .eq("ticker", ticker).eq("side", "buy")
+        .order("run_date", desc=True).limit(1).execute().data
+    )
+    return data[0] if data else None
+
+
+def save_agent_account_snapshot(snapshot: dict) -> None:
+    """Persist an agentic account state snapshot (positions / cash / equity / drawdown)."""
+    get_client().table("agent_account_snapshots").insert({
+        "snapshot_time":   snapshot.get("snapshot_time") or datetime.now().isoformat(),
+        "cash":            snapshot.get("cash"),
+        "buying_power":    snapshot.get("buying_power"),
+        "market_value":    snapshot.get("market_value"),
+        "total_equity":    snapshot.get("total_equity"),
+        "positions":       snapshot.get("positions"),
+        "baseline_equity": snapshot.get("baseline_equity"),
+        "drawdown_pct":    snapshot.get("drawdown_pct"),
+    }).execute()
+
+
+def get_latest_agent_snapshot() -> dict | None:
+    data = db_rows(
+        get_client().table("agent_account_snapshots").select("*")
+        .order("snapshot_time", desc=True).limit(1).execute().data
+    )
+    return data[0] if data else None
+
+
+def get_agent_control() -> dict:
+    """Read the single-row Autotrader control switch. Returns defaults if the row is missing."""
+    data = db_rows(
+        get_client().table("agent_control").select("*").eq("id", 1).limit(1).execute().data
+    )
+    if data:
+        return data[0]
+    return {"id": 1, "paused": False, "halted": False, "halt_reason": None, "baseline_equity": None}
+
+
+def set_agent_paused(paused: bool) -> None:
+    get_client().table("agent_control").update({
+        "paused": paused, "updated_at": datetime.now().isoformat(),
+    }).eq("id", 1).execute()
+
+
+def set_agent_halted(halted: bool, reason: str | None = None) -> None:
+    get_client().table("agent_control").update({
+        "halted": halted, "halt_reason": reason, "updated_at": datetime.now().isoformat(),
+    }).eq("id", 1).execute()
+
+
+def set_agent_baseline(equity: float) -> None:
+    """Set the drawdown baseline (first run, or a deliberate reset)."""
+    get_client().table("agent_control").update({
+        "baseline_equity": equity, "updated_at": datetime.now().isoformat(),
+    }).eq("id", 1).execute()
 
 
 # ---------------------------------------------------------------------------

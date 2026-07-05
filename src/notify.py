@@ -108,3 +108,33 @@ def send(text: str) -> bool:
 def notify_run(buy_tickers, sell_tickers, advisor_note, mode="simulation") -> bool:
     """Format and send the daily run notification."""
     return send(format_message(buy_tickers, sell_tickers, advisor_note, mode))
+
+
+def notify_agent(summary: dict) -> bool:
+    """Alert on an Autotrader run: real orders placed, blocks, halt/pause.
+
+    Only sends when something noteworthy happened (an order, a block, or a halt/pause)
+    so routine no-op runs stay quiet. Dry-run placements are flagged as such.
+    """
+    placed = summary.get("placed") or []
+    blocked = summary.get("blocked") or []
+    dry = summary.get("dry_run")
+
+    if summary.get("halted"):
+        md = "🛑 **ASTRA Autotrader HALTED** — drawdown limit breached. Autonomous trading stopped; manual reset required."
+        return send(markdownify(md))
+    if "paused" in (summary.get("skipped") or []):
+        return False  # paused is an intentional owner action — no alert needed
+
+    if not placed and not blocked:
+        return False  # nothing to report
+
+    tag = " _(dry-run)_" if dry else ""
+    lines = [f"🤖 **ASTRA Autotrader**{tag}"]
+    for o in placed:
+        arrow = "🟢" if o.get("side") == "buy" else "🔴"
+        lines.append(f"{arrow} {o.get('side', '').upper()} {o.get('ticker')}")
+    if blocked:
+        lines.append(f"⛔ blocked: {', '.join(blocked)}")
+    lines.append(f"[Open dashboard →]({DASHBOARD_URL})")
+    return send(markdownify("\n".join(lines)))

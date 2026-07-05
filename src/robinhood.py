@@ -11,10 +11,7 @@ Flow:
 
 from __future__ import annotations
 
-import base64
-import json
 import logging
-import os
 from pathlib import Path
 
 import requests
@@ -33,34 +30,19 @@ _RH_CLIENT_ID     = "c82SH0WZOsabOXGP2sxqcj34FxkvfnWRZBKlBjFS"
 
 
 # ---------------------------------------------------------------------------
-# Encryption helpers (AES-256-GCM, same key as tokens.enc)
+# Encryption helpers (AES-256-GCM, same key as tokens.enc — see src/crypto.py)
 # ---------------------------------------------------------------------------
 
 def _encrypt(data: dict) -> str:
     """Encrypt a token dict → JSON string suitable for storing in Supabase."""
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    key = base64.b64decode(ROBINHOOD_TOKEN_KEY)
-    iv  = os.urandom(12)
-    aesgcm = AESGCM(key)
-    ct_with_tag = aesgcm.encrypt(iv, json.dumps(data).encode(), None)
-    ct  = ct_with_tag[:-16]
-    tag = ct_with_tag[-16:]
-    return json.dumps({
-        "iv":         base64.b64encode(iv).decode(),
-        "tag":        base64.b64encode(tag).decode(),
-        "ciphertext": base64.b64encode(ct).decode(),
-    })
+    from src.crypto import encrypt_json
+    return encrypt_json(data, ROBINHOOD_TOKEN_KEY)
 
 
 def _decrypt(blob: str) -> dict:
     """Decrypt an encrypted blob string → token dict."""
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    enc = json.loads(blob)
-    key = base64.b64decode(ROBINHOOD_TOKEN_KEY)
-    iv  = base64.b64decode(enc["iv"])
-    tag = base64.b64decode(enc["tag"])
-    ct  = base64.b64decode(enc["ciphertext"])
-    return json.loads(AESGCM(key).decrypt(iv, ct + tag, None))
+    from src.crypto import decrypt_json
+    return decrypt_json(blob, ROBINHOOD_TOKEN_KEY)
 
 
 # ---------------------------------------------------------------------------
@@ -85,13 +67,7 @@ def _load_tokens_from_file() -> dict:
     tokens_path = Path(ROBINHOOD_TOKENS_FILE)
     if not tokens_path.exists():
         raise RuntimeError(f"Tokens file not found: {tokens_path}")
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    enc = json.loads(tokens_path.read_text())
-    key = base64.b64decode(ROBINHOOD_TOKEN_KEY)
-    iv  = base64.b64decode(enc["iv"])
-    tag = base64.b64decode(enc["tag"])
-    ct  = base64.b64decode(enc["ciphertext"])
-    return json.loads(AESGCM(key).decrypt(iv, ct + tag, None))
+    return _decrypt(tokens_path.read_text())
 
 
 # Keep the old name so existing tests still import it

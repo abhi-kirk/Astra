@@ -332,6 +332,96 @@ async function fetchClosedPaperTrades(sb) {
   return data || [];
 }
 
+// ── Autotrader: autonomous agentic trading (owner-only) ──
+async function fetchAgentControl(sb) {
+  const { data } = await sb.from('agent_control').select('*').eq('id', 1).maybeSingle();
+  return data || { paused: false, halted: false, halt_reason: null, baseline_equity: null };
+}
+
+async function fetchAgentTrades(sb) {
+  const { data } = await sb.from('agent_trades').select('*')
+    .order('run_date', { ascending: false }).limit(50);
+  return data || [];
+}
+
+async function fetchAgentSnapshot(sb) {
+  const { data } = await sb.from('agent_account_snapshots').select('*')
+    .order('snapshot_time', { ascending: false }).limit(1).maybeSingle();
+  return data || null;
+}
+
+function renderAutotrader(sb, control, trades, snapshot) {
+  const section = document.getElementById("autotrader");
+  if (!section) return;
+  section.classList.remove('hidden');
+
+  const halted = !!control.halted;
+  const paused = !!control.paused;
+  const statusLabel = halted ? 'HALTED' : (paused ? 'PAUSED' : 'ACTIVE');
+  const statusColor = halted ? '#ff5c5c' : (paused ? '#e0a500' : '#38d977');
+
+  const equity = snapshot?.total_equity;
+  const drawdown = snapshot?.drawdown_pct;
+  const ddColor = (drawdown != null && drawdown < 0) ? '#ff5c5c' : 'var(--text-dim)';
+
+  const open = trades.filter(t => t.is_open);
+  const money = v => (v == null ? '—' : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })}`);
+
+  const rows = trades.slice(0, 25).map(t => {
+    const sideColor = t.side === 'buy' ? '#38d977' : '#ff5c5c';
+    const size = t.dollar_amount != null ? money(t.dollar_amount) : (t.quantity != null ? `${t.quantity} sh` : '—');
+    return `<tr>
+      <td>${(t.run_date || '').slice(0, 10)}</td>
+      <td style="font-weight:600">${t.ticker}</td>
+      <td style="color:${sideColor};font-weight:600">${(t.side || '').toUpperCase()}</td>
+      <td>${size}</td>
+      <td>${t.status || ''}${t.status === 'dry_run' ? ' <span style="color:var(--text-dim)">(sim)</span>' : ''}</td>
+    </tr>`;
+  }).join('');
+
+  section.innerHTML = `
+    <div class="paper-header" style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
+      <div>
+        <h2 style="margin:0">AUTOTRADER · AUTONOMOUS <span style="font-size:12px;color:var(--text-dim)">real-money agentic account</span></h2>
+        <div style="margin-top:4px">
+          <span style="color:${statusColor};font-weight:700;letter-spacing:.5px">● ${statusLabel}</span>
+          ${halted && control.halt_reason ? `<span style="color:var(--text-dim);font-size:12px"> — ${control.halt_reason}</span>` : ''}
+        </div>
+      </div>
+      <button id="autotrader-toggle" class="paper-tab" ${halted ? 'disabled title="Halted — reset in DB after review"' : ''}
+        style="cursor:${halted ? 'not-allowed' : 'pointer'};min-width:120px">
+        ${paused ? '▶ RESUME' : '⏸ PAUSE'}
+      </button>
+    </div>
+    <div style="display:flex;gap:24px;flex-wrap:wrap;margin:14px 0">
+      <div><div style="font-size:12px;color:var(--text-dim)">EQUITY</div><div style="font-size:20px;font-weight:700">${money(equity)}</div></div>
+      <div><div style="font-size:12px;color:var(--text-dim)">DRAWDOWN</div><div style="font-size:20px;font-weight:700;color:${ddColor}">${drawdown != null ? drawdown.toFixed(1) + '%' : '—'}</div></div>
+      <div><div style="font-size:12px;color:var(--text-dim)">OPEN POSITIONS</div><div style="font-size:20px;font-weight:700">${open.length}</div></div>
+      <div><div style="font-size:12px;color:var(--text-dim)">ORDERS LOGGED</div><div style="font-size:20px;font-weight:700">${trades.length}</div></div>
+    </div>
+    ${trades.length ? `<div style="overflow-x:auto"><table class="paper-table" style="width:100%">
+      <thead><tr><th>DATE</th><th>TICKER</th><th>SIDE</th><th>SIZE</th><th>STATUS</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`
+      : '<div style="color:var(--text-dim);padding:12px 0">No agentic orders yet.</div>'}
+  `;
+
+  const toggle = document.getElementById('autotrader-toggle');
+  if (toggle && !halted) {
+    toggle.addEventListener('click', async () => {
+      toggle.disabled = true;
+      const next = !paused;
+      const { error } = await sb.from('agent_control')
+        .update({ paused: next, updated_at: new Date().toISOString() }).eq('id', 1);
+      if (error) {
+        console.error('Autotrader pause toggle failed:', error.message);
+        toggle.disabled = false;
+        return;
+      }
+      renderAutotrader(sb, { ...control, paused: next }, trades, snapshot);
+    });
+  }
+}
+
 // Returns { theme, status } for a ticker from cached convictions, for display in modal
 function getTickerConvictionInfo(ticker) {
   if (!_convictions) return { theme: null, status: null, note: null };
@@ -2087,6 +2177,18 @@ async function init() {
     // ── Paper portfolio (auth-gated) ──
     const paperTradesByTicker = Object.fromEntries(paperTrades.map(pt => [pt.ticker, pt]));
     if (isAuthenticated) renderPaperPortfolio(paperTrades, marketData);
+
+    // ── Autotrader autonomous panel + pause/resume (owner-only) ──
+    if (isAuthenticated) {
+      try {
+        const [agentControl, agentTrades, agentSnapshot] = await Promise.all([
+          fetchAgentControl(sb), fetchAgentTrades(sb), fetchAgentSnapshot(sb),
+        ]);
+        renderAutotrader(sb, agentControl, agentTrades, agentSnapshot);
+      } catch (err) {
+        console.error('[Autotrader] render error:', err);
+      }
+    }
 
     // ── On Radar (exploration candidates — public) ──
     try {

@@ -374,6 +374,26 @@ def screen_position(
     )
 
 
+def compute_portfolio_summary(
+    portfolio: dict[str, dict],
+    market_data: dict[str, dict],
+    convictions: dict,
+) -> dict:
+    """Total value + per-theme allocation fractions for a portfolio. Used by the
+    screener and by Autotrader's guardrails so both apply identical concentration limits."""
+    total_value = sum(
+        pos.get("shares", 0) * market_data.get(t, {}).get("current_price", 0)
+        for t, pos in portfolio.items()
+    )
+    theme_allocations: dict[str, float] = {}
+    for ticker, pos in portfolio.items():
+        theme = get_ticker_guidance(ticker, convictions).get("theme")
+        if theme and total_value:
+            val = pos.get("shares", 0) * market_data.get(ticker, {}).get("current_price", 0)
+            theme_allocations[theme] = theme_allocations.get(theme, 0) + val / total_value
+    return {"total_value": total_value, "theme_allocations": theme_allocations}
+
+
 def screen_all_positions(
     portfolio: dict[str, dict],
     market_data: dict[str, dict],
@@ -382,19 +402,7 @@ def screen_all_positions(
 ) -> list[Signal]:
     """Screen all positions. Returns signals sorted by action priority."""
     sizing_portfolio = full_portfolio if full_portfolio else portfolio
-    total_value = sum(
-        pos.get("shares", 0) * market_data.get(t, {}).get("current_price", 0)
-        for t, pos in sizing_portfolio.items()
-    )
-
-    theme_allocations: dict[str, float] = {}
-    for ticker, pos in sizing_portfolio.items():
-        theme = get_ticker_guidance(ticker, convictions).get("theme")
-        if theme and total_value:
-            val = pos.get("shares", 0) * market_data.get(ticker, {}).get("current_price", 0)
-            theme_allocations[theme] = theme_allocations.get(theme, 0) + val / total_value
-
-    portfolio_summary = {"total_value": total_value, "theme_allocations": theme_allocations}
+    portfolio_summary = compute_portfolio_summary(sizing_portfolio, market_data, convictions)
     signals = [
         screen_position(ticker, pos, market_data.get(ticker, {"error": "no_data"}), convictions, portfolio_summary)
         for ticker, pos in portfolio.items()

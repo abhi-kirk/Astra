@@ -73,7 +73,7 @@
       </button>
       <div id="live-indicator" class="live-badge">
         <span class="pulse-dot"></span>
-        <span>SIMULATION</span>
+        <span>ADVISORY</span>
       </div>
     </div>
   </header>
@@ -134,8 +134,8 @@
           <h1 class="hero-headline">Systematic conviction trading.</h1>
           <p class="hero-standfirst intro-public">
             A personal AI advisor that turns <b>my own investment convictions</b> into disciplined
-            daily signals, enforces the risk rules emotion tends to override, and builds a
-            <b>paper-trading track record</b> before it's ever trusted with real money.
+            daily signals and enforces the risk rules emotion tends to override — <b>paper-trading
+            my full portfolio</b>, and autonomously trading a small, sandboxed <b>real-money</b> account.
             <a class="standfirst-link" href="https://github.com/abhi-kirk/Astra/blob/main/README.md" target="_blank" rel="noopener">Read the full story&nbsp;→</a>
           </p>
           <p class="hero-sub" id="hero-sub">Loading signals…</p>
@@ -147,33 +147,33 @@
 
       <!-- MISSION INTRO (public-only — hidden for the owner) -->
       <section id="astra-intro" class="intro-public">
-        <div class="phase-track" role="img" aria-label="Roadmap: Phase 1 complete, Phase 1.5 current (paper trading), Phases 2 through 4 ahead">
+        <div class="phase-track" role="img" aria-label="Roadmap: Phases 1 and 1.5 complete, Phase 2 current (autonomous real money in a small sandboxed account), Phases 3 and 4 ahead">
           <div class="phase-node done">
             <span class="phase-dot"></span>
             <span class="phase-lbl">P1 · Simulation</span>
           </div>
           <span class="phase-line done"></span>
-          <div class="phase-node now">
+          <div class="phase-node done">
             <span class="phase-dot"></span>
             <span class="phase-lbl">P1.5 · Paper trading</span>
           </div>
-          <span class="phase-line"></span>
-          <div class="phase-node">
+          <span class="phase-line done"></span>
+          <div class="phase-node now">
             <span class="phase-dot"></span>
-            <span class="phase-lbl">P2 · Real $, approval</span>
+            <span class="phase-lbl">P2 · Real $, autonomous</span>
           </div>
           <span class="phase-line"></span>
           <div class="phase-node">
             <span class="phase-dot"></span>
-            <span class="phase-lbl">P3 · Partial auto</span>
+            <span class="phase-lbl">P3 · Scale the sleeve</span>
           </div>
           <span class="phase-line"></span>
           <div class="phase-node">
             <span class="phase-dot"></span>
-            <span class="phase-lbl">P4 · Full auto</span>
+            <span class="phase-lbl">P4 · Larger sleeve</span>
           </div>
         </div>
-        <p class="phase-caption">Currently <b>Phase 1.5 of 4</b> — real signals, zero real dollars. Autonomy expands only as the track record justifies it.</p>
+        <p class="phase-caption">Currently <b>Phase 2 of 4</b> — a small, sandboxed account traded autonomously, alongside paper trading across the full portfolio. Its capital grows as the track record justifies; the full portfolio always stays advisory.</p>
 
         <div class="intro-pillars">
           <div class="intro-pillar">
@@ -214,6 +214,9 @@
 
       <!-- PAPER PORTFOLIO (auth-gated, injected by JS) -->
       <section id="paper-portfolio" class="hidden"></section>
+
+      <!-- AUTOTRADER: autonomous agentic trading (owner-only, injected by JS) -->
+      <section id="autotrader" class="hidden"></section>
 
       <!-- ON RADAR: exploration candidates (injected by JS) -->
       <section id="on-radar" class="hidden"></section>

@@ -4,13 +4,10 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Local only — never commit
+# Local only
 .env
 CLAUDE.md
-# CLAUDE.md companion docs (architecture/ops/research/portfolio) — internal, public repo
 docs/
-
-# Personal financial data — lives in Supabase only
 data/
 
 # Legacy / generated
@@ -27,7 +24,9 @@ src/astra.egg-info/
 
 # tokens / local temp
 tokens.enc
+agent_tokens.enc
+*.enc
 tmp/
 
-# log files (local dev only — ephemeral on GitHub Actions)
+# log files
 logs/

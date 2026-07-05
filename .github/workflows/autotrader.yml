@@ -1,0 +1,61 @@
+name: Autotrader Execution
+
+# Isolated from the Advisor track so it can be paused/killed independently. Runs AFTER the daily
+# analysis completes (the Advisor track persists the paper track that Autotrader mirrors), and is also
+# manually dispatchable. Guardrails are code-enforced; no real order is placed unless the
+# AGENT_TRADING_ENABLED secret is set true (and the owner has approved the execution path).
+on:
+  workflow_run:
+    workflows: ["Daily Analysis"]
+    types: [completed]
+  workflow_dispatch:
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    # Only chain off a successful Advisor run (manual dispatch always allowed).
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check
+
+      - name: Type check (pyright)
+        run: pyright
+
+      - name: Run tests
+        run: pytest
+
+      - name: Decode agentic OAuth token
+        env:
+          AGENT_RH_TOKENS_ENC: ${{ secrets.AGENT_RH_TOKENS_ENC }}
+        run: |
+          if [ -n "$AGENT_RH_TOKENS_ENC" ]; then
+            echo "$AGENT_RH_TOKENS_ENC" | base64 -d > agent_tokens.enc
+          fi
+
+      - name: Execute Autotrader
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # Autotrader master switch + agentic account. Auth is the encrypted OAuth store
+          # (agent_tokens.enc, decoded above) + its key — the MCP SDK refreshes it headlessly.
+          AGENT_TRADING_ENABLED: ${{ secrets.AGENT_TRADING_ENABLED }}
+          AGENT_ACCOUNT_NUMBER: ${{ secrets.AGENT_ACCOUNT_NUMBER }}
+          AGENT_RH_TOKEN_KEY: ${{ secrets.AGENT_RH_TOKEN_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -m src.agent_executor

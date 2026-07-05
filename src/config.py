@@ -68,6 +68,29 @@ ROBINHOOD_ACCOUNT_NUMBER = _cfg("ROBINHOOD_ACCOUNT_NUMBER", default="")   # prim
 ROBINHOOD_TOKEN_KEY      = _cfg("ROBINHOOD_TOKEN_KEY",      default="")   # base64 AES-256 key for tokens.enc
 ROBINHOOD_TOKENS_FILE    = _cfg("ROBINHOOD_TOKENS_FILE",    default="tokens.enc")
 
+# ── Autotrader: autonomous agentic trading (Phase 2) ─────────────
+# Real-money autonomous execution in a dedicated Robinhood Agentic account, mirroring the
+# paper track and filtered by code-enforced guardrails. Master switch defaults False — no
+# real order is placed until this is explicitly enabled AND guardrail tests pass. See
+# docs/autonomy.md.
+# Robust truthy parse — an unset GitHub secret injects "" (empty), which would crash a
+# strict bool cast; empty/unset/anything-not-truthy means disabled.
+AGENT_TRADING_ENABLED    = _cfg("AGENT_TRADING_ENABLED", default="false").strip().lower() in ("true", "1", "yes", "on")
+AGENT_ACCOUNT_NUMBER     = _cfg("AGENT_ACCOUNT_NUMBER",     default="")   # agentic_allowed=true account
+AGENT_MAX_TRADES_PER_DAY = _cfg("AGENT_MAX_TRADES_PER_DAY", cast=int,   default=3)
+AGENT_MIN_HOLD_DAYS      = _cfg("AGENT_MIN_HOLD_DAYS",      cast=int,   default=2)     # trading days before a sell is allowed
+AGENT_DRAWDOWN_HALT_PCT  = _cfg("AGENT_DRAWDOWN_HALT_PCT",  cast=float, default=-15.0) # halt if account draws down past this %
+AGENT_MAX_OPEN_POSITIONS = _cfg("AGENT_MAX_OPEN_POSITIONS", cast=int,   default=5)
+# Market orders with dollar sizing — the fractional-share fit for a small (~$1k) account
+# (Robinhood allows fractional shares only on market orders, not limit).
+AGENT_ORDER_TYPE         = _cfg("AGENT_ORDER_TYPE",         default="market")
+# Cash account: T+1 settlement + Good-Faith-Violation aware (block selling unsettled / same-day round-trips)
+AGENT_ACCOUNT_IS_CASH    = _cfg("AGENT_ACCOUNT_IS_CASH",    cast=bool,  default=True)
+# Robinhood Agentic MCP (official execution endpoint) + its own encrypted OAuth token store
+AGENT_RH_MCP_URL         = _cfg("AGENT_RH_MCP_URL",         default="https://agent.robinhood.com/mcp/trading")
+AGENT_RH_TOKEN_KEY       = _cfg("AGENT_RH_TOKEN_KEY",       default="")                 # base64 AES-256 key for the agentic OAuth blob
+AGENT_RH_TOKENS_FILE     = _cfg("AGENT_RH_TOKENS_FILE",     default="agent_tokens.enc")
+
 # ── Exploration (weekly discovery run) ───────────────────────
 EXPLORATION_MODEL         = _cfg("EXPLORATION_MODEL",         default="claude-sonnet-4-6")
 EXPLORATION_MAX_TOKENS    = _cfg("EXPLORATION_MAX_TOKENS",    cast=int, default=8000)

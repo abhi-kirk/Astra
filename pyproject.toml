@@ -17,6 +17,7 @@ dependencies = [
     "starlette>=0.27.0",
     "cryptography>=42.0.0",
     "telegramify-markdown>=1.2.0",
+    "mcp>=1.0",
 ]
 
 [project.optional-dependencies]
