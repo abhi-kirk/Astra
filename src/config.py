@@ -26,8 +26,10 @@ SEC_EDGAR_MCP_URL        = _cfg("SEC_EDGAR_MCP_URL",        default="https://sec
 FMP_API_KEY              = _cfg("FMP_API_KEY",              default="")
 
 # ── AI reasoning ──────────────────────────────────────────────
-REASONING_MODEL      = _cfg("REASONING_MODEL",      default="claude-sonnet-4-6")
-REASONING_MAX_TOKENS = _cfg("REASONING_MAX_TOKENS", cast=int, default=3000)
+REASONING_MODEL      = _cfg("REASONING_MODEL",      default="claude-opus-4-8")
+# Adaptive thinking counts toward max_tokens — keep headroom (still <16k, so non-streaming is safe).
+REASONING_MAX_TOKENS = _cfg("REASONING_MAX_TOKENS", cast=int, default=8000)
+ADVISOR_EFFORT       = _cfg("ADVISOR_EFFORT",       default="high")  # output_config.effort: low|medium|high|max
 TAVILY_MAX_SEARCHES  = _cfg("TAVILY_MAX_SEARCHES",  cast=int, default=5)
 # Alpha Vantage free tier: 25 calls/day, 5 calls/min
 # Claude will use tools selectively — cap to avoid blowing the daily limit in one run
@@ -35,6 +37,13 @@ ALPHA_VANTAGE_MAX_CALLS  = _cfg("ALPHA_VANTAGE_MAX_CALLS",  cast=int, default=8)
 # FMP free tier: 250 calls/day. Analyst data (price targets, grades) only available for
 # large/mid caps on the free plan — small caps (RKLB, ASTS) gracefully return nothing.
 FMP_MAX_CALLS            = _cfg("FMP_MAX_CALLS",            cast=int, default=10)
+
+# ── Client-side MCP tool loop ─────────────────────────────────
+# We run Claude's tool-use loop ourselves (see src/mcp_loop.py) instead of the server-side
+# MCP connector, so each tool call is individually bounded and observable.
+ADVISOR_TOOL_TIMEOUT     = _cfg("ADVISOR_TOOL_TIMEOUT",     cast=int, default=45)  # per MCP tool call, seconds
+ADVISOR_MAX_TOOL_ROUNDS  = _cfg("ADVISOR_MAX_TOOL_ROUNDS",  cast=int, default=8)   # max model↔tool rounds before forcing a note
+MCP_TOOL_FAILURE_LIMIT   = _cfg("MCP_TOOL_FAILURE_LIMIT",   cast=int, default=2)   # circuit-breaker: disable a server after N failures
 
 # ── Paper trading ─────────────────────────────────────────────
 PAPER_PORTFOLIO_SIZE       = _cfg("PAPER_PORTFOLIO_SIZE",       cast=float, default=10_000.0)
@@ -96,15 +105,18 @@ AGENT_RH_TOKEN_KEY       = _cfg("AGENT_RH_TOKEN_KEY",       default="")         
 AGENT_RH_TOKENS_FILE     = _cfg("AGENT_RH_TOKENS_FILE",     default="agent_tokens.enc")
 
 # ── Exploration (weekly discovery run) ───────────────────────
-EXPLORATION_MODEL         = _cfg("EXPLORATION_MODEL",         default="claude-sonnet-4-6")
+EXPLORATION_MODEL         = _cfg("EXPLORATION_MODEL",         default="claude-opus-4-8")
 EXPLORATION_MAX_TOKENS    = _cfg("EXPLORATION_MAX_TOKENS",    cast=int, default=8000)
+EXPLORATION_EFFORT        = _cfg("EXPLORATION_EFFORT",        default="medium")  # output_config.effort
 EXPLORATION_MAX_SEARCHES  = _cfg("EXPLORATION_MAX_SEARCHES",  cast=int, default=2)   # per theme
 EXPLORATION_MAX_AV_CALLS  = _cfg("EXPLORATION_MAX_AV_CALLS",  cast=int, default=8)
 EXPLORATION_MAX_FMP_CALLS = _cfg("EXPLORATION_MAX_FMP_CALLS", cast=int, default=15)
 
 # ── Claude API call timeouts ──────────────────────────────────
-ADVISOR_TIMEOUT     = _cfg("ADVISOR_TIMEOUT",     cast=int, default=600)  # 10 min — 36 tickers + 4 MCP servers needs headroom
-EXPLORATION_TIMEOUT = _cfg("EXPLORATION_TIMEOUT", cast=int, default=480)  # 8 min
+# Wall-clock backstop for the whole client-side tool loop. Each tool call is bounded by
+# ADVISOR_TOOL_TIMEOUT, so this should now rarely fire.
+ADVISOR_TIMEOUT     = _cfg("ADVISOR_TIMEOUT",     cast=int, default=300)  # 5 min backstop
+EXPLORATION_TIMEOUT = _cfg("EXPLORATION_TIMEOUT", cast=int, default=300)  # 5 min backstop
 
 # ── Strategy: position sizing ─────────────────────────────────
 SIZE_PREFERRED_PCT          = _cfg("SIZE_PREFERRED_PCT",          cast=float, default=0.06)

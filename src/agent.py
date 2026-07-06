@@ -19,13 +19,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import anthropic
 import chevron
 
-from src import mcp, memory
+from src import mcp, mcp_loop, memory
 from src.config import (
+    ADVISOR_EFFORT,
+    ADVISOR_MAX_TOOL_ROUNDS,
     ADVISOR_TIMEOUT,
+    ADVISOR_TOOL_TIMEOUT,
     ANTHROPIC_API_KEY,
+    MCP_TOOL_FAILURE_LIMIT,
     REASONING_MAX_TOKENS,
     REASONING_MODEL,
 )
@@ -44,15 +47,15 @@ def call_claude_reasoning(
     market_data: dict,
     history_context: str,
     convictions: dict,
-) -> tuple[str, Any]:
+) -> tuple[str, Any, list[dict[str, Any]]]:
     """
-    Call Claude API to synthesize mechanical signals into advisor narrative.
-    Returns (advisor_note, token_usage) — usage is the Anthropic Usage object or None.
-    Uses Tavily MCP for live news search when available.
-    Returns a markdown-formatted analysis string.
+    Call Claude to synthesize mechanical signals into an advisor narrative.
+
+    Runs the tool loop client-side (src.mcp_loop) so each MCP tool call is individually
+    timed out and observable. Returns (advisor_note, token_usage, tool_log).
     """
     if not ANTHROPIC_API_KEY:
-        return ("Claude API key not set — mechanical signals only.", None)
+        return ("Claude API key not set — mechanical signals only.", None, [])
 
     action_groups: dict[str, list] = {}
     for sig in signals:
@@ -87,53 +90,32 @@ def call_claude_reasoning(
 
     themes = {k: v.get("conviction") for k, v in convictions.get("themes", {}).items()}
 
+    specs = mcp.advisor_specs()
     template = (PROMPTS_DIR / "advisor_note.mustache").read_text()
     prompt = chevron.render(template, {
         "themes_json":     json.dumps(themes),
         "history_context": history_context,
         "signal_text":     signal_text,
         "date":            datetime.now().strftime("%B %-d, %Y"),
-        **mcp.search_context(),
+        **mcp.search_context(servers=specs),
     })
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    servers = mcp.build_servers()
-
-    def _call() -> tuple[str, Any]:
-        if servers:
-            try:
-                msg = client.beta.messages.create(
-                    model=REASONING_MODEL,
-                    max_tokens=REASONING_MAX_TOKENS,
-                    mcp_servers=servers,
-                    messages=[{"role": "user", "content": prompt}],
-                    betas=mcp.BETA_FLAGS,
-                )
-            except anthropic.BadRequestError as exc:
-                if "Connection error while communicating with MCP server" in str(exc):
-                    logger.warning("MCP server unreachable — retrying advisor call without MCP")
-                    msg = client.messages.create(
-                        model=REASONING_MODEL,
-                        max_tokens=REASONING_MAX_TOKENS,
-                        messages=[{"role": "user", "content": prompt}],
-                    )
-                else:
-                    raise
-        else:
-            msg = client.messages.create(
-                model=REASONING_MODEL,
-                max_tokens=REASONING_MAX_TOKENS,
-                messages=[{"role": "user", "content": prompt}],
-            )
-        usage = getattr(msg, "usage", None)
-        if usage:
-            logger.info(f"Advisor tokens — input: {usage.input_tokens}  output: {usage.output_tokens}  total: {usage.input_tokens + usage.output_tokens}")
-        return (mcp.extract_text(msg) or "", usage)
-
-    result = run_with_timeout(_call, ADVISOR_TIMEOUT, label="Advisor Claude call")
-    if not result or not result[0]:
-        return ("No advisor note generated.", result[1] if result else None)
-    return result
+    text, usage, tool_log = run_with_timeout(
+        lambda: mcp_loop.run_agentic_sync(
+            prompt, specs,
+            model=REASONING_MODEL,
+            max_tokens=REASONING_MAX_TOKENS,
+            effort=ADVISOR_EFFORT,
+            tool_timeout=ADVISOR_TOOL_TIMEOUT,
+            max_rounds=ADVISOR_MAX_TOOL_ROUNDS,
+            failure_limit=MCP_TOOL_FAILURE_LIMIT,
+        ),
+        ADVISOR_TIMEOUT,
+        label="Advisor Claude call",
+    )
+    if not text:
+        return ("No advisor note generated.", usage, tool_log)
+    return (text, usage, tool_log)
 
 
 def build_public_output(output: dict) -> dict:
@@ -234,11 +216,12 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
     history_context = memory.build_agent_context_summary()
 
     advisor_note = ""
+    advisor_tool_log: list[dict[str, Any]] = []
     if use_ai and any(s["action"] in ("buy", "sell", "watch") for s in signals):
         logger.info(f"Calling Claude for narrative reasoning  (model={REASONING_MODEL})")
         try:
             with obs.phase("advisor"):
-                advisor_note, advisor_usage = call_claude_reasoning(
+                advisor_note, advisor_usage, advisor_tool_log = call_claude_reasoning(
                     signals, portfolio, market_data, history_context, convictions
                 )
             obs.record_advisor(REASONING_MODEL, advisor_usage)
@@ -354,6 +337,7 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
         "num_positions_screened": len(portfolio),
         "summary": summary,
         "advisor_note": advisor_note,
+        "advisor_tool_log": advisor_tool_log,
         "signals": signals,
         "market_data_snapshot": {
             t: {k: v for k, v in d.items() if k != "fetched_at"}

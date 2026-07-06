@@ -1,31 +1,24 @@
 """
-MCP server registry for ASTRA's Anthropic API calls.
+MCP server registry for ASTRA's Claude tool loop.
 
-Each integration is a function that returns a server dict (or None if unconfigured).
-build_servers() assembles the active list — only servers with a configured URL/key
-are included, so adding a new MCP is one entry here + its config vars.
+Each integration is a function returning a `ServerSpec` (or None if unconfigured).
+ASTRA runs Claude's tool-use loop **client-side** (see src/mcp_loop.py): we open the
+MCP connection ourselves, list its tools, expose them to Claude as ordinary tool
+schemas, and dispatch each call with our own per-tool timeout + circuit breaker. This
+replaced the server-side `mcp_servers=` connector, which ran the loop opaquely on
+Anthropic's infra with no per-tool timeout — one slow server stalled the whole call.
 
-Usage in agent.py:
-    servers = mcp.build_servers()
-    if servers:
-        message = client.beta.messages.create(..., mcp_servers=servers, betas=mcp.BETA_FLAGS)
-        text = mcp.extract_text(message)
-    else:
-        message = client.messages.create(...)
-        text = mcp.extract_text(message)
+Usage:
+    specs = mcp.advisor_specs()
+    text, usage, tool_log = mcp_loop.run_agentic_sync(prompt, specs, ...)
 """
 
 from __future__ import annotations
 
-import re
+from dataclasses import dataclass, field
 from typing import Any
 
 from anthropic.types import TextBlock
-from anthropic.types.beta import (
-    BetaRequestMCPServerToolConfigurationParam,
-    BetaRequestMCPServerURLDefinitionParam,
-    BetaTextBlock,
-)
 
 from src.config import (
     ALPHA_VANTAGE_API_KEY,
@@ -37,133 +30,96 @@ from src.config import (
     TAVILY_MCP_URL,
 )
 
-# Beta flags required for MCP client support
-BETA_FLAGS = ["mcp-client-2025-04-04"]
+
+@dataclass(frozen=True)
+class ServerSpec:
+    """A remote HTTP MCP endpoint we connect to client-side."""
+    name: str
+    url: str
+    allowed_tools: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
 # Server definitions — one function per integration
 # ---------------------------------------------------------------------------
 
-def _tavily() -> BetaRequestMCPServerURLDefinitionParam | None:
+def _tavily() -> ServerSpec | None:
     if not TAVILY_MCP_URL:
         return None
-    tool_config: BetaRequestMCPServerToolConfigurationParam = {
-        "enabled": True,
-        "allowed_tools": ["tavily-search"],
-    }
-    return {"type": "url", "url": TAVILY_MCP_URL, "name": "tavily", "tool_configuration": tool_config}
+    return ServerSpec(name="tavily", url=TAVILY_MCP_URL, allowed_tools=["tavily_search"])
 
 
-def _alpha_vantage() -> BetaRequestMCPServerURLDefinitionParam | None:
+def _alpha_vantage() -> ServerSpec | None:
     if not ALPHA_VANTAGE_API_KEY:
         return None
-    # Free tier: 25 calls/day, 5 calls/min — prompt instructs Claude to stay within limits
-    # Auth: API key passed as URL query param (legacy method; OAuth requires interactive flow)
+    # Free tier: 25 calls/day, 5 calls/min — the prompt instructs Claude to stay within limits.
+    # Auth: API key passed as URL query param (legacy method; OAuth requires interactive flow).
     url = f"https://mcp.alphavantage.co/mcp?apikey={ALPHA_VANTAGE_API_KEY}"
-    tool_config: BetaRequestMCPServerToolConfigurationParam = {
-        "enabled": True,
-        "allowed_tools": ["NEWS_SENTIMENT", "EARNINGS_CALENDAR", "COMPANY_OVERVIEW"],
-    }
-    return {"type": "url", "url": url, "name": "alpha_vantage", "tool_configuration": tool_config}
+    return ServerSpec(
+        name="alpha_vantage", url=url,
+        allowed_tools=["NEWS_SENTIMENT", "EARNINGS_CALENDAR", "COMPANY_OVERVIEW"],
+    )
 
 
-def _fmp() -> BetaRequestMCPServerURLDefinitionParam | None:
+def _fmp() -> ServerSpec | None:
+    # Dormant — kept for a future follow-up once the client-side path is proven (see CLAUDE.md).
     if not FMP_API_KEY:
         return None
-    # Free tier: 250 calls/day. Analyst data (price targets, grades, earnings calendar)
-    # only available for large/mid caps — small caps gracefully return empty on free plan.
     url = f"https://financialmodelingprep.com/mcp?apikey={FMP_API_KEY}"
-    tool_config: BetaRequestMCPServerToolConfigurationParam = {
-        "enabled": True,
-        "allowed_tools": ["analyst", "calendar"],
-    }
-    return {"type": "url", "url": url, "name": "fmp", "tool_configuration": tool_config}
+    return ServerSpec(name="fmp", url=url, allowed_tools=["analyst", "calendar"])
 
 
-def _sec_edgar() -> BetaRequestMCPServerURLDefinitionParam | None:
+def _sec_edgar() -> ServerSpec | None:
+    # Dormant — kept for a future follow-up once the client-side path is proven (see CLAUDE.md).
     if not SEC_EDGAR_MCP_URL:
         return None
-    # Community-hosted cyanheads/secedgar-mcp-server. No auth required.
-    # Rate limit: 10 req/sec. Tool covers Form 3/4/5 insider transactions.
-    tool_config: BetaRequestMCPServerToolConfigurationParam = {
-        "enabled": True,
-        "allowed_tools": ["secedgar_get_insider_transactions"],
-    }
-    return {"type": "url", "url": SEC_EDGAR_MCP_URL, "name": "sec_edgar", "tool_configuration": tool_config}
+    return ServerSpec(
+        name="sec_edgar", url=SEC_EDGAR_MCP_URL,
+        allowed_tools=["secedgar_get_insider_transactions"],
+    )
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def build_servers() -> list[BetaRequestMCPServerURLDefinitionParam]:
-    """Active MCP servers for live Claude calls — reliable providers only (Tavily + AV).
+def advisor_specs() -> list[ServerSpec]:
+    """MCP servers exposed to the daily advisor loop — reliable providers only (Tavily + AV).
 
-    SEC EDGAR (community-hosted, no SLA) and FMP (intermittent) are intentionally
-    EXCLUDED: as live MCP tools the model calls mid-generation, an unresponsive server
-    hangs the whole non-streaming response until the advisor wall-clock timeout (600s),
-    wasting the call and the spend. Their _sec_edgar()/_fmp() definitions are kept for
-    future use via direct REST pre-fetch (with our own timeout), not live MCP — see the
-    "Flaky MCP servers" note in CLAUDE.md.
+    SEC EDGAR (community-hosted, no SLA) and FMP (intermittent, empty for small caps) are
+    intentionally excluded for now; their definitions are kept dormant above for a later
+    follow-up once the client-side per-tool timeout has proven stable.
     """
-    candidates = [
-        _tavily(),
-        _alpha_vantage(),
-    ]
-    return [s for s in candidates if s is not None]
+    return [s for s in (_tavily(), _alpha_vantage()) if s is not None]
 
 
-def build_exploration_servers() -> list[BetaRequestMCPServerURLDefinitionParam]:
-    """Minimal MCP server list for the weekly exploration run.
-
-    Intentionally excludes SEC EDGAR (community-hosted, unreliable) and FMP
-    to reduce round-trips and avoid hanging on unresponsive servers.
-    Tavily discovers names; Alpha Vantage vets quality. That's enough.
-    """
-    candidates = [_tavily(), _alpha_vantage()]
-    return [s for s in candidates if s is not None]
+def exploration_specs() -> list[ServerSpec]:
+    """MCP servers exposed to the weekly exploration loop (same reliable set)."""
+    return [s for s in (_tavily(), _alpha_vantage()) if s is not None]
 
 
 def extract_text(message: Any) -> str:
+    """Join all text blocks of a standard Anthropic Messages response.
+
+    The client-side loop's final turn is clean markdown (no inlined tool XML), so this is
+    a straight concatenation of the ``text`` blocks — no beta-connector stripping needed.
     """
-    Pull plain text out of an Anthropic API response.
-
-    Handles both the standard Messages response (TextBlock) and the beta
-    MCP response (BetaTextBlock). For MCP responses, strips tool call/response
-    XML and any preamble before the first markdown heading.
-    """
-    content = message.content
-
-    # Beta MCP path — take the last text block (post tool-use)
-    beta_blocks = [b.text for b in content if isinstance(b, BetaTextBlock)]
-    if beta_blocks:
-        raw = beta_blocks[-1]
-        clean = re.sub(r"<tool_call>.*?</tool_call>", "", raw, flags=re.DOTALL)
-        clean = re.sub(r"<tool_response>.*?</tool_response>", "", clean, flags=re.DOTALL)
-        lines = clean.split("\n")
-        first_heading = next((i for i, ln in enumerate(lines) if re.match(r"^#{1,3} ", ln)), None)
-        if first_heading is not None:
-            clean = "\n".join(lines[first_heading:])
-        return clean.strip()
-
-    # Standard path
-    return next((b.text for b in content if isinstance(b, TextBlock)), "")
+    parts = [b.text for b in getattr(message, "content", []) if isinstance(b, TextBlock)]
+    return "\n".join(p for p in parts if p).strip()
 
 
 def search_context(
     max_searches: int = TAVILY_MAX_SEARCHES,
-    servers: list | None = None,
+    servers: list[ServerSpec] | None = None,
 ) -> dict[str, Any]:
     """Template vars for the mustache prompt tool-use block.
 
-    Pass `servers` explicitly to match exactly what was passed to the API call —
-    the template must only advertise tools that are actually connected.
-    Defaults to build_servers() (all configured servers) when not specified.
+    Pass `servers` to match exactly what the loop will connect to — the template must only
+    advertise tools that are actually available. Defaults to `advisor_specs()`.
     """
     if servers is None:
-        servers = build_servers()
-    names = {s["name"] for s in servers}
+        servers = advisor_specs()
+    names = {s.name for s in servers}
     return {
         "has_search":        bool(servers),
         "has_tavily":        "tavily" in names,

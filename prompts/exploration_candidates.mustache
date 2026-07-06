@@ -39,7 +39,7 @@ RESEARCH TOOLS:
 Use tools surgically — each call costs quota. Total budget for this run:
 
 {{#has_tavily}}
-- **Tavily** (`tavily-search`): {{max_searches}} searches per theme max, {{max_total_searches}} total. One focused query per theme is usually enough. Good query pattern: "publicly traded [theme] companies 2025 not widely held analyst coverage". Do not use Tavily to look up individual tickers — use it only to discover names you don't already know.
+- **Tavily** (`tavily_search`): {{max_searches}} searches per theme max, {{max_total_searches}} total. One focused query per theme is usually enough. Good query pattern: "publicly traded [theme] companies 2025 not widely held analyst coverage". Do not use Tavily to look up individual tickers — use it only to discover names you don't already know.
 {{/has_tavily}}
 {{#has_alpha_vantage}}
 - **Alpha Vantage** (`COMPANY_OVERVIEW`): IMPORTANT — free tier is 25 calls/day shared across all ASTRA runs. Limit yourself to {{max_av_calls}} calls maximum. Only call COMPANY_OVERVIEW for a ticker you are seriously considering recommending. Pull revenue growth, gross margin, market cap, description. If the overview reveals it fails a hard filter, stop there.

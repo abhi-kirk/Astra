@@ -1,13 +1,12 @@
 """
-Unit tests for src/mcp.py — pure utility functions only.
+Unit tests for src/mcp.py — server specs, text extraction, prompt context.
 """
 
 from unittest.mock import MagicMock
 
 from anthropic.types import TextBlock
-from anthropic.types.beta import BetaTextBlock
 
-from src.mcp import extract_text, search_context
+from src.mcp import ServerSpec, advisor_specs, exploration_specs, extract_text, search_context
 
 # ---------------------------------------------------------------------------
 # extract_text
@@ -19,54 +18,79 @@ class TestExtractText:
         msg.content = blocks
         return msg
 
-    def test_standard_text_block(self):
+    def test_single_text_block(self):
         block = MagicMock(spec=TextBlock)
         block.text = "Standard advisor note."
-        msg = self._make_message([block])
-        assert extract_text(msg) == "Standard advisor note."
+        assert extract_text(self._make_message([block])) == "Standard advisor note."
 
-    def test_beta_text_block_strips_xml(self):
-        raw = (
-            "<tool_call>search RKLB news</tool_call>"
-            "<tool_response>some results</tool_response>"
-            "## ASTRA Daily Note\nActual content here."
-        )
-        block = MagicMock(spec=BetaTextBlock)
-        block.text = raw
-        msg = self._make_message([block])
-        result = extract_text(msg)
-        assert "<tool_call>" not in result
-        assert "<tool_response>" not in result
-        assert "Actual content here." in result
-
-    def test_beta_drops_preamble_before_heading(self):
-        raw = "Sure, let me search...\nOkay found it.\n## ## ASTRA Daily Note\nReal content."
-        block = MagicMock(spec=BetaTextBlock)
-        block.text = raw
-        msg = self._make_message([block])
-        result = extract_text(msg)
-        assert "Sure, let me search" not in result
-        assert "Real content." in result
-
-    def test_beta_takes_last_text_block(self):
-        # First block is a thinking block, last is the actual note
-        block1 = MagicMock(spec=BetaTextBlock)
-        block1.text = "Thinking..."
-        block2 = MagicMock(spec=BetaTextBlock)
-        block2.text = "## ASTRA Daily Note\nFinal note."
-        msg = self._make_message([block1, block2])
-        result = extract_text(msg)
-        assert "Final note." in result
+    def test_joins_multiple_text_blocks(self):
+        b1 = MagicMock(spec=TextBlock)
+        b1.text = "## Note"
+        b2 = MagicMock(spec=TextBlock)
+        b2.text = "Body content."
+        assert extract_text(self._make_message([b1, b2])) == "## Note\nBody content."
 
     def test_empty_content(self):
-        msg = self._make_message([])
-        assert extract_text(msg) == ""
+        assert extract_text(self._make_message([])) == ""
 
     def test_non_text_blocks_ignored(self):
-        # Blocks that are neither TextBlock nor BetaTextBlock should be skipped
-        other = MagicMock()  # no spec — not an instance of either
-        msg = self._make_message([other])
-        assert extract_text(msg) == ""
+        other = MagicMock()  # no spec — not a TextBlock instance
+        assert extract_text(self._make_message([other])) == ""
+
+
+# ---------------------------------------------------------------------------
+# advisor_specs / exploration_specs
+# ---------------------------------------------------------------------------
+
+class TestSpecs:
+    def _patch_none(self, monkeypatch):
+        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
+        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
+        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "")
+        monkeypatch.setattr("src.mcp.FMP_API_KEY", "")
+
+    def test_empty_when_unconfigured(self, monkeypatch):
+        self._patch_none(monkeypatch)
+        assert advisor_specs() == []
+        assert exploration_specs() == []
+
+    def test_tavily_only(self, monkeypatch):
+        self._patch_none(monkeypatch)
+        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "https://mcp.tavily.com/mcp/?tavilyApiKey=t")
+        specs = advisor_specs()
+        assert [s.name for s in specs] == ["tavily"]
+        assert specs[0].allowed_tools == ["tavily_search"]
+
+    def test_alpha_vantage_key_in_url(self, monkeypatch):
+        self._patch_none(monkeypatch)
+        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "my-secret-key")
+        specs = advisor_specs()
+        assert [s.name for s in specs] == ["alpha_vantage"]
+        assert "my-secret-key" in specs[0].url
+
+    def test_both_configured(self, monkeypatch):
+        self._patch_none(monkeypatch)
+        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "https://tavily")
+        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "k")
+        assert {s.name for s in advisor_specs()} == {"tavily", "alpha_vantage"}
+
+    def test_sec_edgar_and_fmp_excluded_from_live_specs(self, monkeypatch):
+        # Dormant servers must never appear in the live loop, even when configured.
+        self._patch_none(monkeypatch)
+        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "https://secedgar.example/mcp")
+        monkeypatch.setattr("src.mcp.FMP_API_KEY", "fmpkey")
+        assert advisor_specs() == []
+        assert exploration_specs() == []
+
+    def test_dormant_definitions_still_build(self, monkeypatch):
+        # The _fmp/_sec_edgar builders are kept for a future follow-up.
+        from src.mcp import _fmp, _sec_edgar
+        monkeypatch.setattr("src.mcp.FMP_API_KEY", "mykey456")
+        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "https://secedgar.example/mcp")
+        fmp = _fmp()
+        edgar = _sec_edgar()
+        assert fmp is not None and "mykey456" in fmp.url and set(fmp.allowed_tools) == {"analyst", "calendar"}
+        assert edgar is not None and edgar.allowed_tools == ["secedgar_get_insider_transactions"]
 
 
 # ---------------------------------------------------------------------------
@@ -74,116 +98,23 @@ class TestExtractText:
 # ---------------------------------------------------------------------------
 
 class TestSearchContext:
-    def _patch_none(self, monkeypatch):
-        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
-        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
-        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "")
-        monkeypatch.setattr("src.mcp.FMP_API_KEY", "")
-
-    def test_no_search_when_both_empty(self, monkeypatch):
-        self._patch_none(monkeypatch)
-        ctx = search_context()
+    def test_no_search_when_empty(self):
+        ctx = search_context(servers=[])
         assert ctx["has_search"] is False
         assert ctx["has_tavily"] is False
         assert ctx["has_alpha_vantage"] is False
 
-    def test_has_search_tavily_only(self, monkeypatch):
-        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "https://mcp.tavily.com/mcp/?tavilyApiKey=test")
-        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
-        ctx = search_context()
+    def test_flags_track_specs(self):
+        specs = [ServerSpec("tavily", "u", ["tavily-search"])]
+        ctx = search_context(servers=specs)
         assert ctx["has_search"] is True
         assert ctx["has_tavily"] is True
         assert ctx["has_alpha_vantage"] is False
+        # Dormant servers are never advertised.
+        assert ctx["has_sec_edgar"] is False
+        assert ctx["has_fmp"] is False
 
-    def test_has_search_alpha_vantage_only(self, monkeypatch):
-        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
-        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "testkey")
-        ctx = search_context()
-        assert ctx["has_search"] is True
-        assert ctx["has_tavily"] is False
-        assert ctx["has_alpha_vantage"] is True
-
-    def test_has_search_both_configured(self, monkeypatch):
-        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "https://mcp.tavily.com/mcp/?tavilyApiKey=test")
-        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "testkey")
-        ctx = search_context()
-        assert ctx["has_search"] is True
-        assert ctx["has_tavily"] is True
-        assert ctx["has_alpha_vantage"] is True
-        assert ctx["max_av_calls"] > 0
-
-    def test_max_searches_override(self, monkeypatch):
-        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "https://example.com")
-        ctx = search_context(max_searches=3)
+    def test_max_searches_override(self):
+        ctx = search_context(max_searches=3, servers=[ServerSpec("tavily", "u")])
         assert ctx["max_searches"] == 3
-
-    def test_alpha_vantage_key_in_url(self, monkeypatch):
-        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
-        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "my-secret-key")
-        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "")
-        monkeypatch.setattr("src.mcp.FMP_API_KEY", "")
-        from src.mcp import build_servers
-        servers = build_servers()
-        assert len(servers) == 1
-        assert "my-secret-key" in servers[0]["url"]
-        assert servers[0]["name"] == "alpha_vantage"
-
-    def test_sec_edgar_excluded_from_live_servers(self, monkeypatch):
-        # SEC EDGAR is intentionally excluded from live MCP (flaky community host),
-        # even when its URL is configured.
-        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
-        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
-        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "https://secedgar.caseyjhand.com/mcp")
-        monkeypatch.setattr("src.mcp.FMP_API_KEY", "")
-        ctx = search_context()
-        assert ctx["has_sec_edgar"] is False
-        assert ctx["has_search"] is False  # no reliable server configured
-
-    def test_sec_edgar_excluded_when_url_empty(self, monkeypatch):
-        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
-        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
-        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "")
-        monkeypatch.setattr("src.mcp.FMP_API_KEY", "")
-        ctx = search_context()
-        assert ctx["has_search"] is False
-        assert ctx["has_sec_edgar"] is False
-
-    def test_sec_edgar_definition_allowed_tools(self, monkeypatch):
-        # Definition kept for future REST pre-fetch, though excluded from live MCP.
-        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "https://secedgar.caseyjhand.com/mcp")
-        from src.mcp import _sec_edgar
-        edgar = _sec_edgar()
-        assert edgar["name"] == "sec_edgar"
-        assert edgar["tool_configuration"]["allowed_tools"] == ["secedgar_get_insider_transactions"]
-
-    def test_fmp_excluded_from_live_servers(self, monkeypatch):
-        # FMP is intentionally excluded from live MCP (intermittent, empty for small caps).
-        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
-        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
-        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "")
-        monkeypatch.setattr("src.mcp.FMP_API_KEY", "testkey123")
-        ctx = search_context()
-        assert ctx["has_fmp"] is False
-        assert ctx["has_search"] is False
-
-    def test_fmp_excluded_when_key_empty(self, monkeypatch):
-        self._patch_none(monkeypatch)
-        ctx = search_context()
-        assert ctx["has_fmp"] is False
-
-    def test_fmp_definition_key_in_url_and_allowed_tools(self, monkeypatch):
-        # Definition kept for future REST pre-fetch, though excluded from live MCP.
-        monkeypatch.setattr("src.mcp.FMP_API_KEY", "mykey456")
-        from src.mcp import _fmp
-        fmp = _fmp()
-        assert fmp["name"] == "fmp"
-        assert "mykey456" in fmp["url"]
-        assert set(fmp["tool_configuration"]["allowed_tools"]) == {"analyst", "calendar"}
-
-    def test_fmp_max_calls_in_context(self, monkeypatch):
-        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
-        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
-        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "")
-        monkeypatch.setattr("src.mcp.FMP_API_KEY", "testkey123")
-        ctx = search_context()
-        assert ctx["max_fmp_calls"] > 0
+        assert ctx["max_av_calls"] > 0

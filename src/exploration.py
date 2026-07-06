@@ -7,7 +7,7 @@ Entry point: `python -m src.exploration` (run by exploration.yml, Fridays 9pm ET
 Bridges to the exploitation pipeline (kept minimal):
   - data_layer.load_convictions()        — shared source of truth
   - memory.get_latest_portfolio_snapshot() — to exclude current holdings
-  - mcp.build_servers() / mcp.extract_text() — shared MCP client layer
+  - mcp.exploration_specs() / mcp_loop.run_agentic_sync() — shared client-side tool loop
   - strategy.quality_filter() / strategy.technical_signal() — reused in daily screening
   - memory.*_exploration_* helpers       — Supabase CRUD for exploration_candidates
 """
@@ -21,21 +21,24 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-import anthropic
 import chevron
 
-from src import mcp
+from src import mcp, mcp_loop
 from src.logger import timer
 
 logger = logging.getLogger(__name__)
 from src.config import (
+    ADVISOR_MAX_TOOL_ROUNDS,
+    ADVISOR_TOOL_TIMEOUT,
     ANTHROPIC_API_KEY,
+    EXPLORATION_EFFORT,
     EXPLORATION_MAX_AV_CALLS,
     EXPLORATION_MAX_FMP_CALLS,
     EXPLORATION_MAX_SEARCHES,
     EXPLORATION_MAX_TOKENS,
     EXPLORATION_MODEL,
     EXPLORATION_TIMEOUT,
+    MCP_TOOL_FAILURE_LIMIT,
 )
 from src.timeout import run_with_timeout
 
@@ -136,8 +139,8 @@ def call_claude_exploration(
     exclusions_csv  = ", ".join(sorted(exclusion_tickers)) or "none"
     known_csv       = ", ".join(sorted(already_tracked))   or "none"
 
-    servers    = mcp.build_exploration_servers()
-    ctx        = mcp.search_context(max_searches=EXPLORATION_MAX_SEARCHES, servers=servers)
+    specs      = mcp.exploration_specs()
+    ctx        = mcp.search_context(max_searches=EXPLORATION_MAX_SEARCHES, servers=specs)
     template   = (PROMPTS_DIR / "exploration_candidates.mustache").read_text()
     prompt     = chevron.render(template, {
         "themes_detail":       themes_detail,
@@ -152,29 +155,20 @@ def call_claude_exploration(
         **ctx,
     })
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
-    def _call() -> str:
-        if servers:
-            msg = client.beta.messages.create(
-                model=EXPLORATION_MODEL,
-                max_tokens=EXPLORATION_MAX_TOKENS,
-                mcp_servers=servers,
-                messages=[{"role": "user", "content": prompt}],
-                betas=mcp.BETA_FLAGS,
-            )
-        else:
-            msg = client.messages.create(
-                model=EXPLORATION_MODEL,
-                max_tokens=EXPLORATION_MAX_TOKENS,
-                messages=[{"role": "user", "content": prompt}],
-            )
-        usage = getattr(msg, "usage", None)
-        if usage:
-            logger.info(f"Exploration tokens — input: {usage.input_tokens}  output: {usage.output_tokens}  total: {usage.input_tokens + usage.output_tokens}")
-        return mcp.extract_text(msg) or ""
-
-    return run_with_timeout(_call, EXPLORATION_TIMEOUT, label="Exploration Claude call") or ""
+    text, _usage, _tool_log = run_with_timeout(
+        lambda: mcp_loop.run_agentic_sync(
+            prompt, specs,
+            model=EXPLORATION_MODEL,
+            max_tokens=EXPLORATION_MAX_TOKENS,
+            effort=EXPLORATION_EFFORT,
+            tool_timeout=ADVISOR_TOOL_TIMEOUT,
+            max_rounds=ADVISOR_MAX_TOOL_ROUNDS,
+            failure_limit=MCP_TOOL_FAILURE_LIMIT,
+        ),
+        EXPLORATION_TIMEOUT,
+        label="Exploration Claude call",
+    )
+    return text or ""
 
 
 # ---------------------------------------------------------------------------
