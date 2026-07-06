@@ -36,6 +36,11 @@ logger = logging.getLogger(__name__)
 
 _PLACED_STATES = ("pending", "submitted", "filled")
 
+# Sells mirror only deliberate paper exits. A `blocked` close comes from a buy-side rule
+# tripping on the MAIN portfolio (averaging-down cap, theme/position limit) and says
+# nothing about the agentic position — never a real-money sell trigger.
+_MIRRORED_CLOSE_REASONS = ("profit_take", "signal_inactive")
+
 
 def _finalize(summary: dict, num_mirrors: int = 0) -> None:
     """Non-fatal side effects at run exit: Telegram alert + observability metrics."""
@@ -67,16 +72,20 @@ def _build_mirrors(run_date: str) -> list[dict]:
     """Today's paper track → mirror orders. BUYs from paper opens, SELLs from paper closes."""
     mirrors: list[dict] = []
     for pt in memory.get_paper_trades_opened_on(run_date):
-        if pt.get("action") == "buy":
-            mirrors.append({
-                "ticker": pt["ticker"], "side": "buy",
-                "mirrors_paper_trade_id": pt.get("id"),
-                "suggested_pct": pt.get("suggested_position_pct"),
-            })
+        if pt.get("action") != "buy":
+            continue
+        if (pt.get("signal_data") or {}).get("source") == "exploration":
+            continue  # exploration candidates are paper-only experiments — never real money
+        mirrors.append({
+            "ticker": pt["ticker"], "side": "buy",
+            "mirrors_paper_trade_id": pt.get("id"),
+        })
     for pt in memory.get_paper_trades_closed_on(run_date):
+        if pt.get("close_reason") not in _MIRRORED_CLOSE_REASONS:
+            continue
         mirrors.append({
             "ticker": pt["ticker"], "side": "sell",
-            "mirrors_paper_trade_id": pt.get("id"), "suggested_pct": None,
+            "mirrors_paper_trade_id": pt.get("id"),
         })
     return mirrors
 
@@ -165,10 +174,10 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
         held = positions.get(ticker, {})
         mdata = market_data.get(ticker, {})
 
-        # Sizing
+        # Sizing — flat fraction of sleeve equity per buy (not the paper track's 4–6%,
+        # which would leave a ~$1k sleeve mostly idle; see AGENT_POSITION_PCT).
         if side == "buy":
-            pct = m.get("suggested_pct") or config.SIZE_APPROVED_PCT
-            estimated_cost = round(pct * equity, 2) if equity else None
+            estimated_cost = round(config.AGENT_POSITION_PCT * equity, 2) if equity else None
         else:
             if not held.get("shares"):
                 logger.info("Autotrader: no agentic %s position to sell — skipping.", ticker)
@@ -176,10 +185,13 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
                 continue
             estimated_cost = None
 
+        # The daily cap counts only orders actually sent to the broker — blocked and
+        # dry-run rows in agent_trades must not starve real trades out of the budget.
+        placed_today = [t for t in trades_today if t.get("status") in _PLACED_STATES]
         gr = check_agent_guardrails(
             ticker=ticker, side=side, position=held, market_data=mdata,
             convictions=convictions, portfolio_summary=portfolio_summary,
-            trades_today=trades_today, open_position_tickers=open_tickers,
+            trades_today=placed_today, open_position_tickers=open_tickers,
             last_buy=memory.get_last_agent_buy(ticker), drawdown_pct=drawdown,
             settled_cash=port["buying_power"], estimated_cost=estimated_cost, now=now,
         )

@@ -308,11 +308,18 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
             memory.close_paper_trade(ticker, price, run_date, "profit_take")
         # buy / watch → keep open
 
+    # Dedup: a signal that persists unchanged (e.g. a profit-take that stays up >60%)
+    # re-logs weekly instead of every run — see memory.should_log_decision.
+    loggable = [s["ticker"] for s in signals if s["action"] in ("buy", "sell", "watch")]
+    latest_decisions = memory.get_latest_decisions_for(loggable)
+
     for sig in signals:
         pos = portfolio.get(sig["ticker"], {})
         mdata = market_data.get(sig["ticker"], {})
         price = mdata.get("current_price")
-        if sig["action"] in ("buy", "sell", "watch"):
+        if sig["action"] in ("buy", "sell", "watch") and memory.should_log_decision(
+            latest_decisions.get(sig["ticker"]), sig["action"], run_date
+        ):
             memory.log_decision(
                 ticker=sig["ticker"],
                 action=sig["action"],

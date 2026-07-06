@@ -81,6 +81,10 @@ AGENT_MAX_TRADES_PER_DAY = _cfg("AGENT_MAX_TRADES_PER_DAY", cast=int,   default=
 AGENT_MIN_HOLD_DAYS      = _cfg("AGENT_MIN_HOLD_DAYS",      cast=int,   default=2)     # trading days before a sell is allowed
 AGENT_DRAWDOWN_HALT_PCT  = _cfg("AGENT_DRAWDOWN_HALT_PCT",  cast=float, default=-15.0) # halt if account draws down past this %
 AGENT_MAX_OPEN_POSITIONS = _cfg("AGENT_MAX_OPEN_POSITIONS", cast=int,   default=5)
+# Per-buy size as a fraction of agentic sleeve equity. The sleeve is small (~$1k), so
+# mirroring the paper track's 4–6% would leave ~75% idle cash — 20% × 5 max positions
+# deploys the sleeve fully while keeping 5-name diversification.
+AGENT_POSITION_PCT       = _cfg("AGENT_POSITION_PCT",       cast=float, default=0.20)
 # Market orders with dollar sizing — the fractional-share fit for a small (~$1k) account
 # (Robinhood allows fractional shares only on market orders, not limit).
 AGENT_ORDER_TYPE         = _cfg("AGENT_ORDER_TYPE",         default="market")

@@ -21,6 +21,42 @@ from src.db import rows as db_rows
 logger = logging.getLogger(__name__)
 
 
+# A persistent signal (e.g. a profit-take that stays >60% up) re-logs weekly, not on
+# every daily run — keeps `decisions` and the advisor's history context signal-dense
+# while still refreshing often enough for trade-journal attribution (3-day window).
+DECISION_RELOG_DAYS = 7
+
+
+def should_log_decision(last: dict | None, action: str, run_date: str) -> bool:
+    """Dedup gate for the decision log: skip when the ticker's most recent decision has
+    the same action and is fresher than DECISION_RELOG_DAYS. Pure — unit-testable."""
+    if not last or last.get("action") != action:
+        return True
+    try:
+        prev = datetime.fromisoformat(str(last["run_date"]).replace("Z", "+00:00")).replace(tzinfo=None)
+        now = datetime.fromisoformat(str(run_date).replace("Z", "+00:00")).replace(tzinfo=None)
+    except (ValueError, TypeError, KeyError):
+        return True
+    return (now - prev).days >= DECISION_RELOG_DAYS
+
+
+def get_latest_decisions_for(tickers: list[str]) -> dict[str, dict]:
+    """Most recent decision row per ticker (for the dedup gate). One query."""
+    if not tickers:
+        return {}
+    data = db_rows(
+        get_client().table("decisions")
+        .select("ticker, action, run_date")
+        .in_("ticker", tickers)
+        .order("run_date", desc=True).limit(500)
+        .execute().data
+    )
+    latest: dict[str, dict] = {}
+    for row in data:
+        latest.setdefault(row["ticker"], row)
+    return latest
+
+
 # ---------------------------------------------------------------------------
 # Write
 # ---------------------------------------------------------------------------
@@ -374,10 +410,12 @@ def get_agent_trades_today(run_date: str) -> Rows:
 
 
 def get_last_agent_buy(ticker: str) -> dict | None:
-    """Most recent BUY for a ticker in the agentic account (for the min-hold check)."""
+    """Most recent placed BUY for a ticker in the agentic account (for the min-hold
+    check). Blocked/dry-run rows are not real purchases and must not reset the clock."""
     data = db_rows(
         get_client().table("agent_trades").select("*")
         .eq("ticker", ticker).eq("side", "buy")
+        .in_("status", ["pending", "submitted", "filled"])
         .order("run_date", desc=True).limit(1).execute().data
     )
     return data[0] if data else None

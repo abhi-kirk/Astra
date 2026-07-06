@@ -93,13 +93,14 @@ def test_dry_run_reviews_but_never_places(wired, monkeypatch):
 
 def test_live_places_marketable_limit(wired, monkeypatch):
     monkeypatch.setattr(config, "AGENT_TRADING_ENABLED", True)
+    monkeypatch.setattr(config, "AGENT_POSITION_PCT", 0.20)
     _, logs = wired
     fb = FakeBroker()
     summary = ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
     assert len(fb.reviews) == 1 and len(fb.places) == 1
     p = fb.places[0]
     assert p["symbol"] == "RKLB" and p["side"] == "buy" and p["type"] == "market"
-    assert p["dollar_amount"] == "60.00"        # 0.06 * $1000 equity
+    assert p["dollar_amount"] == "200.00"       # AGENT_POSITION_PCT (0.20) * $1000 equity
     assert "quantity" not in p and "ref_id" in p
     logged = logs[-1]
     assert logged["status"] == "submitted"
@@ -112,7 +113,7 @@ def test_live_sell_mirror_exits_full_position(wired, monkeypatch):
     monkeypatch.setattr(config, "AGENT_TRADING_ENABLED", True)
     state, _ = wired
     state["opened"] = []
-    state["closed"] = [{"id": 22, "ticker": "RKLB"}]
+    state["closed"] = [{"id": 22, "ticker": "RKLB", "close_reason": "profit_take"}]
     state["last_buy"] = {"run_date": "2026-01-01T00:00:00"}  # long ago → min-hold ok
     fb = FakeBroker(positions={"positions": [{"symbol": "RKLB", "quantity": 5, "average_cost": 90}]})
     ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
@@ -182,3 +183,81 @@ def test_idempotent_skip_when_already_placed(wired, monkeypatch):
     summary = ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
     assert fb.places == []
     assert "buy:RKLB" in summary["skipped"]
+
+
+# ---------------------------------------------------------------------------
+# Mirror-source filters: close_reason + exploration
+# ---------------------------------------------------------------------------
+
+def test_blocked_close_is_not_mirrored_as_sell(wired, monkeypatch):
+    """A `blocked` paper-close comes from a buy-side rule on the MAIN portfolio
+    (averaging-down cap, theme/position limit) — it must never sell the agentic position."""
+    monkeypatch.setattr(config, "AGENT_TRADING_ENABLED", True)
+    state, logs = wired
+    state["opened"] = []
+    state["closed"] = [{"id": 22, "ticker": "RKLB", "close_reason": "blocked"}]
+    fb = FakeBroker(positions={"positions": [{"symbol": "RKLB", "quantity": 5, "average_cost": 90}]})
+    summary = ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
+    assert fb.reviews == [] and fb.places == []
+    assert summary["placed"] == [] and logs == []
+
+
+def test_signal_inactive_close_is_mirrored_as_sell(wired, monkeypatch):
+    monkeypatch.setattr(config, "AGENT_TRADING_ENABLED", True)
+    state, _ = wired
+    state["opened"] = []
+    state["closed"] = [{"id": 22, "ticker": "RKLB", "close_reason": "signal_inactive"}]
+    state["last_buy"] = {"run_date": "2026-01-01T00:00:00"}
+    fb = FakeBroker(positions={"positions": [{"symbol": "RKLB", "quantity": 5, "average_cost": 90}]})
+    ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
+    assert len(fb.places) == 1 and fb.places[0]["side"] == "sell"
+
+
+def test_exploration_paper_buy_is_not_mirrored(wired, monkeypatch):
+    """Exploration candidates are paper-only experiments — never a real-money mirror."""
+    monkeypatch.setattr(config, "AGENT_TRADING_ENABLED", True)
+    state, logs = wired
+    state["opened"] = [{
+        "id": 33, "ticker": "RKLB", "action": "buy",
+        "signal_data": {"action": "buy", "source": "exploration"},
+    }]
+    fb = FakeBroker()
+    summary = ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
+    assert fb.reviews == [] and fb.places == []
+    assert summary["placed"] == [] and logs == []
+
+
+# ---------------------------------------------------------------------------
+# Daily cap counts only placed orders
+# ---------------------------------------------------------------------------
+
+def test_blocked_and_dry_run_rows_do_not_consume_daily_cap(wired, monkeypatch):
+    """Morning dry-run rehearsals and blocked attempts logged in agent_trades must not
+    starve the live run out of its trades/day budget."""
+    monkeypatch.setattr(config, "AGENT_TRADING_ENABLED", True)
+    monkeypatch.setattr(config, "AGENT_MAX_TRADES_PER_DAY", 3)
+    state, _ = wired
+    state["today"] = [
+        {"ticker": "RKLB", "side": "buy", "status": "dry_run"},
+        {"ticker": "NVDA", "side": "buy", "status": "blocked"},
+        {"ticker": "ASTS", "side": "buy", "status": "blocked"},
+    ]
+    fb = FakeBroker()
+    summary = ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
+    assert len(fb.places) == 1
+    assert summary["placed"][0]["ticker"] == "RKLB"
+
+
+def test_placed_rows_still_consume_daily_cap(wired, monkeypatch):
+    monkeypatch.setattr(config, "AGENT_TRADING_ENABLED", True)
+    monkeypatch.setattr(config, "AGENT_MAX_TRADES_PER_DAY", 3)
+    state, _ = wired
+    state["today"] = [
+        {"ticker": "NVDA", "side": "buy", "status": "submitted"},
+        {"ticker": "ASTS", "side": "buy", "status": "filled"},
+        {"ticker": "GOOGL", "side": "buy", "status": "pending"},
+    ]
+    fb = FakeBroker()
+    summary = ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
+    assert fb.places == []
+    assert summary["blocked"] == ["buy:RKLB"]
