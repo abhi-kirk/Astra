@@ -1,0 +1,90 @@
+"""
+Conviction — the anchor of the brain. Conviction is both a GATE (a name must be in
+`convictions` to be actionable) and a WEIGHT multiplier `C` on the composite score
+and on sizing. This is what makes ASTRA a systematization of Abhi's convictions rather
+than a generic quant screen.
+
+`get_ticker_guidance` / `is_excluded` are the canonical implementations (strategy.py
+re-exports them for backward compatibility with agent_guardrails and the executor).
+"""
+
+from __future__ import annotations
+
+from src.brain import params
+
+
+def is_excluded(ticker: str, convictions: dict) -> str | None:
+    """Returns exclusion reason if ticker is hard-excluded (e.g. TSLA), else None."""
+    for excl in convictions.get("exclusions", []):
+        if excl["ticker"] == ticker:
+            return excl["reason"]
+    return None
+
+
+def get_ticker_guidance(ticker: str, convictions: dict) -> dict:
+    """
+    Most-specific guidance for a ticker — individual holding overrides theme.
+    Keys: status, notes, theme, do_not_add, hold_only, intent, original_catalyst.
+    """
+    meta = convictions.get("ticker_metadata", {}).get(ticker, {})
+    intent = meta.get("intent", "opportunistic")  # default: apply profit-take logic
+    original_catalyst = meta.get("original_catalyst")
+
+    def _with_meta(base: dict) -> dict:
+        return {**base, "intent": intent, "original_catalyst": original_catalyst}
+
+    individual = convictions.get("individual_holdings", {}).get(ticker)
+    if individual:
+        return _with_meta({
+            "status": individual.get("status", "hold"),
+            "notes": individual.get("thesis", ""),
+            "action_note": individual.get("action", ""),
+            "theme": None,
+            "do_not_add": individual.get("status") == "do_not_add",
+            "hold_only": individual.get("status") == "hold",
+        })
+
+    for theme_name, theme in convictions.get("themes", {}).items():
+        for bucket, status, hold_only, do_not_add in (
+            ("preferred",  "preferred",  False, False),
+            ("approved",   "approved",   False, False),
+            ("hold_only",  "hold_only",  True,  True),
+            ("do_not_add", "do_not_add", False, True),
+        ):
+            if ticker in theme.get(bucket, []):
+                return _with_meta({
+                    "status": status,
+                    "notes": theme.get("notes", {}).get(ticker, ""),
+                    "action_note": "",
+                    "theme": theme_name,
+                    "do_not_add": do_not_add,
+                    "hold_only": hold_only,
+                })
+
+    return _with_meta({"status": "unknown", "notes": "", "action_note": "", "theme": None,
+                       "do_not_add": False, "hold_only": False})
+
+
+def conviction_weight(guidance: dict) -> float:
+    """
+    Conviction weight C ∈ [0,1] used in Score_buy = C·S and in sizing.
+    preferred > approved > hold; do_not_add / written_off / unknown → 0 (no BUY).
+    """
+    status = guidance.get("status", "unknown")
+    if status == "preferred":
+        return params.CONVICTION_WEIGHTS["preferred"]
+    if status == "approved":
+        return params.CONVICTION_WEIGHTS["approved"]
+    if status in ("hold", "hold_only"):
+        return params.CONVICTION_WEIGHTS["hold"]
+    return 0.0
+
+
+def can_buy(guidance: dict) -> bool:
+    """A name is buyable only if it carries positive conviction and is not hold-only /
+    do-not-add. (hold-only conviction still scores >0 but is gated out of BUYs.)"""
+    return (
+        conviction_weight(guidance) > 0
+        and not guidance.get("hold_only")
+        and not guidance.get("do_not_add")
+    )

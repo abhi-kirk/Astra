@@ -206,8 +206,16 @@ def log_paper_trade(
     return data[0].get("id") if data else None
 
 
-def close_paper_trade(ticker: str, close_price: float, run_date: str, reason: str) -> None:
-    """Close an open paper trade. Reason: signal_inactive | profit_take | blocked."""
+def close_paper_trade(
+    ticker: str, close_price: float, run_date: str, reason: str, fraction: float = 1.0
+) -> None:
+    """Close (or partially trim) an open paper trade.
+
+    Reasons: signal_inactive | thesis_invalidation | trailing_stop | profit_take | blocked
+    (full close), or parabolic_trim (partial). `fraction` ∈ (0,1] is the portion to sell;
+    a fraction < 1 reduces the open lot's shares/cost proportionally and keeps it open (the
+    runner), leaving the per-share cost basis (price_at_signal) unchanged.
+    """
     db = get_client()
     data = db_rows(
         db.table("paper_trades")
@@ -219,17 +227,27 @@ def close_paper_trade(ticker: str, close_price: float, run_date: str, reason: st
         return
 
     t = data[0]
-    pnl_d   = (close_price - t["price_at_signal"]) * t["virtual_shares"]
+    frac = min(max(fraction, 0.0), 1.0)
+    sold_shares = t["virtual_shares"] * frac
+    pnl_d   = (close_price - t["price_at_signal"]) * sold_shares
     pnl_pct = (close_price - t["price_at_signal"]) / t["price_at_signal"] * 100
 
-    db.table("paper_trades").update({
-        "is_open":      False,
-        "closed_at":    run_date,
-        "close_price":  close_price,
-        "close_reason": reason,
-    }).eq("id", t["id"]).execute()
-
-    logger.info(f"Paper CLOSE {ticker}: ${close_price:.2f}  P&L ${pnl_d:+.2f} ({pnl_pct:+.1f}%)  reason={reason}")
+    if frac >= 1.0:
+        db.table("paper_trades").update({
+            "is_open":      False,
+            "closed_at":    run_date,
+            "close_price":  close_price,
+            "close_reason": reason,
+        }).eq("id", t["id"]).execute()
+        logger.info(f"Paper CLOSE {ticker}: ${close_price:.2f}  P&L ${pnl_d:+.2f} ({pnl_pct:+.1f}%)  reason={reason}")
+    else:
+        # Partial trim — reduce the open lot, keep the runner.
+        db.table("paper_trades").update({
+            "virtual_shares": round(t["virtual_shares"] - sold_shares, 6),
+            "virtual_cost":   round(t["virtual_cost"] * (1.0 - frac), 2),
+        }).eq("id", t["id"]).execute()
+        logger.info(f"Paper TRIM  {ticker}: sold {frac:.0%} @ ${close_price:.2f}  "
+                    f"realized ${pnl_d:+.2f} ({pnl_pct:+.1f}%)  reason={reason}")
 
 
 def upsert_exploration_candidate(candidate: dict) -> None:

@@ -22,7 +22,14 @@ from pathlib import Path
 import pandas as pd
 import yfinance as yf
 
-from src.config import MARKET_DATA_PERIOD_DAYS, MARKET_DATA_WORKERS
+from src.config import (
+    BRAIN_ATR_PERIOD,
+    BRAIN_MOM_LOOKBACK_DAYS,
+    BRAIN_MOM_SKIP_DAYS,
+    BRAIN_SWING_HIGH_LOOKBACK,
+    MARKET_DATA_PERIOD_DAYS,
+    MARKET_DATA_WORKERS,
+)
 
 logger = logging.getLogger(__name__)
 from src.db import rows as db_rows
@@ -205,8 +212,12 @@ def get_market_data(ticker: str, period_days: int = MARKET_DATA_PERIOD_DAYS) -> 
         ma_50 = float(hist["Close"].tail(50).mean())
         ma_200 = float(hist["Close"].tail(200).mean()) if len(hist) >= 200 else None
         avg_vol_30d = float(hist["Volume"].tail(30).mean())
+        atr_14 = _calc_atr(hist, BRAIN_ATR_PERIOD)
+        recent_swing_high = float(hist["High"].tail(BRAIN_SWING_HIGH_LOOKBACK).max())
+        mom_12_1 = _calc_momentum(closes, BRAIN_MOM_LOOKBACK_DAYS, BRAIN_MOM_SKIP_DAYS)
 
         info = tk.info or {}
+        revisions = _get_revisions(tk)
 
         return {
             "ticker": ticker,
@@ -219,6 +230,11 @@ def get_market_data(ticker: str, period_days: int = MARKET_DATA_PERIOD_DAYS) -> 
             "ma_200": round(ma_200, 2) if ma_200 else None,
             "price_vs_ma50_pct": round((current_price - ma_50) / ma_50 * 100, 2),
             "avg_volume_30d": int(avg_vol_30d),
+            # Brain technicals
+            "atr_14": round(atr_14, 4) if atr_14 else None,
+            "recent_swing_high": round(recent_swing_high, 2),
+            "mom_12_1": round(mom_12_1, 4) if mom_12_1 is not None else None,
+            "revisions": revisions,
             # Fundamentals
             "market_cap": info.get("marketCap"),
             "pe_ratio": info.get("trailingPE"),
@@ -272,3 +288,52 @@ def _calc_rsi(prices: pd.Series, period: int = 14) -> float | None:
     rs = gain / loss.replace(0, float("nan"))
     rsi = 100 - (100 / (1 + rs))
     return round(float(rsi.iloc[-1]), 2)
+
+
+def _calc_atr(hist: pd.DataFrame, period: int) -> float | None:
+    """Wilder Average True Range over `period`. Needs High/Low/Close."""
+    if len(hist) < period + 1:
+        return None
+    high, low, close = hist["High"], hist["Low"], hist["Close"]
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    atr = tr.ewm(alpha=1 / period, adjust=False).mean()
+    return float(atr.iloc[-1])
+
+
+def _calc_momentum(closes: pd.Series, lookback: int, skip: int) -> float | None:
+    """12-1 style momentum: cumulative return over the lookback window ending `skip`
+    days ago (skips the most recent month to avoid short-term reversal). Uses the
+    oldest available bar as the base when full history is short (graceful degradation)."""
+    if len(closes) <= skip + 20:
+        return None
+    base = float(closes.iloc[-min(lookback, len(closes))])
+    recent = float(closes.iloc[-1 - skip])
+    if base <= 0:
+        return None
+    return recent / base - 1.0
+
+
+def _get_revisions(tk: "yf.Ticker") -> dict | None:
+    """Compact analyst EPS-estimate revision counts (last 30d) from yfinance — free,
+    best-effort. Returns {"up": n, "down": n} or None when there is no coverage
+    (small caps / ADRs). Abstracted so an alternate source can slot in later."""
+    try:
+        er = tk.get_eps_revisions()
+    except Exception:
+        return None
+    if er is None or getattr(er, "empty", True):
+        return None
+    try:
+        row = er.loc["0y"] if "0y" in er.index else er.iloc[0]
+        up = int(row.get("upLast30days", 0) or 0)
+        down = int(row.get("downLast30days", 0) or 0)
+    except Exception:
+        return None
+    if up == 0 and down == 0:
+        return None
+    return {"up": up, "down": down}

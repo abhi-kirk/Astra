@@ -5,7 +5,6 @@ Unit tests for src/strategy.py — all pure functions, no I/O.
 
 from src.strategy import (
     check_hard_rules,
-    check_profit_take,
     get_ticker_guidance,
     is_excluded,
     quality_filter,
@@ -191,44 +190,6 @@ class TestTechnicalSignal:
 
 
 # ---------------------------------------------------------------------------
-# check_profit_take
-# ---------------------------------------------------------------------------
-
-class TestCheckProfitTake:
-    _opportunistic = {"intent": "opportunistic", "original_catalyst": "COVID recovery"}
-    _thesis_hold   = {"intent": "thesis_hold",   "original_catalyst": None}
-    _written_off   = {"intent": "written_off",   "original_catalyst": None}
-
-    def test_triggers_at_65_pct_opportunistic(self):
-        sig = check_profit_take("DAL", {"avg_cost": 50.0}, {"current_price": 82.5}, self._opportunistic)
-        assert sig is not None
-        assert sig["action"] == "sell"
-
-    def test_catalyst_included_in_risk_flags(self):
-        sig = check_profit_take("DAL", {"avg_cost": 50.0}, {"current_price": 82.5}, self._opportunistic)
-        assert any("COVID recovery" in f for f in sig["risk_flags"])
-
-    def test_thesis_hold_exempt(self):
-        # RKLB up 65% — should NOT generate sell signal
-        sig = check_profit_take("RKLB", {"avg_cost": 50.0}, {"current_price": 82.5}, self._thesis_hold)
-        assert sig is None
-
-    def test_written_off_no_profit_take(self):
-        sig = check_profit_take("NIO", {"avg_cost": 50.0}, {"current_price": 82.5}, self._written_off)
-        assert sig is None
-
-    def test_no_trigger_at_55_pct(self):
-        sig = check_profit_take("DAL", {"avg_cost": 50.0}, {"current_price": 77.5}, self._opportunistic)
-        assert sig is None
-
-    def test_no_trigger_missing_avg_cost(self):
-        assert check_profit_take("DAL", {"avg_cost": 0}, {"current_price": 100.0}, self._opportunistic) is None
-
-    def test_no_trigger_missing_price(self):
-        assert check_profit_take("DAL", {"avg_cost": 50.0}, {"current_price": 0}, self._opportunistic) is None
-
-
-# ---------------------------------------------------------------------------
 # screen_position
 # ---------------------------------------------------------------------------
 
@@ -261,18 +222,20 @@ class TestScreenPosition:
         sig = screen_position("RKLB", base_position, weak_tech, convictions, portfolio_summary)
         assert sig["action"] == "watch"
 
-    def test_profit_take_overrides_buy(self, convictions, portfolio_summary):
-        # Position up 70% → sell even if all other signals say buy
+    def test_winner_at_highs_not_sold(self, convictions, good_market_data, portfolio_summary):
+        # A +70% winner with an intact uptrend must NOT be sold on gain alone.
+        position = {"shares": 100.0, "avg_cost": 50.0, "num_buys": 1}  # price 85 = +70%
+        winner = {**good_market_data, "recent_swing_high": 86.0, "rsi_14": 60.0, "price_vs_ma50_pct": 5.0}
+        sig = screen_position("DAL", position, winner, convictions, portfolio_summary)
+        assert sig["action"] not in ("sell", "trim")
+
+    def test_thesis_break_sells(self, convictions, good_market_data, portfolio_summary):
+        # Revenue collapse invalidates the thesis → SELL regardless of P&L.
         position = {"shares": 100.0, "avg_cost": 50.0, "num_buys": 1}
-        market_data = {
-            "current_price": 85.0,  # +70% from 50
-            "revenue_growth_yoy": 0.25, "gross_margins": 0.55,
-            "debt_to_equity": 40.0, "free_cashflow": 500_000_000,
-            "pct_below_52w_high": 20.0, "rsi_14": 35.0, "price_vs_ma50_pct": -12.0,
-        }
-        # DAL is opportunistic — profit-take fires even when technicals look like a buy
-        sig = screen_position("DAL", position, market_data, convictions, portfolio_summary)
+        broken = {**good_market_data, "revenue_growth_yoy": -0.25}
+        sig = screen_position("DAL", position, broken, convictions, portfolio_summary)
         assert sig["action"] == "sell"
+        assert sig["close_reason"] == "thesis_invalidation"
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +252,7 @@ class TestScreenAllPositions:
         market_data = {t: good_market_data for t in portfolio}
         signals = screen_all_positions(portfolio, market_data, convictions)
         actions = [s["action"] for s in signals]
-        priority = {"buy": 0, "sell": 1, "watch": 2, "hold": 3, "blocked": 4}
+        priority = {"buy": 0, "sell": 1, "trim": 1, "watch": 2, "hold": 3, "blocked": 4}
         assert actions == sorted(actions, key=lambda a: priority.get(a, 5))
 
     def test_all_tickers_screened(self, convictions, good_market_data):

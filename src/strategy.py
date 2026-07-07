@@ -1,26 +1,28 @@
 """
-Strategy engine: quality filter, technical signals, hard rule enforcement.
+Strategy engine — thin adapter over the modular brain (src/brain/). Decision logic
+lives in src/brain/. This module:
+  • re-exports the brain's conviction + hard-rule surface so agent_guardrails,
+    agent_executor, and tests import these names from here;
+  • runs the per-portfolio screen and the cross-position sizing allocation;
+  • provides quality_filter / technical_signal, which the exploration module uses to
+    screen new candidate names (a separate concern from position scoring).
 
-Reads convictions.json for theme/ticker guidance and applies the screening
-framework defined in CLAUDE.md. Returns structured signals for the agent layer.
+See src/brain/README.md for the scoring method and every tunable.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from src.brain import sizing
+from src.brain.conviction import get_ticker_guidance, is_excluded  # noqa: F401 (re-export)
+from src.brain.hard_rules import check_hard_rules, compute_portfolio_summary  # noqa: F401 (re-export)
+from src.brain.score import screen_position  # noqa: F401 (re-export)
 from src.config import (
     QUALITY_MAX_DEBT_EQUITY,
     QUALITY_MIN_CHECKS_TO_PASS,
     QUALITY_MIN_GROSS_MARGIN,
     QUALITY_MIN_REVENUE_GROWTH,
-    RULE_AVERAGING_DOWN_DRAWDOWN,
-    RULE_AVERAGING_DOWN_MAX_BUYS,
-    RULE_MAX_POSITION_PCT,
-    RULE_MAX_THEME_PCT,
-    RULE_PROFIT_TAKE_PCT,
-    SIZE_APPROVED_PCT,
-    SIZE_PREFERRED_PCT,
     TECH_MAX_RSI,
     TECH_MIN_PCT_BELOW_52W_HIGH,
     TECH_SIGNALS_REQUIRED,
@@ -34,146 +36,13 @@ def make_signal(**kwargs) -> Signal:
 
 
 # ---------------------------------------------------------------------------
-# Conviction helpers
-# ---------------------------------------------------------------------------
-
-def is_excluded(ticker: str, convictions: dict) -> str | None:
-    """Returns exclusion reason if ticker is hard-excluded, else None."""
-    for excl in convictions.get("exclusions", []):
-        if excl["ticker"] == ticker:
-            return excl["reason"]
-    return None
-
-
-def get_ticker_guidance(ticker: str, convictions: dict) -> dict:
-    """
-    Return the most specific guidance for a ticker — individual holding overrides theme.
-    Returns dict with keys: status, notes, theme, do_not_add, hold_only, intent, original_catalyst
-    """
-    meta = convictions.get("ticker_metadata", {}).get(ticker, {})
-    intent = meta.get("intent", "opportunistic")  # default: apply profit-take logic
-    original_catalyst = meta.get("original_catalyst")
-
-    def _with_meta(base: dict) -> dict:
-        return {**base, "intent": intent, "original_catalyst": original_catalyst}
-
-    # Check individual holdings first
-    individual = convictions.get("individual_holdings", {}).get(ticker)
-    if individual:
-        return _with_meta({
-            "status": individual.get("status", "hold"),
-            "notes": individual.get("thesis", ""),
-            "action_note": individual.get("action", ""),
-            "theme": None,
-            "do_not_add": individual.get("status") == "do_not_add",
-            "hold_only": individual.get("status") == "hold",
-        })
-
-    # Check themes
-    for theme_name, theme in convictions.get("themes", {}).items():
-        if ticker in theme.get("approved", []):
-            return _with_meta({
-                "status": "approved",
-                "notes": theme.get("notes", {}).get(ticker, ""),
-                "action_note": "",
-                "theme": theme_name,
-                "do_not_add": False,
-                "hold_only": False,
-            })
-        if ticker in theme.get("preferred", []):
-            return _with_meta({
-                "status": "preferred",
-                "notes": theme.get("notes", {}).get(ticker, ""),
-                "action_note": "",
-                "theme": theme_name,
-                "do_not_add": False,
-                "hold_only": False,
-            })
-        if ticker in theme.get("hold_only", []):
-            return _with_meta({
-                "status": "hold_only",
-                "notes": theme.get("notes", {}).get(ticker, ""),
-                "action_note": "",
-                "theme": theme_name,
-                "do_not_add": True,
-                "hold_only": True,
-            })
-        if ticker in theme.get("do_not_add", []):
-            return _with_meta({
-                "status": "do_not_add",
-                "notes": theme.get("notes", {}).get(ticker, ""),
-                "action_note": "",
-                "theme": theme_name,
-                "do_not_add": True,
-                "hold_only": False,
-            })
-
-    return _with_meta({"status": "unknown", "notes": "", "action_note": "", "theme": None,
-                        "do_not_add": False, "hold_only": False})
-
-
-# ---------------------------------------------------------------------------
-# Hard rules
-# ---------------------------------------------------------------------------
-
-def check_hard_rules(
-    ticker: str,
-    position: dict,
-    market_data: dict,
-    convictions: dict,
-    portfolio_summary: dict,
-) -> str | None:
-    """
-    Returns a block reason string if a hard rule is violated, else None.
-    portfolio_summary: {total_value, theme_allocations: {theme: pct}}
-    """
-    # Rule 1: Hard exclusions (TSLA etc.)
-    excl = is_excluded(ticker, convictions)
-    if excl:
-        return f"HARD EXCLUSION: {excl}"
-
-    guidance = get_ticker_guidance(ticker, convictions)
-
-    # Rule 2: Do-not-add
-    if guidance["do_not_add"]:
-        return f"DO NOT ADD: {guidance['notes']}"
-
-    # Rule 3: Averaging-down cap
-    avg_cost = position.get("avg_cost", 0)
-    current_price = market_data.get("current_price", 0)
-    num_buys = position.get("num_buys", 0)
-    if avg_cost and current_price and avg_cost > 0:
-        drawdown_pct = (avg_cost - current_price) / avg_cost * 100
-        if drawdown_pct > RULE_AVERAGING_DOWN_DRAWDOWN * 100 and num_buys >= RULE_AVERAGING_DOWN_MAX_BUYS:
-            return (
-                f"AVERAGING DOWN CAP: position is {drawdown_pct:.0f}% below avg cost "
-                f"with {num_buys} buys already. Re-approve thesis before adding."
-            )
-
-    # Rule 4: Max single-name position size
-    total_value = portfolio_summary.get("total_value", 0)
-    position_value = position.get("shares", 0) * current_price
-    if total_value and (position_value / total_value) > RULE_MAX_POSITION_PCT:
-        return f"POSITION LIMIT: already >{RULE_MAX_POSITION_PCT:.0%} of portfolio (${position_value:,.0f})"
-
-    # Rule 5: Theme concentration (speculative themes only — core_tech is exempt)
-    theme = guidance.get("theme")
-    if theme and theme != "core_tech":
-        theme_pct = portfolio_summary.get("theme_allocations", {}).get(theme, 0)
-        if theme_pct > RULE_MAX_THEME_PCT:
-            return f"THEME LIMIT: {theme} theme already at {theme_pct:.0%} of portfolio (max {RULE_MAX_THEME_PCT:.0%})"
-
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Quality filter
+# Candidate screening helpers (used by src/exploration.py for NEW names)
 # ---------------------------------------------------------------------------
 
 def quality_filter(ticker: str, market_data: dict) -> tuple[bool, list[str], list[str]]:
     """
-    Returns (pass: bool, reasons_passed: list, risk_flags: list).
-    Applies the 5-point quality checklist from CLAUDE.md.
+    Returns (pass, reasons_passed, risk_flags). Applies the 5-point quality checklist
+    to vet new exploration candidates; position scoring uses brain.factors.quality.
     """
     passed = []
     flags = []
@@ -228,14 +97,10 @@ def quality_filter(ticker: str, market_data: dict) -> tuple[bool, list[str], lis
     return quality_pass, passed, flags
 
 
-# ---------------------------------------------------------------------------
-# Technical signal
-# ---------------------------------------------------------------------------
-
 def technical_signal(market_data: dict) -> tuple[bool, list[str]]:
     """
-    Returns (signal: bool, reasons: list).
-    Entry signal: >{TECH_MIN_PCT_BELOW_52W_HIGH}% below 52w high AND RSI < {TECH_MAX_RSI}.
+    Returns (signal, reasons). Dip-entry check for exploration candidate vetting;
+    position entry timing uses brain.factors.entry (ATR-based, regime-aware).
     """
     reasons = []
     signals_met = 0
@@ -269,130 +134,8 @@ def technical_signal(market_data: dict) -> tuple[bool, list[str]]:
 
 
 # ---------------------------------------------------------------------------
-# Profit-take check
+# Portfolio screen + cross-position sizing
 # ---------------------------------------------------------------------------
-
-def check_profit_take(ticker: str, position: dict, market_data: dict, guidance: dict) -> Signal | None:
-    """
-    Returns a sell signal based on intent:
-    - thesis_hold: exempt — sell only on thesis invalidation, not price appreciation
-    - opportunistic: fire at RULE_PROFIT_TAKE_PCT with original catalyst context
-    - written_off: no profit-take signal (already blocked from buying; opportunity cost
-      nudge is handled via intent field passed to the advisor note prompt)
-    """
-    intent = guidance.get("intent", "opportunistic")
-    if intent in ("thesis_hold", "written_off"):
-        return None
-
-    avg_cost = position.get("avg_cost", 0)
-    current_price = market_data.get("current_price", 0)
-    if not avg_cost or not current_price:
-        return None
-
-    gain_pct = (current_price - avg_cost) / avg_cost * 100
-    if gain_pct >= RULE_PROFIT_TAKE_PCT * 100:
-        reasons = [f"Up {gain_pct:.0f}% from avg cost (${avg_cost:.2f} → ${current_price:.2f})"]
-        risk_flags = ["Profit-take trigger: consider trimming or selling position"]
-        catalyst = guidance.get("original_catalyst")
-        if intent == "opportunistic" and catalyst:
-            risk_flags.append(f"Original catalyst: {catalyst}")
-        return make_signal(
-            ticker=ticker, action="sell",
-            conviction_match=True, quality_pass=True, technical_pass=True,
-            hard_rule_block=None, reasons=reasons, risk_flags=risk_flags,
-            suggested_position_pct=None,
-            intent=intent, original_catalyst=catalyst,
-        )
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Main screener
-# ---------------------------------------------------------------------------
-
-def screen_position(
-    ticker: str,
-    position: dict,
-    market_data: dict,
-    convictions: dict,
-    portfolio_summary: dict,
-) -> Signal:
-    """Run all checks for a single position. Returns a Signal dict."""
-    guidance = get_ticker_guidance(ticker, convictions)
-    intent = guidance.get("intent", "opportunistic")
-    original_catalyst = guidance.get("original_catalyst")
-
-    block = check_hard_rules(ticker, position, market_data, convictions, portfolio_summary)
-    if block:
-        risk_flags = []
-        if intent == "written_off":
-            risk_flags.append("Written-off position — consider redeploying capital into higher-conviction names")
-        return make_signal(
-            ticker=ticker, action="blocked",
-            conviction_match=False, quality_pass=False, technical_pass=False,
-            hard_rule_block=block, reasons=[block], risk_flags=risk_flags,
-            suggested_position_pct=None,
-            intent=intent, original_catalyst=original_catalyst,
-        )
-
-    profit_signal = check_profit_take(ticker, position, market_data, guidance)
-    if profit_signal:
-        return profit_signal
-
-    conviction_match = guidance["status"] in ("approved", "preferred", "hold")
-
-    if guidance["hold_only"]:
-        return make_signal(
-            ticker=ticker, action="hold",
-            conviction_match=conviction_match, quality_pass=False, technical_pass=False,
-            hard_rule_block=None,
-            reasons=[f"Hold-only: {guidance['notes'][:120]}"],
-            risk_flags=[], suggested_position_pct=None,
-            intent=intent, original_catalyst=original_catalyst,
-        )
-
-    quality_pass, quality_reasons, risk_flags = quality_filter(ticker, market_data)
-    tech_pass, tech_reasons = technical_signal(market_data)
-    all_reasons = quality_reasons + tech_reasons
-
-    if conviction_match and quality_pass and tech_pass:
-        action = "buy"
-        size = SIZE_PREFERRED_PCT if guidance["status"] == "preferred" else SIZE_APPROVED_PCT
-    elif conviction_match and (quality_pass or tech_pass):
-        action = "watch"
-        size = None
-    else:
-        action = "hold"
-        size = None
-
-    return make_signal(
-        ticker=ticker, action=action,
-        conviction_match=conviction_match, quality_pass=quality_pass, technical_pass=tech_pass,
-        hard_rule_block=None, reasons=all_reasons, risk_flags=risk_flags,
-        suggested_position_pct=size,
-        intent=intent, original_catalyst=original_catalyst,
-    )
-
-
-def compute_portfolio_summary(
-    portfolio: dict[str, dict],
-    market_data: dict[str, dict],
-    convictions: dict,
-) -> dict:
-    """Total value + per-theme allocation fractions for a portfolio. Used by the
-    screener and by Autotrader's guardrails so both apply identical concentration limits."""
-    total_value = sum(
-        pos.get("shares", 0) * market_data.get(t, {}).get("current_price", 0)
-        for t, pos in portfolio.items()
-    )
-    theme_allocations: dict[str, float] = {}
-    for ticker, pos in portfolio.items():
-        theme = get_ticker_guidance(ticker, convictions).get("theme")
-        if theme and total_value:
-            val = pos.get("shares", 0) * market_data.get(ticker, {}).get("current_price", 0)
-            theme_allocations[theme] = theme_allocations.get(theme, 0) + val / total_value
-    return {"total_value": total_value, "theme_allocations": theme_allocations}
-
 
 def screen_all_positions(
     portfolio: dict[str, dict],
@@ -400,7 +143,7 @@ def screen_all_positions(
     convictions: dict,
     full_portfolio: dict[str, dict] | None = None,
 ) -> list[Signal]:
-    """Screen all positions. Returns signals sorted by action priority."""
+    """Screen all positions, then allocate sizes across BUYs under portfolio caps."""
     sizing_portfolio = full_portfolio if full_portfolio else portfolio
     portfolio_summary = compute_portfolio_summary(sizing_portfolio, market_data, convictions)
     signals = [
@@ -408,5 +151,10 @@ def screen_all_positions(
         for ticker, pos in portfolio.items()
     ]
 
-    priority = {"buy": 0, "sell": 1, "watch": 2, "hold": 3, "blocked": 4}
+    # Iterative constrained allocation across simultaneous BUYs (may downgrade some to watch).
+    buys = [s for s in signals if s["action"] == "buy"]
+    if buys:
+        sizing.allocate(buys, portfolio_summary)
+
+    priority = {"buy": 0, "sell": 1, "trim": 1, "watch": 2, "hold": 3, "blocked": 4}
     return sorted(signals, key=lambda s: priority.get(s["action"], 5))

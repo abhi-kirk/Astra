@@ -39,7 +39,9 @@ _PLACED_STATES = ("pending", "submitted", "filled")
 # Sells mirror only deliberate paper exits. A `blocked` close comes from a buy-side rule
 # tripping on the MAIN portfolio (averaging-down cap, theme/position limit) and says
 # nothing about the agentic position — never a real-money sell trigger.
-_MIRRORED_CLOSE_REASONS = ("profit_take", "signal_inactive")
+# `parabolic_trim` is intentionally excluded: a trim keeps the paper lot open (never
+# enters this close-based mirror), and partial real-money sells are a deferred follow-up.
+_MIRRORED_CLOSE_REASONS = ("profit_take", "signal_inactive", "thesis_invalidation", "trailing_stop")
 
 
 def _finalize(summary: dict, num_mirrors: int = 0) -> None:
