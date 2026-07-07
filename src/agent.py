@@ -21,17 +21,7 @@ from typing import Any
 
 import chevron
 
-from src import mcp, mcp_loop, memory
-from src.config import (
-    ADVISOR_EFFORT,
-    ADVISOR_MAX_TOOL_ROUNDS,
-    ADVISOR_TIMEOUT,
-    ADVISOR_TOOL_TIMEOUT,
-    ANTHROPIC_API_KEY,
-    MCP_TOOL_FAILURE_LIMIT,
-    REASONING_MAX_TOKENS,
-    REASONING_MODEL,
-)
+from src import config, mcp, mcp_loop, memory
 from src.data_layer import get_market_data_bulk, get_portfolio, load_convictions
 from src.strategy import screen_all_positions
 from src.timeout import run_with_timeout
@@ -54,7 +44,7 @@ def call_claude_reasoning(
     Runs the tool loop client-side (src.mcp_loop) so each MCP tool call is individually
     timed out and observable. Returns (advisor_note, token_usage, tool_log).
     """
-    if not ANTHROPIC_API_KEY:
+    if not config.services.anthropic_api_key:
         return ("Claude API key not set — mechanical signals only.", None, [])
 
     action_groups: dict[str, list] = {}
@@ -104,14 +94,14 @@ def call_claude_reasoning(
     text, usage, tool_log = run_with_timeout(
         lambda: mcp_loop.run_agentic_sync(
             prompt, specs,
-            model=REASONING_MODEL,
-            max_tokens=REASONING_MAX_TOKENS,
-            effort=ADVISOR_EFFORT,
-            tool_timeout=ADVISOR_TOOL_TIMEOUT,
-            max_rounds=ADVISOR_MAX_TOOL_ROUNDS,
-            failure_limit=MCP_TOOL_FAILURE_LIMIT,
+            model=config.reasoning.model,
+            max_tokens=config.reasoning.max_tokens,
+            effort=config.reasoning.advisor_effort,
+            tool_timeout=config.tool_loop.advisor_tool_timeout,
+            max_rounds=config.tool_loop.advisor_max_tool_rounds,
+            failure_limit=config.tool_loop.mcp_tool_failure_limit,
         ),
-        ADVISOR_TIMEOUT,
+        config.timeouts.advisor,
         label="Advisor Claude call",
     )
     if not text:
@@ -221,16 +211,16 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
     advisor_note = ""
     advisor_tool_log: list[dict[str, Any]] = []
     if use_ai and any(s["action"] in ("buy", "sell", "watch") for s in signals):
-        logger.info(f"Calling Claude for narrative reasoning  (model={REASONING_MODEL})")
+        logger.info(f"Calling Claude for narrative reasoning  (model={config.reasoning.model})")
         try:
             with obs.phase("advisor"):
                 advisor_note, advisor_usage, advisor_tool_log = call_claude_reasoning(
                     signals, portfolio, market_data, history_context, convictions
                 )
-            obs.record_advisor(REASONING_MODEL, advisor_usage)
+            obs.record_advisor(config.reasoning.model, advisor_usage)
             obs.record_service("anthropic", ok=bool(advisor_note))
         except TimeoutError:
-            logger.warning(f"Advisor Claude call timed out after {ADVISOR_TIMEOUT}s — pipeline continues without advisor note")
+            logger.warning(f"Advisor Claude call timed out after {config.timeouts.advisor}s — pipeline continues without advisor note")
             obs.record_service("anthropic", ok=False, detail="timeout")
         except Exception as e:
             logger.error("Advisor Claude call failed — pipeline continues without advisor note", exc_info=True)

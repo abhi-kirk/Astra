@@ -82,7 +82,7 @@ def wired(monkeypatch, convictions):
 # ---------------------------------------------------------------------------
 
 def test_dry_run_reviews_but_never_places(wired, monkeypatch):
-    monkeypatch.setattr(config, "AGENT_TRADING_ENABLED", False)
+    monkeypatch.setattr(config.agent, "trading_enabled", False)
     _, logs = wired
     fb = FakeBroker()
     summary = ex.run(broker=fb, run_date="2026-07-06T13:00:00")
@@ -92,8 +92,8 @@ def test_dry_run_reviews_but_never_places(wired, monkeypatch):
 
 
 def test_live_places_marketable_limit(wired, monkeypatch):
-    monkeypatch.setattr(config, "AGENT_TRADING_ENABLED", True)
-    monkeypatch.setattr(config, "AGENT_POSITION_PCT", 0.20)
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
+    monkeypatch.setattr(config.agent, "position_pct", 0.20)
     _, logs = wired
     fb = FakeBroker()
     summary = ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
@@ -110,7 +110,7 @@ def test_live_places_marketable_limit(wired, monkeypatch):
 
 
 def test_live_sell_mirror_exits_full_position(wired, monkeypatch):
-    monkeypatch.setattr(config, "AGENT_TRADING_ENABLED", True)
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
     state, _ = wired
     state["opened"] = []
     state["closed"] = [{"id": 22, "ticker": "RKLB", "close_reason": "profit_take"}]
@@ -128,7 +128,7 @@ def test_live_sell_mirror_exits_full_position(wired, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_paused_skips_everything(wired, monkeypatch):
-    monkeypatch.setattr(config, "AGENT_TRADING_ENABLED", True)
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
     state, _ = wired
     state["control"]["paused"] = True
     fb = FakeBroker()
@@ -138,7 +138,7 @@ def test_paused_skips_everything(wired, monkeypatch):
 
 
 def test_halted_skips_everything(wired, monkeypatch):
-    monkeypatch.setattr(config, "AGENT_TRADING_ENABLED", True)
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
     state, _ = wired
     state["control"]["halted"] = True
     fb = FakeBroker()
@@ -148,8 +148,8 @@ def test_halted_skips_everything(wired, monkeypatch):
 
 
 def test_drawdown_breach_halts_before_orders(wired, monkeypatch):
-    monkeypatch.setattr(config, "AGENT_TRADING_ENABLED", True)
-    monkeypatch.setattr(config, "AGENT_DRAWDOWN_HALT_PCT", -15.0)
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
+    monkeypatch.setattr(config.agent, "drawdown_halt_pct", -15.0)
     state, _ = wired
     state["control"]["baseline_equity"] = 1000.0
     fb = FakeBroker(equity=800.0)  # -20% drawdown
@@ -164,7 +164,7 @@ def test_drawdown_breach_halts_before_orders(wired, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_guardrail_block_logs_but_does_not_place(wired, monkeypatch):
-    monkeypatch.setattr(config, "AGENT_TRADING_ENABLED", True)
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
     state, logs = wired
     state["opened"] = [{"id": 1, "ticker": "TSLA", "action": "buy", "suggested_position_pct": 0.04}]
     fb = FakeBroker()
@@ -176,7 +176,7 @@ def test_guardrail_block_logs_but_does_not_place(wired, monkeypatch):
 
 
 def test_idempotent_skip_when_already_placed(wired, monkeypatch):
-    monkeypatch.setattr(config, "AGENT_TRADING_ENABLED", True)
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
     state, _ = wired
     state["today"] = [{"ticker": "RKLB", "side": "buy", "status": "submitted"}]
     fb = FakeBroker()
@@ -192,7 +192,7 @@ def test_idempotent_skip_when_already_placed(wired, monkeypatch):
 def test_blocked_close_is_not_mirrored_as_sell(wired, monkeypatch):
     """A `blocked` paper-close comes from a buy-side rule on the MAIN portfolio
     (averaging-down cap, theme/position limit) — it must never sell the agentic position."""
-    monkeypatch.setattr(config, "AGENT_TRADING_ENABLED", True)
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
     state, logs = wired
     state["opened"] = []
     state["closed"] = [{"id": 22, "ticker": "RKLB", "close_reason": "blocked"}]
@@ -203,7 +203,7 @@ def test_blocked_close_is_not_mirrored_as_sell(wired, monkeypatch):
 
 
 def test_signal_inactive_close_is_mirrored_as_sell(wired, monkeypatch):
-    monkeypatch.setattr(config, "AGENT_TRADING_ENABLED", True)
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
     state, _ = wired
     state["opened"] = []
     state["closed"] = [{"id": 22, "ticker": "RKLB", "close_reason": "signal_inactive"}]
@@ -215,7 +215,7 @@ def test_signal_inactive_close_is_mirrored_as_sell(wired, monkeypatch):
 
 def test_exploration_paper_buy_is_not_mirrored(wired, monkeypatch):
     """Exploration candidates are paper-only experiments — never a real-money mirror."""
-    monkeypatch.setattr(config, "AGENT_TRADING_ENABLED", True)
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
     state, logs = wired
     state["opened"] = [{
         "id": 33, "ticker": "RKLB", "action": "buy",
@@ -234,8 +234,8 @@ def test_exploration_paper_buy_is_not_mirrored(wired, monkeypatch):
 def test_blocked_and_dry_run_rows_do_not_consume_daily_cap(wired, monkeypatch):
     """Morning dry-run rehearsals and blocked attempts logged in agent_trades must not
     starve the live run out of its trades/day budget."""
-    monkeypatch.setattr(config, "AGENT_TRADING_ENABLED", True)
-    monkeypatch.setattr(config, "AGENT_MAX_TRADES_PER_DAY", 3)
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
+    monkeypatch.setattr(config.agent, "max_trades_per_day", 3)
     state, _ = wired
     state["today"] = [
         {"ticker": "RKLB", "side": "buy", "status": "dry_run"},
@@ -249,8 +249,8 @@ def test_blocked_and_dry_run_rows_do_not_consume_daily_cap(wired, monkeypatch):
 
 
 def test_placed_rows_still_consume_daily_cap(wired, monkeypatch):
-    monkeypatch.setattr(config, "AGENT_TRADING_ENABLED", True)
-    monkeypatch.setattr(config, "AGENT_MAX_TRADES_PER_DAY", 3)
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
+    monkeypatch.setattr(config.agent, "max_trades_per_day", 3)
     state, _ = wired
     state["today"] = [
         {"ticker": "NVDA", "side": "buy", "status": "submitted"},

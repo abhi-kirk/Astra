@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 from anthropic.types import TextBlock
 
+from src import config
 from src.mcp import ServerSpec, advisor_specs, exploration_specs, extract_text, search_context
 
 # ---------------------------------------------------------------------------
@@ -44,10 +45,10 @@ class TestExtractText:
 
 class TestSpecs:
     def _patch_none(self, monkeypatch):
-        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "")
-        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "")
-        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "")
-        monkeypatch.setattr("src.mcp.FMP_API_KEY", "")
+        monkeypatch.setattr(config.services, "tavily_mcp_url", "")
+        monkeypatch.setattr(config.services, "alpha_vantage_api_key", "")
+        monkeypatch.setattr(config.services, "sec_edgar_mcp_url", "")
+        monkeypatch.setattr(config.services, "fmp_api_key", "")
 
     def test_empty_when_unconfigured(self, monkeypatch):
         self._patch_none(monkeypatch)
@@ -56,37 +57,37 @@ class TestSpecs:
 
     def test_tavily_only(self, monkeypatch):
         self._patch_none(monkeypatch)
-        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "https://mcp.tavily.com/mcp/?tavilyApiKey=t")
+        monkeypatch.setattr(config.services, "tavily_mcp_url", "https://mcp.tavily.com/mcp/?tavilyApiKey=t")
         specs = advisor_specs()
         assert [s.name for s in specs] == ["tavily"]
         assert specs[0].allowed_tools == ["tavily_search"]
 
     def test_alpha_vantage_key_in_url(self, monkeypatch):
         self._patch_none(monkeypatch)
-        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "my-secret-key")
+        monkeypatch.setattr(config.services, "alpha_vantage_api_key", "my-secret-key")
         specs = advisor_specs()
         assert [s.name for s in specs] == ["alpha_vantage"]
         assert "my-secret-key" in specs[0].url
 
     def test_both_configured(self, monkeypatch):
         self._patch_none(monkeypatch)
-        monkeypatch.setattr("src.mcp.TAVILY_MCP_URL", "https://tavily")
-        monkeypatch.setattr("src.mcp.ALPHA_VANTAGE_API_KEY", "k")
+        monkeypatch.setattr(config.services, "tavily_mcp_url", "https://tavily")
+        monkeypatch.setattr(config.services, "alpha_vantage_api_key", "k")
         assert {s.name for s in advisor_specs()} == {"tavily", "alpha_vantage"}
 
     def test_sec_edgar_and_fmp_excluded_from_live_specs(self, monkeypatch):
         # Dormant servers must never appear in the live loop, even when configured.
         self._patch_none(monkeypatch)
-        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "https://secedgar.example/mcp")
-        monkeypatch.setattr("src.mcp.FMP_API_KEY", "fmpkey")
+        monkeypatch.setattr(config.services, "sec_edgar_mcp_url", "https://secedgar.example/mcp")
+        monkeypatch.setattr(config.services, "fmp_api_key", "fmpkey")
         assert advisor_specs() == []
         assert exploration_specs() == []
 
     def test_dormant_definitions_still_build(self, monkeypatch):
         # The _fmp/_sec_edgar builders are kept for a future follow-up.
         from src.mcp import _fmp, _sec_edgar
-        monkeypatch.setattr("src.mcp.FMP_API_KEY", "mykey456")
-        monkeypatch.setattr("src.mcp.SEC_EDGAR_MCP_URL", "https://secedgar.example/mcp")
+        monkeypatch.setattr(config.services, "fmp_api_key", "mykey456")
+        monkeypatch.setattr(config.services, "sec_edgar_mcp_url", "https://secedgar.example/mcp")
         fmp = _fmp()
         edgar = _sec_edgar()
         assert fmp is not None and "mykey456" in fmp.url and set(fmp.allowed_tools) == {"analyst", "calendar"}

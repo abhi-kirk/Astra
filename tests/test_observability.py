@@ -117,10 +117,10 @@ class TestProbeEndpoints:
         resp = MagicMock(status_code=200)
         with patch.object(observability, "get_client", return_value=MagicMock()), \
              patch.object(observability.requests, "get", return_value=resp), \
-             patch.object(observability.config, "TAVILY_MCP_URL", "https://tavily.example/mcp"), \
-             patch.object(observability.config, "ALPHA_VANTAGE_API_KEY", ""), \
-             patch.object(observability.config, "FMP_API_KEY", ""), \
-             patch.object(observability.config, "SEC_EDGAR_MCP_URL", ""):
+             patch.object(observability.config.services, "tavily_mcp_url", "https://tavily.example/mcp"), \
+             patch.object(observability.config.services, "alpha_vantage_api_key", ""), \
+             patch.object(observability.config.services, "fmp_api_key", ""), \
+             patch.object(observability.config.services, "sec_edgar_mcp_url", ""):
             observability.probe_endpoints(obs)
         names = {s["service"] for s in obs.services}
         assert "supabase" in names and "tavily_mcp" in names
@@ -129,10 +129,10 @@ class TestProbeEndpoints:
     def test_supabase_failure_recorded(self):
         obs = RunObserver("2026-07-03", "simulation")
         with patch.object(observability, "get_client", side_effect=RuntimeError("no db")), \
-             patch.object(observability.config, "TAVILY_MCP_URL", ""), \
-             patch.object(observability.config, "ALPHA_VANTAGE_API_KEY", ""), \
-             patch.object(observability.config, "FMP_API_KEY", ""), \
-             patch.object(observability.config, "SEC_EDGAR_MCP_URL", ""):
+             patch.object(observability.config.services, "tavily_mcp_url", ""), \
+             patch.object(observability.config.services, "alpha_vantage_api_key", ""), \
+             patch.object(observability.config.services, "fmp_api_key", ""), \
+             patch.object(observability.config.services, "sec_edgar_mcp_url", ""):
             observability.probe_endpoints(obs)
         supa = next(s for s in obs.services if s["service"] == "supabase")
         assert supa["ok"] is False

@@ -18,11 +18,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-from src.config import (
-    ROBINHOOD_ACCOUNT_NUMBER,
-    ROBINHOOD_TOKEN_KEY,
-    ROBINHOOD_TOKENS_FILE,
-)
+from src import config
 
 _RH_POSITIONS_URL = "https://api.robinhood.com/positions/"
 _RH_TOKEN_URL     = "https://api.robinhood.com/oauth2/token/"
@@ -36,13 +32,13 @@ _RH_CLIENT_ID     = "c82SH0WZOsabOXGP2sxqcj34FxkvfnWRZBKlBjFS"
 def _encrypt(data: dict) -> str:
     """Encrypt a token dict → JSON string suitable for storing in Supabase."""
     from src.crypto import encrypt_json
-    return encrypt_json(data, ROBINHOOD_TOKEN_KEY)
+    return encrypt_json(data, config.robinhood.token_key)
 
 
 def _decrypt(blob: str) -> dict:
     """Decrypt an encrypted blob string → token dict."""
     from src.crypto import decrypt_json
-    return decrypt_json(blob, ROBINHOOD_TOKEN_KEY)
+    return decrypt_json(blob, config.robinhood.token_key)
 
 
 # ---------------------------------------------------------------------------
@@ -62,9 +58,9 @@ def _load_tokens_from_supabase() -> dict | None:
 
 def _load_tokens_from_file() -> dict:
     """Decrypt tokens.enc → token dict (fallback when Supabase has nothing)."""
-    if not ROBINHOOD_TOKEN_KEY:
+    if not config.robinhood.token_key:
         raise RuntimeError("ROBINHOOD_TOKEN_KEY not set")
-    tokens_path = Path(ROBINHOOD_TOKENS_FILE)
+    tokens_path = Path(config.robinhood.tokens_file)
     if not tokens_path.exists():
         raise RuntimeError(f"Tokens file not found: {tokens_path}")
     return _decrypt(tokens_path.read_text())
@@ -169,10 +165,10 @@ def sync_portfolio_to_supabase() -> dict | None:
     Fetch live Robinhood positions and write a fresh portfolio snapshot to Supabase.
     Returns the portfolio dict on success, None if credentials are missing or sync fails.
     """
-    if not ROBINHOOD_TOKEN_KEY or not ROBINHOOD_TOKENS_FILE:
+    if not config.robinhood.token_key or not config.robinhood.tokens_file:
         logger.warning("Robinhood credentials not configured — skipping live sync.")
         return None
-    if not ROBINHOOD_ACCOUNT_NUMBER:
+    if not config.robinhood.account_number:
         logger.warning("ROBINHOOD_ACCOUNT_NUMBER not set — skipping live sync.")
         return None
 

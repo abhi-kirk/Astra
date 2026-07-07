@@ -63,10 +63,10 @@ def business_days_between(start: datetime, end: datetime) -> int:
 
 def check_halt_state(drawdown_pct: float | None) -> tuple[bool, str | None]:
     """Account-level drawdown halt. Returns (halted, reason)."""
-    if drawdown_pct is not None and drawdown_pct <= config.AGENT_DRAWDOWN_HALT_PCT:
+    if drawdown_pct is not None and drawdown_pct <= config.agent.drawdown_halt_pct:
         return True, (
             f"DRAWDOWN HALT: account down {drawdown_pct:.1f}% "
-            f"(limit {config.AGENT_DRAWDOWN_HALT_PCT:.0f}%)"
+            f"(limit {config.agent.drawdown_halt_pct:.0f}%)"
         )
     return False, None
 
@@ -116,12 +116,12 @@ def check_agent_guardrails(
         return block(f"CONVICTIONS ONLY: {ticker} is not in an approved theme or holding")
 
     # 4. Max trades/day — cap total agentic order count per calendar day.
-    under_daily_cap = len(trades_today) < config.AGENT_MAX_TRADES_PER_DAY
+    under_daily_cap = len(trades_today) < config.agent.max_trades_per_day
     checks["max_trades_per_day"] = under_daily_cap
     if not under_daily_cap:
         return block(
             f"MAX TRADES/DAY: {len(trades_today)} orders already placed today "
-            f"(limit {config.AGENT_MAX_TRADES_PER_DAY})"
+            f"(limit {config.agent.max_trades_per_day})"
         )
 
     if side == "buy":
@@ -133,16 +133,16 @@ def check_agent_guardrails(
 
         # 6. Max open positions — only when opening a brand-new position.
         is_new = ticker not in open_position_tickers
-        at_cap = is_new and len(open_position_tickers) >= config.AGENT_MAX_OPEN_POSITIONS
+        at_cap = is_new and len(open_position_tickers) >= config.agent.max_open_positions
         checks["max_open_positions"] = not at_cap
         if at_cap:
             return block(
                 f"MAX OPEN POSITIONS: {len(open_position_tickers)} open "
-                f"(limit {config.AGENT_MAX_OPEN_POSITIONS})"
+                f"(limit {config.agent.max_open_positions})"
             )
 
         # 7. Cash-account settlement — no buying with unsettled proceeds (Good-Faith Violation).
-        if config.AGENT_ACCOUNT_IS_CASH and settled_cash is not None and estimated_cost is not None:
+        if config.agent.account_is_cash and settled_cash is not None and estimated_cost is not None:
             funded = estimated_cost <= settled_cash + 1e-6
             checks["settled_funds"] = funded
             if not funded:
@@ -157,12 +157,12 @@ def check_agent_guardrails(
         last_dt = _parse_dt(last_buy.get("run_date")) if last_buy else None
         if last_dt is not None:
             held_days = business_days_between(last_dt, now)
-            ok = held_days >= config.AGENT_MIN_HOLD_DAYS
+            ok = held_days >= config.agent.min_hold_days
             checks["min_hold_days"] = ok
             if not ok:
                 return block(
                     f"MIN HOLD: bought {held_days} trading day(s) ago "
-                    f"(min {config.AGENT_MIN_HOLD_DAYS}) — no day-trades / same-day round-trips"
+                    f"(min {config.agent.min_hold_days}) — no day-trades / same-day round-trips"
                 )
         else:
             checks["min_hold_days"] = True  # no recorded agentic buy → nothing to restrict

@@ -39,7 +39,7 @@ pillar's internal average, never penalized** — so thin-coverage names (small c
 like ICAGY/RKLB/ASTS) degrade gracefully. `smooth(x;a,b)` is a clamped linear ramp
 (0 at `a`, 1 at `b`; `a>b` descends).
 
-| Pillar | Range | Formula (endpoints from `config.BRAIN_*`) |
+| Pillar | Range | Formula (endpoints from `config.brain.*`) |
 |---|---|---|
 | **Quality `Q`** | [0,1] | mean of: rev-growth `smooth(·;0,.30)`, gross-margin `smooth(·;.20,.60)`, D/E `smooth(·;300,100)` (descending), current-ratio `smooth(·;1,1.5)`, FCF>0. Catastrophic (revenue < −10% or negative gross margin) caps `Q` at 0.15. |
 | **Valuation `V`** | [0,1] | mean of `1−smooth(PEG;1,3)` and `1−smooth(fwdPE;15,40)`; missing → neutral 0.5. |
@@ -112,6 +112,7 @@ into the agentic account. Parabolic **trims are not mirrored** — a trim keeps 
 open, so it never enters the executor's close-based mirror.
 
 ## Tuning
-Everything is in `src/config.py` under the `BRAIN_*` prefix and env-overridable. Notable
-dials: `BRAIN_F_GLOBAL` (risk), `BRAIN_BUY_THRESHOLD`, `BRAIN_TRAIL_ATR_MULT` (trailing
-tightness), `BRAIN_WEIGHT_*` (pillar emphasis), `BRAIN_TRIM_*` (parabolic sensitivity).
+Everything is in `src/config.py` in the `BrainConfig` dataclass (`config.brain.*`), with env
+keys keeping the `BRAIN_*` prefix and env-overridable. Notable dials: `BRAIN_F_GLOBAL` (risk),
+`BRAIN_BUY_THRESHOLD`, `BRAIN_TRAIL_ATR_MULT` (trailing tightness), `BRAIN_WEIGHT_*` (pillar
+emphasis), `BRAIN_TRIM_*` (parabolic sensitivity).

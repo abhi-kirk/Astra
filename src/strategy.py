@@ -14,19 +14,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from src import config
 from src.brain import sizing
 from src.brain.conviction import get_ticker_guidance, is_excluded  # noqa: F401 (re-export)
 from src.brain.hard_rules import check_hard_rules, compute_portfolio_summary  # noqa: F401 (re-export)
 from src.brain.score import screen_position  # noqa: F401 (re-export)
-from src.config import (
-    QUALITY_MAX_DEBT_EQUITY,
-    QUALITY_MIN_CHECKS_TO_PASS,
-    QUALITY_MIN_GROSS_MARGIN,
-    QUALITY_MIN_REVENUE_GROWTH,
-    TECH_MAX_RSI,
-    TECH_MIN_PCT_BELOW_52W_HIGH,
-    TECH_SIGNALS_REQUIRED,
-)
 
 Signal = dict[str, Any]
 
@@ -49,7 +41,7 @@ def quality_filter(ticker: str, market_data: dict) -> tuple[bool, list[str], lis
 
     rev_growth = market_data.get("revenue_growth_yoy")
     if rev_growth is not None:
-        if rev_growth > QUALITY_MIN_REVENUE_GROWTH:
+        if rev_growth > config.quality.min_revenue_growth:
             passed.append(f"Revenue growth {rev_growth:.0%} YoY ✓")
         elif rev_growth > 0:
             flags.append(f"Revenue growth weak: {rev_growth:.0%} YoY")
@@ -60,7 +52,7 @@ def quality_filter(ticker: str, market_data: dict) -> tuple[bool, list[str], lis
 
     gross_margin = market_data.get("gross_margins")
     if gross_margin is not None:
-        if gross_margin > QUALITY_MIN_GROSS_MARGIN:
+        if gross_margin > config.quality.min_gross_margin:
             passed.append(f"Gross margin {gross_margin:.0%} ✓")
         elif gross_margin > 0:
             flags.append(f"Gross margin low: {gross_margin:.0%}")
@@ -71,7 +63,7 @@ def quality_filter(ticker: str, market_data: dict) -> tuple[bool, list[str], lis
 
     de_ratio = market_data.get("debt_to_equity")
     if de_ratio is not None:
-        if de_ratio < QUALITY_MAX_DEBT_EQUITY:
+        if de_ratio < config.quality.max_debt_equity:
             passed.append(f"Debt/equity {de_ratio:.0f} manageable ✓")
         else:
             flags.append(f"High debt/equity: {de_ratio:.0f}")
@@ -92,7 +84,7 @@ def quality_filter(ticker: str, market_data: dict) -> tuple[bool, list[str], lis
         for f in flags
         if "unavailable" not in f
     )
-    quality_pass = len(passed) >= QUALITY_MIN_CHECKS_TO_PASS and not catastrophic
+    quality_pass = len(passed) >= config.quality.min_checks_to_pass and not catastrophic
 
     return quality_pass, passed, flags
 
@@ -107,7 +99,7 @@ def technical_signal(market_data: dict) -> tuple[bool, list[str]]:
 
     pct_below = market_data.get("pct_below_52w_high")
     if pct_below is not None:
-        if pct_below >= TECH_MIN_PCT_BELOW_52W_HIGH:
+        if pct_below >= config.tech.min_pct_below_52w_high:
             reasons.append(f"{pct_below:.1f}% below 52w high — dip signal ✓")
             signals_met += 1
         else:
@@ -115,7 +107,7 @@ def technical_signal(market_data: dict) -> tuple[bool, list[str]]:
 
     rsi = market_data.get("rsi_14")
     if rsi is not None:
-        if rsi < TECH_MAX_RSI:
+        if rsi < config.tech.max_rsi:
             reasons.append(f"RSI {rsi:.1f} — oversold ✓")
             signals_met += 1
         elif rsi < 50:
@@ -130,7 +122,7 @@ def technical_signal(market_data: dict) -> tuple[bool, list[str]]:
         else:
             reasons.append(f"Price {'+' if vs_ma50 >= 0 else ''}{vs_ma50:.1f}% vs 50-day MA")
 
-    return signals_met >= TECH_SIGNALS_REQUIRED, reasons
+    return signals_met >= config.tech.signals_required, reasons
 
 
 # ---------------------------------------------------------------------------

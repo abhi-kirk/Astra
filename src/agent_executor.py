@@ -105,7 +105,7 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
     run_date = run_date or datetime.now(timezone.utc).isoformat()
     # Dry-run whenever the master switch is off, unless a caller explicitly forces live.
     if dry_run is None:
-        dry_run = not config.AGENT_TRADING_ENABLED
+        dry_run = not config.agent.trading_enabled
     summary = {"run_date": run_date, "dry_run": dry_run, "placed": [], "blocked": [], "skipped": [], "halted": False}
 
     control = memory.get_agent_control()
@@ -143,8 +143,8 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
         "positions": positions, "baseline_equity": baseline, "drawdown_pct": drawdown,
     })
 
-    if drawdown is not None and drawdown <= config.AGENT_DRAWDOWN_HALT_PCT:
-        reason = f"Drawdown {drawdown:.1f}% ≤ halt {config.AGENT_DRAWDOWN_HALT_PCT:.0f}%"
+    if drawdown is not None and drawdown <= config.agent.drawdown_halt_pct:
+        reason = f"Drawdown {drawdown:.1f}% ≤ halt {config.agent.drawdown_halt_pct:.0f}%"
         memory.set_agent_halted(True, reason)
         logger.error("Autotrader DRAWDOWN HALT — %s. Execution stopped.", reason)
         summary["halted"] = True
@@ -179,7 +179,7 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
         # Sizing — flat fraction of sleeve equity per buy (not the paper track's 4–6%,
         # which would leave a ~$1k sleeve mostly idle; see AGENT_POSITION_PCT).
         if side == "buy":
-            estimated_cost = round(config.AGENT_POSITION_PCT * equity, 2) if equity else None
+            estimated_cost = round(config.agent.position_pct * equity, 2) if equity else None
         else:
             if not held.get("shares"):
                 logger.info("Autotrader: no agentic %s position to sell — skipping.", ticker)

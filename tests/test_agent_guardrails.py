@@ -94,13 +94,13 @@ class TestConvictionsOnly:
 
 class TestMaxTradesPerDay:
     def test_at_cap_blocked(self, base_kwargs, monkeypatch):
-        monkeypatch.setattr(config, "AGENT_MAX_TRADES_PER_DAY", 3)
+        monkeypatch.setattr(config.agent, "max_trades_per_day", 3)
         res = run(base_kwargs, trades_today=[{}, {}, {}])
         assert not res.passed
         assert "MAX TRADES/DAY" in res.block_reason
 
     def test_under_cap_allowed(self, base_kwargs, monkeypatch):
-        monkeypatch.setattr(config, "AGENT_MAX_TRADES_PER_DAY", 3)
+        monkeypatch.setattr(config.agent, "max_trades_per_day", 3)
         res = run(base_kwargs, trades_today=[{}, {}])
         assert res.passed
 
@@ -111,21 +111,21 @@ class TestMaxTradesPerDay:
 
 class TestMaxOpenPositions:
     def test_new_position_at_cap_blocked(self, base_kwargs, monkeypatch):
-        monkeypatch.setattr(config, "AGENT_MAX_OPEN_POSITIONS", 5)
+        monkeypatch.setattr(config.agent, "max_open_positions", 5)
         five = {"A", "B", "C", "D", "E"}
         res = run(base_kwargs, ticker="ASTS", open_position_tickers=five)
         assert not res.passed
         assert "MAX OPEN POSITIONS" in res.block_reason
 
     def test_existing_position_not_blocked_by_cap(self, base_kwargs, monkeypatch):
-        monkeypatch.setattr(config, "AGENT_MAX_OPEN_POSITIONS", 5)
+        monkeypatch.setattr(config.agent, "max_open_positions", 5)
         # RKLB already open — adding to it is not opening a new position.
         five = {"RKLB", "B", "C", "D", "E"}
         res = run(base_kwargs, ticker="RKLB", open_position_tickers=five)
         assert res.passed
 
     def test_under_cap_allowed(self, base_kwargs, monkeypatch):
-        monkeypatch.setattr(config, "AGENT_MAX_OPEN_POSITIONS", 5)
+        monkeypatch.setattr(config.agent, "max_open_positions", 5)
         res = run(base_kwargs, ticker="ASTS", open_position_tickers={"RKLB", "NVDA"})
         assert res.passed
 
@@ -136,21 +136,21 @@ class TestMaxOpenPositions:
 
 class TestMinHold:
     def test_same_day_roundtrip_blocked(self, base_kwargs, monkeypatch):
-        monkeypatch.setattr(config, "AGENT_MIN_HOLD_DAYS", 2)
+        monkeypatch.setattr(config.agent, "min_hold_days", 2)
         res = run(base_kwargs, side="sell",
                   last_buy={"run_date": "2026-07-06T09:00:00"}, now=MONDAY)
         assert not res.passed
         assert "MIN HOLD" in res.block_reason
 
     def test_one_day_held_blocked(self, base_kwargs, monkeypatch):
-        monkeypatch.setattr(config, "AGENT_MIN_HOLD_DAYS", 2)
+        monkeypatch.setattr(config.agent, "min_hold_days", 2)
         res = run(base_kwargs, side="sell",
                   last_buy={"run_date": "2026-07-06T09:00:00"}, now=TUESDAY)
         assert not res.passed
         assert "MIN HOLD" in res.block_reason
 
     def test_held_long_enough_allowed(self, base_kwargs, monkeypatch):
-        monkeypatch.setattr(config, "AGENT_MIN_HOLD_DAYS", 2)
+        monkeypatch.setattr(config.agent, "min_hold_days", 2)
         # Bought Wed Jul 1 → sell Mon Jul 6 = 3 trading days later.
         res = run(base_kwargs, side="sell",
                   last_buy={"run_date": "2026-07-01T09:00:00"}, now=MONDAY)
@@ -168,18 +168,18 @@ class TestMinHold:
 
 class TestCashGFV:
     def test_unsettled_funds_blocked(self, base_kwargs, monkeypatch):
-        monkeypatch.setattr(config, "AGENT_ACCOUNT_IS_CASH", True)
+        monkeypatch.setattr(config.agent, "account_is_cash", True)
         res = run(base_kwargs, settled_cash=50.0, estimated_cost=100.0)
         assert not res.passed
         assert "UNSETTLED FUNDS" in res.block_reason
 
     def test_settled_funds_allowed(self, base_kwargs, monkeypatch):
-        monkeypatch.setattr(config, "AGENT_ACCOUNT_IS_CASH", True)
+        monkeypatch.setattr(config.agent, "account_is_cash", True)
         res = run(base_kwargs, settled_cash=200.0, estimated_cost=100.0)
         assert res.passed
 
     def test_margin_account_ignores_settlement(self, base_kwargs, monkeypatch):
-        monkeypatch.setattr(config, "AGENT_ACCOUNT_IS_CASH", False)
+        monkeypatch.setattr(config.agent, "account_is_cash", False)
         res = run(base_kwargs, settled_cash=0.0, estimated_cost=100.0)
         assert res.passed
 
@@ -190,26 +190,26 @@ class TestCashGFV:
 
 class TestDrawdownHalt:
     def test_breach_blocks_buy(self, base_kwargs, monkeypatch):
-        monkeypatch.setattr(config, "AGENT_DRAWDOWN_HALT_PCT", -15.0)
+        monkeypatch.setattr(config.agent, "drawdown_halt_pct", -15.0)
         res = run(base_kwargs, drawdown_pct=-15.0)
         assert not res.passed
         assert "DRAWDOWN HALT" in res.block_reason
         assert res.checks["drawdown_halt"] is False
 
     def test_breach_blocks_sell_too(self, base_kwargs, monkeypatch):
-        monkeypatch.setattr(config, "AGENT_DRAWDOWN_HALT_PCT", -15.0)
+        monkeypatch.setattr(config.agent, "drawdown_halt_pct", -15.0)
         res = run(base_kwargs, side="sell", drawdown_pct=-20.0,
                   last_buy={"run_date": "2026-07-01T09:00:00"})
         assert not res.passed
         assert "DRAWDOWN HALT" in res.block_reason
 
     def test_within_limit_allowed(self, base_kwargs, monkeypatch):
-        monkeypatch.setattr(config, "AGENT_DRAWDOWN_HALT_PCT", -15.0)
+        monkeypatch.setattr(config.agent, "drawdown_halt_pct", -15.0)
         res = run(base_kwargs, drawdown_pct=-10.0)
         assert res.passed
 
     def test_check_halt_state_helper(self, monkeypatch):
-        monkeypatch.setattr(config, "AGENT_DRAWDOWN_HALT_PCT", -15.0)
+        monkeypatch.setattr(config.agent, "drawdown_halt_pct", -15.0)
         assert check_halt_state(-16.0)[0] is True
         assert check_halt_state(-14.9)[0] is False
         assert check_halt_state(None)[0] is False

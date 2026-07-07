@@ -32,7 +32,7 @@ from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamablehttp_client
 
 from mcp import ClientSession
-from src.config import ANTHROPIC_API_KEY
+from src import config
 from src.mcp import ServerSpec, extract_text
 
 logger = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ async def run_agentic(
     usage = _Usage()
     tool_log: list[dict[str, Any]] = []
 
-    async with anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY) as client, AsyncExitStack() as stack:
+    async with anthropic.AsyncAnthropic(api_key=config.services.anthropic_api_key) as client, AsyncExitStack() as stack:
         tool_to_session: dict[str, ClientSession] = {}
         tool_to_server: dict[str, str] = {}
         tools: list[Any] = []

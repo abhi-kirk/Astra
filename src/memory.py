@@ -10,11 +10,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from src.config import (
-    PAPER_DEFAULT_POSITION_PCT,
-    PAPER_MAX_POSITION_PCT,
-    PAPER_PORTFOLIO_SIZE,
-)
+from src import config
 from src.db import Rows, get_client
 from src.db import rows as db_rows
 
@@ -174,7 +170,7 @@ def log_paper_trade(
 ) -> int | None:
     """Log a virtual BUY trade when ASTRA issues a BUY signal.
 
-    Size = suggested_pct × PAPER_PORTFOLIO_SIZE, capped at PAPER_MAX_POSITION_PCT.
+    Size = suggested_pct × config.paper.portfolio_size, capped at config.paper.max_position_pct.
     Skips if an open paper position already exists for this ticker.
     Returns the paper_trade id (existing or newly inserted) so Autotrader can link
     agent_trades.mirrors_paper_trade_id; None only if the insert returns no row.
@@ -186,8 +182,8 @@ def log_paper_trade(
     if existing:
         return existing[0].get("id")  # no pyramiding in paper mode — return the open lot's id
 
-    pct = suggested_pct or PAPER_DEFAULT_POSITION_PCT
-    virtual_cost = min(pct * PAPER_PORTFOLIO_SIZE, PAPER_MAX_POSITION_PCT * PAPER_PORTFOLIO_SIZE)
+    pct = suggested_pct or config.paper.default_position_pct
+    virtual_cost = min(pct * config.paper.portfolio_size, config.paper.max_position_pct * config.paper.portfolio_size)
     virtual_shares = round(virtual_cost / price, 6) if price else 0
 
     result = db.table("paper_trades").insert({
@@ -201,7 +197,7 @@ def log_paper_trade(
         "signal_data": signal_data or {},
         "is_open": True,
     }).execute()
-    logger.info(f"Paper BUY  {ticker}: {virtual_shares:.4f} shares @ ${price:.2f}  (${virtual_cost:.0f} = {pct:.0%} of ${PAPER_PORTFOLIO_SIZE:.0f})")
+    logger.info(f"Paper BUY  {ticker}: {virtual_shares:.4f} shares @ ${price:.2f}  (${virtual_cost:.0f} = {pct:.0%} of ${config.paper.portfolio_size:.0f})")
     data = db_rows(result.data)
     return data[0].get("id") if data else None
 

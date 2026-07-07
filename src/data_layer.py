@@ -22,14 +22,7 @@ from pathlib import Path
 import pandas as pd
 import yfinance as yf
 
-from src.config import (
-    BRAIN_ATR_PERIOD,
-    BRAIN_MOM_LOOKBACK_DAYS,
-    BRAIN_MOM_SKIP_DAYS,
-    BRAIN_SWING_HIGH_LOOKBACK,
-    MARKET_DATA_PERIOD_DAYS,
-    MARKET_DATA_WORKERS,
-)
+from src import config
 
 logger = logging.getLogger(__name__)
 from src.db import rows as db_rows
@@ -187,7 +180,7 @@ def save_mcp_portfolio_snapshot(positions: dict):
 # Market data
 # ---------------------------------------------------------------------------
 
-def get_market_data(ticker: str, period_days: int = MARKET_DATA_PERIOD_DAYS) -> dict:
+def get_market_data(ticker: str, period_days: int = config.market_data.period_days) -> dict:
     """
     Fetch price history, technical indicators, and key fundamentals via yfinance.
     Returns a flat dict suitable for strategy screening.
@@ -212,9 +205,9 @@ def get_market_data(ticker: str, period_days: int = MARKET_DATA_PERIOD_DAYS) -> 
         ma_50 = float(hist["Close"].tail(50).mean())
         ma_200 = float(hist["Close"].tail(200).mean()) if len(hist) >= 200 else None
         avg_vol_30d = float(hist["Volume"].tail(30).mean())
-        atr_14 = _calc_atr(hist, BRAIN_ATR_PERIOD)
-        recent_swing_high = float(hist["High"].tail(BRAIN_SWING_HIGH_LOOKBACK).max())
-        mom_12_1 = _calc_momentum(closes, BRAIN_MOM_LOOKBACK_DAYS, BRAIN_MOM_SKIP_DAYS)
+        atr_14 = _calc_atr(hist, config.brain.atr_period)
+        recent_swing_high = float(hist["High"].tail(config.brain.swing_high_lookback).max())
+        mom_12_1 = _calc_momentum(closes, config.brain.mom_lookback_days, config.brain.mom_skip_days)
 
         info = tk.info or {}
         revisions = _get_revisions(tk)
@@ -258,11 +251,11 @@ def get_market_data(ticker: str, period_days: int = MARKET_DATA_PERIOD_DAYS) -> 
 
 def get_market_data_bulk(
     tickers: list[str],
-    period_days: int = MARKET_DATA_PERIOD_DAYS,
+    period_days: int = config.market_data.period_days,
 ) -> dict[str, dict]:
     """Fetch market data for multiple tickers concurrently."""
     results: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=MARKET_DATA_WORKERS) as pool:
+    with ThreadPoolExecutor(max_workers=config.market_data.workers) as pool:
         futures = {pool.submit(get_market_data, t, period_days): t for t in tickers}
         for fut in as_completed(futures):
             t = futures[fut]

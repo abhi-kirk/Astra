@@ -8,7 +8,7 @@ Dashboard JS uses the anon key directly — never import service key client-side
 from functools import lru_cache
 from typing import Any, cast
 
-from src.config import SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY, SUPABASE_URL
+from src import config
 from supabase import Client, create_client
 
 # The Supabase SDK types APIResponse.data as List[JSON] — a broad recursive union
@@ -24,13 +24,13 @@ def rows(data: Any) -> Rows:
 
 @lru_cache(maxsize=1)
 def get_client() -> Client:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+    if not config.supabase.url or not config.supabase.service_key:
         raise EnvironmentError(
             "SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in .env"
         )
-    return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    return create_client(config.supabase.url, config.supabase.service_key)
 
 
 def get_anon_client() -> Client:
     """Read-only client using the anon key — mirrors what the dashboard JS uses."""
-    return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+    return create_client(config.supabase.url, config.supabase.anon_key)

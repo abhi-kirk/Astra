@@ -82,7 +82,7 @@ def format_message(buy_tickers, sell_tickers, advisor_note, mode="simulation") -
 
 def send(text: str) -> bool:
     """POST a message to Telegram. Returns True on success, False on skip/failure."""
-    token, chat_id = config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID
+    token, chat_id = config.telegram.bot_token, config.telegram.chat_id
     if not token or not chat_id:
         logger.info("Telegram not configured (TELEGRAM_BOT_TOKEN/CHAT_ID unset) — skipping notification")
         return False

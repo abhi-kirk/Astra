@@ -2,210 +2,277 @@
 Centralised configuration. All env vars and tunable constants live here.
 Other modules import from this file — never read os.environ directly.
 
+Config is grouped into section dataclasses (one per concern), each instantiated as a
+lowercase module-level singleton. Access is dotted, e.g. `config.brain.buy_threshold`,
+`config.agent.trading_enabled`. Dataclasses are mutable so tests can monkeypatch a single
+field in place.
+
 In GitHub Actions: values come from exported secrets (no .env file needed).
 Locally: starlette.config reads the .env file at project root.
 """
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from starlette.config import Config
 
 _cfg = Config(Path(__file__).parent.parent / ".env")
 
-# ── Supabase ───────────────────────────────────────────────────
-SUPABASE_URL         = _cfg("SUPABASE_URL",         default="")
-SUPABASE_SERVICE_KEY = _cfg("SUPABASE_SERVICE_KEY", default="")
-SUPABASE_ANON_KEY    = _cfg("SUPABASE_ANON_KEY",    default="")
 
-# ── Anthropic / MCP ───────────────────────────────────────────
-ANTHROPIC_API_KEY        = _cfg("ANTHROPIC_API_KEY",        default="")
-TAVILY_MCP_URL           = _cfg("TAVILY_MCP_URL",           default="")
-ALPHA_VANTAGE_API_KEY    = _cfg("ALPHA_VANTAGE_API_KEY",    default="")
-# Community-hosted, no auth. Falls back gracefully if unavailable.
-SEC_EDGAR_MCP_URL        = _cfg("SEC_EDGAR_MCP_URL",        default="https://secedgar.caseyjhand.com/mcp")
-FMP_API_KEY              = _cfg("FMP_API_KEY",              default="")
+# ── Supabase ───────────────────────────────────────────────────────────────────
+@dataclass
+class SupabaseConfig:
+    url: str = _cfg("SUPABASE_URL", default="")
+    service_key: str = _cfg("SUPABASE_SERVICE_KEY", default="")  # full access — backend writes only
+    anon_key: str = _cfg("SUPABASE_ANON_KEY", default="")        # public read — safe for the dashboard JS
 
-# ── AI reasoning ──────────────────────────────────────────────
-REASONING_MODEL      = _cfg("REASONING_MODEL",      default="claude-opus-4-8")
-# Adaptive thinking counts toward max_tokens — keep headroom (still <16k, so non-streaming is safe).
-REASONING_MAX_TOKENS = _cfg("REASONING_MAX_TOKENS", cast=int, default=8000)
-ADVISOR_EFFORT       = _cfg("ADVISOR_EFFORT",       default="high")  # output_config.effort: low|medium|high|max
-TAVILY_MAX_SEARCHES  = _cfg("TAVILY_MAX_SEARCHES",  cast=int, default=5)
-# Alpha Vantage free tier: 25 calls/day, 5 calls/min
-# Claude will use tools selectively — cap to avoid blowing the daily limit in one run
-ALPHA_VANTAGE_MAX_CALLS  = _cfg("ALPHA_VANTAGE_MAX_CALLS",  cast=int, default=8)
-# FMP free tier: 250 calls/day. Analyst data (price targets, grades) only available for
-# large/mid caps on the free plan — small caps (RKLB, ASTS) gracefully return nothing.
-FMP_MAX_CALLS            = _cfg("FMP_MAX_CALLS",            cast=int, default=10)
 
-# ── Client-side MCP tool loop ─────────────────────────────────
+# ── External services (Anthropic + MCP data providers) ─────────────────────────
+@dataclass
+class ServicesConfig:
+    anthropic_api_key: str = _cfg("ANTHROPIC_API_KEY", default="")            # LLM for advisor + exploration reasoning
+    tavily_mcp_url: str = _cfg("TAVILY_MCP_URL", default="")                  # hosted web-search MCP endpoint
+    alpha_vantage_api_key: str = _cfg("ALPHA_VANTAGE_API_KEY", default="")    # news sentiment / earnings / company-overview MCP
+    # Community-hosted, no auth. Falls back gracefully if unavailable.
+    sec_edgar_mcp_url: str = _cfg("SEC_EDGAR_MCP_URL", default="https://secedgar.caseyjhand.com/mcp")  # SEC filings MCP
+    fmp_api_key: str = _cfg("FMP_API_KEY", default="")                        # analyst price-targets / grades MCP (large/mid caps only)
+
+
+# ── AI reasoning ───────────────────────────────────────────────────────────────
+@dataclass
+class ReasoningConfig:
+    model: str = _cfg("REASONING_MODEL", default="claude-opus-4-8")  # advisor narrative-reasoning model
+    # Adaptive thinking counts toward max_tokens — keep headroom (still <16k, so non-streaming is safe).
+    max_tokens: int = _cfg("REASONING_MAX_TOKENS", cast=int, default=8000)
+    advisor_effort: str = _cfg("ADVISOR_EFFORT", default="high")  # output_config.effort: low|medium|high|max
+    tavily_max_searches: int = _cfg("TAVILY_MAX_SEARCHES", cast=int, default=5)  # web searches per advisor run
+    # Alpha Vantage free tier: 25 calls/day, 5 calls/min. Claude uses tools selectively —
+    # cap to avoid blowing the daily limit in one run.
+    alpha_vantage_max_calls: int = _cfg("ALPHA_VANTAGE_MAX_CALLS", cast=int, default=8)
+    # FMP free tier: 250 calls/day. Analyst data (price targets, grades) only available for
+    # large/mid caps on the free plan — small caps (RKLB, ASTS) gracefully return nothing.
+    fmp_max_calls: int = _cfg("FMP_MAX_CALLS", cast=int, default=10)
+
+
+# ── Client-side MCP tool loop ──────────────────────────────────────────────────
 # We run Claude's tool-use loop ourselves (see src/mcp_loop.py) instead of the server-side
 # MCP connector, so each tool call is individually bounded and observable.
-ADVISOR_TOOL_TIMEOUT     = _cfg("ADVISOR_TOOL_TIMEOUT",     cast=int, default=45)  # per MCP tool call, seconds
-ADVISOR_MAX_TOOL_ROUNDS  = _cfg("ADVISOR_MAX_TOOL_ROUNDS",  cast=int, default=8)   # max model↔tool rounds before forcing a note
-MCP_TOOL_FAILURE_LIMIT   = _cfg("MCP_TOOL_FAILURE_LIMIT",   cast=int, default=2)   # circuit-breaker: disable a server after N failures
+@dataclass
+class ToolLoopConfig:
+    advisor_tool_timeout: int = _cfg("ADVISOR_TOOL_TIMEOUT", cast=int, default=45)     # per MCP tool call, seconds
+    advisor_max_tool_rounds: int = _cfg("ADVISOR_MAX_TOOL_ROUNDS", cast=int, default=8)  # max model↔tool rounds before forcing a note
+    mcp_tool_failure_limit: int = _cfg("MCP_TOOL_FAILURE_LIMIT", cast=int, default=2)   # circuit-breaker: disable a server after N failures
 
-# ── Paper trading ─────────────────────────────────────────────
-PAPER_PORTFOLIO_SIZE       = _cfg("PAPER_PORTFOLIO_SIZE",       cast=float, default=10_000.0)
-PAPER_MAX_POSITION_PCT     = _cfg("PAPER_MAX_POSITION_PCT",     cast=float, default=0.10)
-PAPER_DEFAULT_POSITION_PCT = _cfg("PAPER_DEFAULT_POSITION_PCT", cast=float, default=0.04)
 
-# ── Market data ───────────────────────────────────────────────
-MARKET_DATA_WORKERS     = _cfg("MARKET_DATA_WORKERS",     cast=int, default=8)
-MARKET_DATA_PERIOD_DAYS = _cfg("MARKET_DATA_PERIOD_DAYS", cast=int, default=365)
+# ── Paper trading ──────────────────────────────────────────────────────────────
+@dataclass
+class PaperConfig:
+    portfolio_size: float = _cfg("PAPER_PORTFOLIO_SIZE", cast=float, default=10_000.0)       # virtual book the paper track sizes against
+    max_position_pct: float = _cfg("PAPER_MAX_POSITION_PCT", cast=float, default=0.10)        # hard per-name cap (fraction of book)
+    default_position_pct: float = _cfg("PAPER_DEFAULT_POSITION_PCT", cast=float, default=0.04)  # fallback buy size when no explicit sizing
 
-# ── Strategy: hard rules ───────────────────────────────────────
-RULE_MAX_POSITION_PCT       = _cfg("RULE_MAX_POSITION_PCT",       cast=float, default=0.10)  # single name cap
-RULE_MAX_THEME_PCT          = _cfg("RULE_MAX_THEME_PCT",          cast=float, default=0.15)  # speculative theme cap
-RULE_THEME_CAP_EXEMPT       = _cfg("RULE_THEME_CAP_EXEMPT",       default="core_tech")       # theme(s) exempt from the cap
-RULE_AVERAGING_DOWN_DRAWDOWN= _cfg("RULE_AVERAGING_DOWN_DRAWDOWN",cast=float, default=0.35)  # max drawdown before avg-down blocked
-RULE_AVERAGING_DOWN_MAX_BUYS= _cfg("RULE_AVERAGING_DOWN_MAX_BUYS",cast=int,   default=3)     # max buys before avg-down blocked
-RULE_PROFIT_TAKE_PCT        = _cfg("RULE_PROFIT_TAKE_PCT",        cast=float, default=0.60)  # unrealized gain threshold for sell signal
 
-# ── Strategy: quality filter ───────────────────────────────────
-QUALITY_MIN_REVENUE_GROWTH  = _cfg("QUALITY_MIN_REVENUE_GROWTH",  cast=float, default=0.10)  # YoY
-QUALITY_MIN_GROSS_MARGIN    = _cfg("QUALITY_MIN_GROSS_MARGIN",    cast=float, default=0.30)
-QUALITY_MAX_DEBT_EQUITY     = _cfg("QUALITY_MAX_DEBT_EQUITY",     cast=float, default=150.0)
-QUALITY_MIN_CHECKS_TO_PASS  = _cfg("QUALITY_MIN_CHECKS_TO_PASS",  cast=int,   default=2)
+# ── Market data ────────────────────────────────────────────────────────────────
+@dataclass
+class MarketDataConfig:
+    workers: int = _cfg("MARKET_DATA_WORKERS", cast=int, default=8)          # yfinance fetch thread-pool size
+    period_days: int = _cfg("MARKET_DATA_PERIOD_DAYS", cast=int, default=365)  # trailing price-history window pulled per ticker
 
-# ── Strategy: technical signal ────────────────────────────────
-TECH_MIN_PCT_BELOW_52W_HIGH = _cfg("TECH_MIN_PCT_BELOW_52W_HIGH", cast=float, default=15.0)  # %
-TECH_MAX_RSI                = _cfg("TECH_MAX_RSI",                cast=float, default=40.0)
-TECH_SIGNALS_REQUIRED       = _cfg("TECH_SIGNALS_REQUIRED",       cast=int,   default=2)
+
+# ── Strategy: hard rules ───────────────────────────────────────────────────────
+@dataclass
+class RulesConfig:
+    max_position_pct: float = _cfg("RULE_MAX_POSITION_PCT", cast=float, default=0.10)             # single-name cap (fraction of book)
+    max_theme_pct: float = _cfg("RULE_MAX_THEME_PCT", cast=float, default=0.15)                   # speculative-theme cap (fraction of book)
+    theme_cap_exempt: str = _cfg("RULE_THEME_CAP_EXEMPT", default="core_tech")                    # theme(s) exempt from the cap
+    averaging_down_drawdown: float = _cfg("RULE_AVERAGING_DOWN_DRAWDOWN", cast=float, default=0.35)  # drawdown (fraction, 0.35 = 35%) past which avg-down is blocked
+    averaging_down_max_buys: int = _cfg("RULE_AVERAGING_DOWN_MAX_BUYS", cast=int, default=3)         # max additional buys before avg-down is blocked
+
+
+# ── Strategy: quality filter ───────────────────────────────────────────────────
+# Vets NEW exploration candidates (src/strategy.quality_filter). Live position scoring
+# uses the brain quality pillar instead — these thresholds don't feed the brain.
+@dataclass
+class QualityConfig:
+    min_revenue_growth: float = _cfg("QUALITY_MIN_REVENUE_GROWTH", cast=float, default=0.10)  # YoY; must exceed to pass the growth check
+    min_gross_margin: float = _cfg("QUALITY_MIN_GROSS_MARGIN", cast=float, default=0.30)      # must exceed to pass the margin check
+    max_debt_equity: float = _cfg("QUALITY_MAX_DEBT_EQUITY", cast=float, default=150.0)       # D/E as a percent (150 = 1.5×); below → passes leverage check
+    min_checks_to_pass: int = _cfg("QUALITY_MIN_CHECKS_TO_PASS", cast=int, default=2)         # checks that must pass (of rev/GM/D/E/FCF) to clear
+
+
+# ── Strategy: technical signal ─────────────────────────────────────────────────
+# Dip-entry vetting for exploration candidates (src/strategy.technical_signal). Live
+# entry timing uses the brain entry pillar (ATR-based, regime-aware) instead.
+@dataclass
+class TechConfig:
+    min_pct_below_52w_high: float = _cfg("TECH_MIN_PCT_BELOW_52W_HIGH", cast=float, default=15.0)  # % below 52w high to count as a dip signal
+    max_rsi: float = _cfg("TECH_MAX_RSI", cast=float, default=40.0)                                # RSI below this counts as an oversold signal
+    signals_required: int = _cfg("TECH_SIGNALS_REQUIRED", cast=int, default=2)                     # oversold signals needed (of dip-depth + RSI)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Brain (src/brain/) — composite-scoring engine. EVERY tunable is here; the brain
 # logic contains no literals. See src/brain/README.md for the formulas these feed.
 # ══════════════════════════════════════════════════════════════════════════════
+@dataclass
+class BrainConfig:
+    # ── Conviction weights (the anchor C — both the BUY gate and the score multiplier;
+    # a ticker must map to one of these statuses to be buyable at all) ─────────
+    conviction_preferred: float = _cfg("BRAIN_CONVICTION_PREFERRED", cast=float, default=1.0)  # named holding / core high-conviction
+    conviction_approved: float = _cfg("BRAIN_CONVICTION_APPROVED", cast=float, default=0.7)    # approved theme, not a named holding
+    conviction_hold: float = _cfg("BRAIN_CONVICTION_HOLD", cast=float, default=0.4)            # hold-only — no fresh buys without a catalyst
 
-# ── Brain: conviction weights (the anchor — gate + weight multiplier) ──────────
-BRAIN_CONVICTION_PREFERRED  = _cfg("BRAIN_CONVICTION_PREFERRED",  cast=float, default=1.0)
-BRAIN_CONVICTION_APPROVED   = _cfg("BRAIN_CONVICTION_APPROVED",   cast=float, default=0.7)
-BRAIN_CONVICTION_HOLD       = _cfg("BRAIN_CONVICTION_HOLD",       cast=float, default=0.4)
+    # ── Pillar weights — composite S = Σ w·pillar; the five weights sum to 1.0 ──
+    weight_quality: float = _cfg("BRAIN_WEIGHT_QUALITY", cast=float, default=0.25)        # fundamentals (growth, margins, leverage, liquidity)
+    weight_valuation: float = _cfg("BRAIN_WEIGHT_VALUATION", cast=float, default=0.20)    # PEG / forward-PE (best-effort, neutral when missing)
+    weight_trend: float = _cfg("BRAIN_WEIGHT_TREND", cast=float, default=0.20)            # regime + 12-1 momentum + price-vs-50MA
+    weight_entry: float = _cfg("BRAIN_WEIGHT_ENTRY", cast=float, default=0.20)            # pullback timing (ATR depth, MA proximity, RSI)
+    weight_revisions: float = _cfg("BRAIN_WEIGHT_REVISIONS", cast=float, default=0.15)    # analyst estimate revisions (soft signal)
 
-# ── Brain: pillar weights (balanced) — composite S = Σ w·pillar ───────────────
-BRAIN_WEIGHT_QUALITY        = _cfg("BRAIN_WEIGHT_QUALITY",        cast=float, default=0.25)
-BRAIN_WEIGHT_VALUATION      = _cfg("BRAIN_WEIGHT_VALUATION",      cast=float, default=0.20)
-BRAIN_WEIGHT_TREND          = _cfg("BRAIN_WEIGHT_TREND",          cast=float, default=0.20)
-BRAIN_WEIGHT_ENTRY          = _cfg("BRAIN_WEIGHT_ENTRY",          cast=float, default=0.20)
-BRAIN_WEIGHT_REVISIONS      = _cfg("BRAIN_WEIGHT_REVISIONS",      cast=float, default=0.15)
+    # ── Decision thresholds on Score_buy = C·S ─────────────────────────────────
+    buy_threshold: float = _cfg("BRAIN_BUY_THRESHOLD", cast=float, default=0.50)      # Score_buy ≥ this → BUY signal
+    watch_threshold: float = _cfg("BRAIN_WATCH_THRESHOLD", cast=float, default=0.35)  # watch ≤ Score_buy < buy → WATCH; below → no action
 
-# ── Brain: decision thresholds on Score_buy = C·S ─────────────────────────────
-BRAIN_BUY_THRESHOLD         = _cfg("BRAIN_BUY_THRESHOLD",         cast=float, default=0.50)
-BRAIN_WATCH_THRESHOLD       = _cfg("BRAIN_WATCH_THRESHOLD",       cast=float, default=0.35)
+    # ── Sizing (fractional-Kelly proxy, vol-scaled) ────────────────────────────
+    # target_w = f_global · Score_buy · vol_scalar ; vol_scalar = clip(vol_ref/atr_pct, min, max)
+    f_global: float = _cfg("BRAIN_F_GLOBAL", cast=float, default=0.10)              # master risk dial (fraction) scaling every target weight
+    size_min_pct: float = _cfg("BRAIN_SIZE_MIN_PCT", cast=float, default=0.02)      # skip buys below this target weight (fraction, 0.02 = 2%)
+    vol_ref: float = _cfg("BRAIN_VOL_REF", cast=float, default=0.03)                # reference daily ATR (fraction, 0.03 = 3%) — the vol_scalar pivot
+    vol_scalar_min: float = _cfg("BRAIN_VOL_SCALAR_MIN", cast=float, default=0.5)  # floor: most a high-vol name's size is cut
+    vol_scalar_max: float = _cfg("BRAIN_VOL_SCALAR_MAX", cast=float, default=1.5)  # ceil: most a low-vol name's size is boosted
+    max_new_deploy_pct: float = _cfg("BRAIN_MAX_NEW_DEPLOY_PCT", cast=float, default=0.25)  # cap on total new BUYs per run (fraction of book)
+    # (single-name cap = rules.max_position_pct, theme cap = rules.max_theme_pct — reused)
 
-# ── Brain: sizing (fractional-Kelly proxy, vol-scaled) ────────────────────────
-# target_w = F_GLOBAL · Score_buy · vol_scalar ; vol_scalar = clip(VOL_REF/atr_pct, MIN, MAX)
-BRAIN_F_GLOBAL              = _cfg("BRAIN_F_GLOBAL",              cast=float, default=0.10)  # master risk dial
-BRAIN_SIZE_MIN_PCT          = _cfg("BRAIN_SIZE_MIN_PCT",          cast=float, default=0.02)  # skip sub-2% dust buys
-BRAIN_VOL_REF              = _cfg("BRAIN_VOL_REF",               cast=float, default=0.03)  # reference daily ATR% (3%)
-BRAIN_VOL_SCALAR_MIN        = _cfg("BRAIN_VOL_SCALAR_MIN",        cast=float, default=0.5)
-BRAIN_VOL_SCALAR_MAX        = _cfg("BRAIN_VOL_SCALAR_MAX",        cast=float, default=1.5)
-BRAIN_MAX_NEW_DEPLOY_PCT    = _cfg("BRAIN_MAX_NEW_DEPLOY_PCT",    cast=float, default=0.25)  # cap on new BUYs per run
-# (single-name cap = RULE_MAX_POSITION_PCT, theme cap = RULE_MAX_THEME_PCT — reused)
+    # ── Quality pillar ramps ───────────────────────────────────────────────────
+    # Each metric maps through smooth(x, lo, hi) → 0 below lo, 1 above hi, linear between;
+    # the sub-scores (rev, GM, D/E, current-ratio, FCF-sign) are averaged into the pillar.
+    q_rev_low: float = _cfg("BRAIN_Q_REV_LOW", cast=float, default=0.0)     # YoY revenue growth: 0% → score 0
+    q_rev_high: float = _cfg("BRAIN_Q_REV_HIGH", cast=float, default=0.30)  #                    30% → score 1
+    q_gm_low: float = _cfg("BRAIN_Q_GM_LOW", cast=float, default=0.20)      # gross margin: 20% → 0
+    q_gm_high: float = _cfg("BRAIN_Q_GM_HIGH", cast=float, default=0.60)    #               60% → 1
+    # debt/equity is a descending ramp (lower is better); reported as a percent (100 = 1.0× D/E).
+    q_de_good: float = _cfg("BRAIN_Q_DE_GOOD", cast=float, default=100.0)   # D/E ≤ 100% (1.0×) → 1
+    q_de_bad: float = _cfg("BRAIN_Q_DE_BAD", cast=float, default=300.0)     # D/E ≥ 300% (3.0×) → 0
+    q_cr_low: float = _cfg("BRAIN_Q_CR_LOW", cast=float, default=1.0)       # current ratio: 1.0 → 0
+    q_cr_high: float = _cfg("BRAIN_Q_CR_HIGH", cast=float, default=1.5)     #                1.5 → 1
+    q_catastrophic_cap: float = _cfg("BRAIN_Q_CATASTROPHIC_CAP", cast=float, default=0.15)  # hard cap on quality if revenue declining or GM negative
 
-# ── Brain: quality pillar ramps (smooth ramp endpoints) ───────────────────────
-BRAIN_Q_REV_LOW             = _cfg("BRAIN_Q_REV_LOW",             cast=float, default=0.0)
-BRAIN_Q_REV_HIGH            = _cfg("BRAIN_Q_REV_HIGH",            cast=float, default=0.30)
-BRAIN_Q_GM_LOW              = _cfg("BRAIN_Q_GM_LOW",              cast=float, default=0.20)
-BRAIN_Q_GM_HIGH             = _cfg("BRAIN_Q_GM_HIGH",             cast=float, default=0.60)
-BRAIN_Q_DE_GOOD             = _cfg("BRAIN_Q_DE_GOOD",             cast=float, default=100.0)
-BRAIN_Q_DE_BAD              = _cfg("BRAIN_Q_DE_BAD",              cast=float, default=300.0)
-BRAIN_Q_CR_LOW              = _cfg("BRAIN_Q_CR_LOW",              cast=float, default=1.0)
-BRAIN_Q_CR_HIGH             = _cfg("BRAIN_Q_CR_HIGH",             cast=float, default=1.5)
-BRAIN_Q_CATASTROPHIC_CAP    = _cfg("BRAIN_Q_CATASTROPHIC_CAP",    cast=float, default=0.15)  # rev-declining / neg-GM cap
+    # ── Valuation pillar ───────────────────────────────────────────────────────
+    v_peg_low: float = _cfg("BRAIN_V_PEG_LOW", cast=float, default=1.0)    # PEG≤1 → best
+    v_peg_high: float = _cfg("BRAIN_V_PEG_HIGH", cast=float, default=3.0)  # PEG≥3 → 0
+    v_pe_low: float = _cfg("BRAIN_V_PE_LOW", cast=float, default=15.0)     # fwd PE≤15 → best
+    v_pe_high: float = _cfg("BRAIN_V_PE_HIGH", cast=float, default=40.0)   # fwd PE≥40 → 0
+    v_neutral: float = _cfg("BRAIN_V_NEUTRAL", cast=float, default=0.5)    # missing data
 
-# ── Brain: valuation pillar ───────────────────────────────────────────────────
-BRAIN_V_PEG_LOW             = _cfg("BRAIN_V_PEG_LOW",             cast=float, default=1.0)   # PEG≤1 → best
-BRAIN_V_PEG_HIGH            = _cfg("BRAIN_V_PEG_HIGH",            cast=float, default=3.0)   # PEG≥3 → 0
-BRAIN_V_PE_LOW              = _cfg("BRAIN_V_PE_LOW",              cast=float, default=15.0)  # fwd PE≤15 → best
-BRAIN_V_PE_HIGH             = _cfg("BRAIN_V_PE_HIGH",             cast=float, default=40.0)  # fwd PE≥40 → 0
-BRAIN_V_NEUTRAL             = _cfg("BRAIN_V_NEUTRAL",             cast=float, default=0.5)   # missing data
+    # ── Trend pillar ───────────────────────────────────────────────────────────
+    t_regime_term: float = _cfg("BRAIN_T_REGIME_TERM", cast=float, default=0.5)   # ±contribution of regime
+    t_mom_scale: float = _cfg("BRAIN_T_MOM_SCALE", cast=float, default=0.25)      # tanh scale for 12-1 mom
+    t_ma50_scale: float = _cfg("BRAIN_T_MA50_SCALE", cast=float, default=15.0)    # tanh scale for price-vs-50MA %
 
-# ── Brain: trend pillar ───────────────────────────────────────────────────────
-BRAIN_T_REGIME_TERM         = _cfg("BRAIN_T_REGIME_TERM",        cast=float, default=0.5)   # ±contribution of regime
-BRAIN_T_MOM_SCALE           = _cfg("BRAIN_T_MOM_SCALE",          cast=float, default=0.25)  # tanh scale for 12-1 mom
-BRAIN_T_MA50_SCALE          = _cfg("BRAIN_T_MA50_SCALE",         cast=float, default=15.0)  # tanh scale for price-vs-50MA %
+    # ── Entry-timing pillar (pullback measured in ATR units) ───────────────────
+    e_pullback_peak_low: float = _cfg("BRAIN_E_PULLBACK_PEAK_LOW", cast=float, default=1.0)    # ATRs: start of sweet spot
+    e_pullback_peak_high: float = _cfg("BRAIN_E_PULLBACK_PEAK_HIGH", cast=float, default=3.0)  # ATRs: end of sweet spot
+    e_pullback_max: float = _cfg("BRAIN_E_PULLBACK_MAX", cast=float, default=5.0)              # ATRs: broken beyond this
+    e_ma_proximity_pct: float = _cfg("BRAIN_E_MA_PROXIMITY_PCT", cast=float, default=8.0)      # near rising 50-MA within %
+    e_rsi_high: float = _cfg("BRAIN_E_RSI_HIGH", cast=float, default=55.0)                     # uptrend: full entry score at/below this RSI, fades above
+    e_rsi_overbought: float = _cfg("BRAIN_E_RSI_OVERBOUGHT", cast=float, default=70.0)         # uptrend: entry score hits 0 here (too extended to buy)
+    e_rsi_oversold: float = _cfg("BRAIN_E_RSI_OVERSOLD", cast=float, default=35.0)             # downtrend: entry score peaks near this deep-oversold RSI (capitulation)
 
-# ── Brain: entry-timing pillar (pullback measured in ATR units) ───────────────
-BRAIN_E_PULLBACK_PEAK_LOW   = _cfg("BRAIN_E_PULLBACK_PEAK_LOW",   cast=float, default=1.0)   # ATRs: start of sweet spot
-BRAIN_E_PULLBACK_PEAK_HIGH  = _cfg("BRAIN_E_PULLBACK_PEAK_HIGH",  cast=float, default=3.0)   # ATRs: end of sweet spot
-BRAIN_E_PULLBACK_MAX        = _cfg("BRAIN_E_PULLBACK_MAX",        cast=float, default=5.0)   # ATRs: broken beyond this
-BRAIN_E_MA_PROXIMITY_PCT    = _cfg("BRAIN_E_MA_PROXIMITY_PCT",    cast=float, default=8.0)   # near rising 50-MA within %
-BRAIN_E_RSI_LOW             = _cfg("BRAIN_E_RSI_LOW",             cast=float, default=40.0)  # uptrend healthy-pullback low
-BRAIN_E_RSI_HIGH            = _cfg("BRAIN_E_RSI_HIGH",            cast=float, default=55.0)  # uptrend healthy-pullback high
-BRAIN_E_RSI_OVERBOUGHT      = _cfg("BRAIN_E_RSI_OVERBOUGHT",      cast=float, default=70.0)
-BRAIN_E_RSI_OVERSOLD        = _cfg("BRAIN_E_RSI_OVERSOLD",        cast=float, default=35.0)  # downtrend deep-value reward
+    # ── Revisions pillar (soft, best-effort — never forces a sell) ─────────────
+    r_norm: float = _cfg("BRAIN_R_NORM", cast=float, default=3.0)  # net revisions → ±1 scale
 
-# ── Brain: revisions pillar (soft, best-effort — never forces a sell) ─────────
-BRAIN_R_NORM                = _cfg("BRAIN_R_NORM",                cast=float, default=3.0)   # net revisions → ±1 scale
+    # ── Exit stack ─────────────────────────────────────────────────────────────
+    exit_rev_decline: float = _cfg("BRAIN_EXIT_REV_DECLINE", cast=float, default=-0.10)  # rev growth below → thesis broken
+    exit_gm_collapse: float = _cfg("BRAIN_EXIT_GM_COLLAPSE", cast=float, default=0.0)    # gross margin below → thesis broken
+    trail_atr_mult: float = _cfg("BRAIN_TRAIL_ATR_MULT", cast=float, default=3.0)        # Chandelier k
+    trim_gain_pct: float = _cfg("BRAIN_TRIM_GAIN_PCT", cast=float, default=0.50)         # parabolic: min unrealized gain
+    trim_rsi: float = _cfg("BRAIN_TRIM_RSI", cast=float, default=70.0)                   # parabolic: overbought
+    trim_ma_ext_atr_mult: float = _cfg("BRAIN_TRIM_MA_EXT_ATR_MULT", cast=float, default=4.0)  # parabolic: ATRs above 50-MA
+    trim_fraction: float = _cfg("BRAIN_TRIM_FRACTION", cast=float, default=0.3333)       # trim ~⅓, keep runner
 
-# ── Brain: exit stack ─────────────────────────────────────────────────────────
-BRAIN_EXIT_REV_DECLINE      = _cfg("BRAIN_EXIT_REV_DECLINE",      cast=float, default=-0.10) # rev growth below → thesis broken
-BRAIN_EXIT_GM_COLLAPSE      = _cfg("BRAIN_EXIT_GM_COLLAPSE",      cast=float, default=0.0)   # gross margin below → thesis broken
-BRAIN_TRAIL_ATR_MULT        = _cfg("BRAIN_TRAIL_ATR_MULT",        cast=float, default=3.0)   # Chandelier k
-BRAIN_TRIM_GAIN_PCT         = _cfg("BRAIN_TRIM_GAIN_PCT",         cast=float, default=0.50)  # parabolic: min unrealized gain
-BRAIN_TRIM_RSI              = _cfg("BRAIN_TRIM_RSI",              cast=float, default=70.0)  # parabolic: overbought
-BRAIN_TRIM_MA_EXT_ATR_MULT  = _cfg("BRAIN_TRIM_MA_EXT_ATR_MULT",  cast=float, default=4.0)   # parabolic: ATRs above 50-MA
-BRAIN_TRIM_FRACTION         = _cfg("BRAIN_TRIM_FRACTION",         cast=float, default=0.3333)  # trim ~⅓, keep runner
+    # ── Data-layer technical windows ───────────────────────────────────────────
+    atr_period: int = _cfg("BRAIN_ATR_PERIOD", cast=int, default=14)
+    swing_high_lookback: int = _cfg("BRAIN_SWING_HIGH_LOOKBACK", cast=int, default=22)  # Chandelier/pullback high window
+    mom_lookback_days: int = _cfg("BRAIN_MOM_LOOKBACK_DAYS", cast=int, default=252)     # 12-month
+    mom_skip_days: int = _cfg("BRAIN_MOM_SKIP_DAYS", cast=int, default=21)              # skip most-recent month (12-1)
 
-# ── Brain: data-layer technical windows ───────────────────────────────────────
-BRAIN_ATR_PERIOD            = _cfg("BRAIN_ATR_PERIOD",            cast=int,   default=14)
-BRAIN_SWING_HIGH_LOOKBACK   = _cfg("BRAIN_SWING_HIGH_LOOKBACK",   cast=int,   default=22)   # Chandelier/pullback high window
-BRAIN_MOM_LOOKBACK_DAYS     = _cfg("BRAIN_MOM_LOOKBACK_DAYS",     cast=int,   default=252)  # 12-month
-BRAIN_MOM_SKIP_DAYS         = _cfg("BRAIN_MOM_SKIP_DAYS",         cast=int,   default=21)   # skip most-recent month (12-1)
 
-# ── Robinhood live portfolio sync ─────────────────────────────
-ROBINHOOD_ACCOUNT_NUMBER = _cfg("ROBINHOOD_ACCOUNT_NUMBER", default="")   # primary account (read-only)
-ROBINHOOD_TOKEN_KEY      = _cfg("ROBINHOOD_TOKEN_KEY",      default="")   # base64 AES-256 key for tokens.enc
-ROBINHOOD_TOKENS_FILE    = _cfg("ROBINHOOD_TOKENS_FILE",    default="tokens.enc")
+# ── Robinhood live portfolio sync ──────────────────────────────────────────────
+@dataclass
+class RobinhoodConfig:
+    account_number: str = _cfg("ROBINHOOD_ACCOUNT_NUMBER", default="")  # primary account (read-only)
+    token_key: str = _cfg("ROBINHOOD_TOKEN_KEY", default="")            # base64 AES-256 key for tokens.enc
+    tokens_file: str = _cfg("ROBINHOOD_TOKENS_FILE", default="tokens.enc")
 
-# ── Autotrader: autonomous agentic trading (Phase 2) ─────────────
+
+# ── Autotrader: autonomous agentic trading ───────────────────────────
 # Real-money autonomous execution in a dedicated Robinhood Agentic account, mirroring the
 # paper track and filtered by code-enforced guardrails. Master switch defaults False — no
 # real order is placed until this is explicitly enabled AND guardrail tests pass. See
 # docs/autonomy.md.
-# Robust truthy parse — an unset GitHub secret injects "" (empty), which would crash a
-# strict bool cast; empty/unset/anything-not-truthy means disabled.
-AGENT_TRADING_ENABLED    = _cfg("AGENT_TRADING_ENABLED", default="false").strip().lower() in ("true", "1", "yes", "on")
-AGENT_ACCOUNT_NUMBER     = _cfg("AGENT_ACCOUNT_NUMBER",     default="")   # agentic_allowed=true account
-AGENT_MAX_TRADES_PER_DAY = _cfg("AGENT_MAX_TRADES_PER_DAY", cast=int,   default=3)
-AGENT_MIN_HOLD_DAYS      = _cfg("AGENT_MIN_HOLD_DAYS",      cast=int,   default=2)     # trading days before a sell is allowed
-AGENT_DRAWDOWN_HALT_PCT  = _cfg("AGENT_DRAWDOWN_HALT_PCT",  cast=float, default=-15.0) # halt if account draws down past this %
-AGENT_MAX_OPEN_POSITIONS = _cfg("AGENT_MAX_OPEN_POSITIONS", cast=int,   default=5)
-# Per-buy size as a fraction of agentic sleeve equity. The sleeve is small (~$1k), so
-# mirroring the paper track's 4–6% would leave ~75% idle cash — 20% × 5 max positions
-# deploys the sleeve fully while keeping 5-name diversification.
-AGENT_POSITION_PCT       = _cfg("AGENT_POSITION_PCT",       cast=float, default=0.20)
-# Market orders with dollar sizing — the fractional-share fit for a small (~$1k) account
-# (Robinhood allows fractional shares only on market orders, not limit).
-AGENT_ORDER_TYPE         = _cfg("AGENT_ORDER_TYPE",         default="market")
-# Cash account: T+1 settlement + Good-Faith-Violation aware (block selling unsettled / same-day round-trips)
-AGENT_ACCOUNT_IS_CASH    = _cfg("AGENT_ACCOUNT_IS_CASH",    cast=bool,  default=True)
-# Robinhood Agentic MCP (official execution endpoint) + its own encrypted OAuth token store
-AGENT_RH_MCP_URL         = _cfg("AGENT_RH_MCP_URL",         default="https://agent.robinhood.com/mcp/trading")
-AGENT_RH_TOKEN_KEY       = _cfg("AGENT_RH_TOKEN_KEY",       default="")                 # base64 AES-256 key for the agentic OAuth blob
-AGENT_RH_TOKENS_FILE     = _cfg("AGENT_RH_TOKENS_FILE",     default="agent_tokens.enc")
+@dataclass
+class AgentConfig:
+    # Robust truthy parse — an unset GitHub secret injects "" (empty), which would crash a
+    # strict bool cast; empty/unset/anything-not-truthy means disabled.
+    trading_enabled: bool = _cfg("AGENT_TRADING_ENABLED", default="false").strip().lower() in ("true", "1", "yes", "on")
+    account_number: str = _cfg("AGENT_ACCOUNT_NUMBER", default="")            # agentic_allowed=true account
+    max_trades_per_day: int = _cfg("AGENT_MAX_TRADES_PER_DAY", cast=int, default=3)  # cap on orders placed per day
+    min_hold_days: int = _cfg("AGENT_MIN_HOLD_DAYS", cast=int, default=2)     # trading days a lot must be held before a sell is allowed
+    drawdown_halt_pct: float = _cfg("AGENT_DRAWDOWN_HALT_PCT", cast=float, default=-15.0)  # halt selling if account equity draws down past this % (negative)
+    max_open_positions: int = _cfg("AGENT_MAX_OPEN_POSITIONS", cast=int, default=5)  # cap on concurrent open positions
+    # Per-buy size as a fraction of agentic sleeve equity. The sleeve is small (~$1k), so
+    # mirroring the paper track's 4–6% would leave ~75% idle cash — 20% × 5 max positions
+    # deploys the sleeve fully while keeping 5-name diversification.
+    position_pct: float = _cfg("AGENT_POSITION_PCT", cast=float, default=0.20)  # per-buy size (fraction of sleeve equity, 0.20 = 20%)
+    # Cash account: T+1 settlement + Good-Faith-Violation aware (block selling unsettled / same-day round-trips)
+    account_is_cash: bool = _cfg("AGENT_ACCOUNT_IS_CASH", cast=bool, default=True)
+    # Robinhood Agentic MCP (official execution endpoint) + its own encrypted OAuth token store
+    rh_mcp_url: str = _cfg("AGENT_RH_MCP_URL", default="https://agent.robinhood.com/mcp/trading")
+    rh_token_key: str = _cfg("AGENT_RH_TOKEN_KEY", default="")                # base64 AES-256 key for the agentic OAuth blob
+    rh_tokens_file: str = _cfg("AGENT_RH_TOKENS_FILE", default="agent_tokens.enc")
 
-# ── Exploration (weekly discovery run) ───────────────────────
-EXPLORATION_MODEL         = _cfg("EXPLORATION_MODEL",         default="claude-opus-4-8")
-EXPLORATION_MAX_TOKENS    = _cfg("EXPLORATION_MAX_TOKENS",    cast=int, default=8000)
-EXPLORATION_EFFORT        = _cfg("EXPLORATION_EFFORT",        default="medium")  # output_config.effort
-EXPLORATION_MAX_SEARCHES  = _cfg("EXPLORATION_MAX_SEARCHES",  cast=int, default=2)   # per theme
-EXPLORATION_MAX_AV_CALLS  = _cfg("EXPLORATION_MAX_AV_CALLS",  cast=int, default=8)
-EXPLORATION_MAX_FMP_CALLS = _cfg("EXPLORATION_MAX_FMP_CALLS", cast=int, default=15)
 
-# ── Claude API call timeouts ──────────────────────────────────
+# ── Exploration (weekly discovery run) ─────────────────────────────────────────
+@dataclass
+class ExplorationConfig:
+    model: str = _cfg("EXPLORATION_MODEL", default="claude-opus-4-8")  # weekly discovery model
+    max_tokens: int = _cfg("EXPLORATION_MAX_TOKENS", cast=int, default=8000)  # response token cap
+    effort: str = _cfg("EXPLORATION_EFFORT", default="medium")  # output_config.effort: low|medium|high|max
+    max_searches: int = _cfg("EXPLORATION_MAX_SEARCHES", cast=int, default=2)  # web searches per theme
+    max_av_calls: int = _cfg("EXPLORATION_MAX_AV_CALLS", cast=int, default=8)    # Alpha Vantage calls per run
+    max_fmp_calls: int = _cfg("EXPLORATION_MAX_FMP_CALLS", cast=int, default=15)  # FMP calls per run
+
+
+# ── Claude API call timeouts ───────────────────────────────────────────────────
 # Wall-clock backstop for the whole client-side tool loop. Each tool call is bounded by
-# ADVISOR_TOOL_TIMEOUT, so this should now rarely fire.
-ADVISOR_TIMEOUT     = _cfg("ADVISOR_TIMEOUT",     cast=int, default=300)  # 5 min backstop
-EXPLORATION_TIMEOUT = _cfg("EXPLORATION_TIMEOUT", cast=int, default=300)  # 5 min backstop
+# tool_loop.advisor_tool_timeout, so these should now rarely fire.
+@dataclass
+class TimeoutsConfig:
+    advisor: int = _cfg("ADVISOR_TIMEOUT", cast=int, default=300)          # seconds — 5 min backstop
+    exploration: int = _cfg("EXPLORATION_TIMEOUT", cast=int, default=300)  # seconds — 5 min backstop
 
-# ── Strategy: position sizing ─────────────────────────────────
-SIZE_PREFERRED_PCT          = _cfg("SIZE_PREFERRED_PCT",          cast=float, default=0.06)
-SIZE_APPROVED_PCT           = _cfg("SIZE_APPROVED_PCT",           cast=float, default=0.04)
 
-# ── Notifications (Telegram) ──────────────────────────────────
+# ── Notifications (Telegram) ───────────────────────────────────────────────────
 # Bot token from @BotFather; chat id of the destination chat. Both unset = no-op.
-TELEGRAM_BOT_TOKEN = _cfg("TELEGRAM_BOT_TOKEN", default="")
-TELEGRAM_CHAT_ID   = _cfg("TELEGRAM_CHAT_ID",   default="")
+@dataclass
+class TelegramConfig:
+    bot_token: str = _cfg("TELEGRAM_BOT_TOKEN", default="")
+    chat_id: str = _cfg("TELEGRAM_CHAT_ID", default="")
+
+
+# ── Module-level singletons ────────────
+supabase = SupabaseConfig()
+services = ServicesConfig()
+reasoning = ReasoningConfig()
+tool_loop = ToolLoopConfig()
+paper = PaperConfig()
+market_data = MarketDataConfig()
+rules = RulesConfig()
+quality = QualityConfig()
+tech = TechConfig()
+brain = BrainConfig()
+robinhood = RobinhoodConfig()
+agent = AgentConfig()
+exploration = ExplorationConfig()
+timeouts = TimeoutsConfig()
+telegram = TelegramConfig()

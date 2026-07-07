@@ -90,15 +90,15 @@ class TestExtractGist:
 
 class TestSend:
     def test_skips_when_unconfigured(self):
-        with patch.object(notify.config, "TELEGRAM_BOT_TOKEN", ""), \
-             patch.object(notify.config, "TELEGRAM_CHAT_ID", ""), \
+        with patch.object(notify.config.telegram, "bot_token", ""), \
+             patch.object(notify.config.telegram, "chat_id", ""), \
              patch.object(notify.requests, "post") as post:
             assert notify.send("hi") is False
             post.assert_not_called()
 
     def test_skips_when_only_token_set(self):
-        with patch.object(notify.config, "TELEGRAM_BOT_TOKEN", "t"), \
-             patch.object(notify.config, "TELEGRAM_CHAT_ID", ""), \
+        with patch.object(notify.config.telegram, "bot_token", "t"), \
+             patch.object(notify.config.telegram, "chat_id", ""), \
              patch.object(notify.requests, "post") as post:
             assert notify.send("hi") is False
             post.assert_not_called()
@@ -106,8 +106,8 @@ class TestSend:
     def test_posts_and_returns_true(self):
         resp = MagicMock()
         resp.raise_for_status.return_value = None
-        with patch.object(notify.config, "TELEGRAM_BOT_TOKEN", "tok"), \
-             patch.object(notify.config, "TELEGRAM_CHAT_ID", "123"), \
+        with patch.object(notify.config.telegram, "bot_token", "tok"), \
+             patch.object(notify.config.telegram, "chat_id", "123"), \
              patch.object(notify.requests, "post", return_value=resp) as post:
             assert notify.send("hi") is True
             post.assert_called_once()
@@ -117,8 +117,8 @@ class TestSend:
             assert "tok" in post.call_args.args[0]
 
     def test_returns_false_on_exception(self):
-        with patch.object(notify.config, "TELEGRAM_BOT_TOKEN", "tok"), \
-             patch.object(notify.config, "TELEGRAM_CHAT_ID", "123"), \
+        with patch.object(notify.config.telegram, "bot_token", "tok"), \
+             patch.object(notify.config.telegram, "chat_id", "123"), \
              patch.object(notify.requests, "post", side_effect=RuntimeError("boom")):
             assert notify.send("hi") is False
 

@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
+from src import config
 from src.robinhood import (
     _enrich_num_buys,
     _positions_to_portfolio,
@@ -124,8 +125,8 @@ class TestDecryptTokens:
         tokens_file = tmp_path / "tokens.enc"
         tokens_file.write_text(json.dumps(enc))
 
-        monkeypatch.setattr("src.robinhood.ROBINHOOD_TOKEN_KEY",   base64.b64encode(key).decode())
-        monkeypatch.setattr("src.robinhood.ROBINHOOD_TOKENS_FILE", str(tokens_file))
+        monkeypatch.setattr(config.robinhood, "token_key",   base64.b64encode(key).decode())
+        monkeypatch.setattr(config.robinhood, "tokens_file", str(tokens_file))
 
         from src.robinhood import _decrypt_tokens
         result = _decrypt_tokens()
@@ -133,14 +134,14 @@ class TestDecryptTokens:
         assert result["refresh_token"] == "ref_xyz"
 
     def test_raises_if_key_missing(self, monkeypatch):
-        monkeypatch.setattr("src.robinhood.ROBINHOOD_TOKEN_KEY", "")
+        monkeypatch.setattr(config.robinhood, "token_key", "")
         from src.robinhood import _decrypt_tokens
         with pytest.raises(RuntimeError, match="ROBINHOOD_TOKEN_KEY not set"):
             _decrypt_tokens()
 
     def test_raises_if_file_missing(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("src.robinhood.ROBINHOOD_TOKEN_KEY",   "dGVzdA==")
-        monkeypatch.setattr("src.robinhood.ROBINHOOD_TOKENS_FILE", str(tmp_path / "no_file.enc"))
+        monkeypatch.setattr(config.robinhood, "token_key",   "dGVzdA==")
+        monkeypatch.setattr(config.robinhood, "tokens_file", str(tmp_path / "no_file.enc"))
         from src.robinhood import _decrypt_tokens
         with pytest.raises(RuntimeError, match="not found"):
             _decrypt_tokens()

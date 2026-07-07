@@ -135,16 +135,16 @@ def probe_endpoints(observer: RunObserver) -> None:
 
     # MCP / HTTP endpoints — reachability only
     endpoints = {
-        "tavily_mcp": config.TAVILY_MCP_URL,
+        "tavily_mcp": config.services.tavily_mcp_url,
         "alpha_vantage_mcp": (
-            f"https://mcp.alphavantage.co/mcp?apikey={config.ALPHA_VANTAGE_API_KEY}"
-            if config.ALPHA_VANTAGE_API_KEY else ""
+            f"https://mcp.alphavantage.co/mcp?apikey={config.services.alpha_vantage_api_key}"
+            if config.services.alpha_vantage_api_key else ""
         ),
         "fmp_mcp": (
-            f"https://financialmodelingprep.com/mcp?apikey={config.FMP_API_KEY}"
-            if config.FMP_API_KEY else ""
+            f"https://financialmodelingprep.com/mcp?apikey={config.services.fmp_api_key}"
+            if config.services.fmp_api_key else ""
         ),
-        "sec_edgar_mcp": config.SEC_EDGAR_MCP_URL,
+        "sec_edgar_mcp": config.services.sec_edgar_mcp_url,
     }
     for name, url in endpoints.items():
         if not url:

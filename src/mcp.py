@@ -20,15 +20,7 @@ from typing import Any
 
 from anthropic.types import TextBlock
 
-from src.config import (
-    ALPHA_VANTAGE_API_KEY,
-    ALPHA_VANTAGE_MAX_CALLS,
-    FMP_API_KEY,
-    FMP_MAX_CALLS,
-    SEC_EDGAR_MCP_URL,
-    TAVILY_MAX_SEARCHES,
-    TAVILY_MCP_URL,
-)
+from src import config
 
 
 @dataclass(frozen=True)
@@ -44,17 +36,17 @@ class ServerSpec:
 # ---------------------------------------------------------------------------
 
 def _tavily() -> ServerSpec | None:
-    if not TAVILY_MCP_URL:
+    if not config.services.tavily_mcp_url:
         return None
-    return ServerSpec(name="tavily", url=TAVILY_MCP_URL, allowed_tools=["tavily_search"])
+    return ServerSpec(name="tavily", url=config.services.tavily_mcp_url, allowed_tools=["tavily_search"])
 
 
 def _alpha_vantage() -> ServerSpec | None:
-    if not ALPHA_VANTAGE_API_KEY:
+    if not config.services.alpha_vantage_api_key:
         return None
     # Free tier: 25 calls/day, 5 calls/min — the prompt instructs Claude to stay within limits.
     # Auth: API key passed as URL query param (legacy method; OAuth requires interactive flow).
-    url = f"https://mcp.alphavantage.co/mcp?apikey={ALPHA_VANTAGE_API_KEY}"
+    url = f"https://mcp.alphavantage.co/mcp?apikey={config.services.alpha_vantage_api_key}"
     return ServerSpec(
         name="alpha_vantage", url=url,
         allowed_tools=["NEWS_SENTIMENT", "EARNINGS_CALENDAR", "COMPANY_OVERVIEW"],
@@ -63,18 +55,18 @@ def _alpha_vantage() -> ServerSpec | None:
 
 def _fmp() -> ServerSpec | None:
     # Dormant — kept for a future follow-up once the client-side path is proven (see CLAUDE.md).
-    if not FMP_API_KEY:
+    if not config.services.fmp_api_key:
         return None
-    url = f"https://financialmodelingprep.com/mcp?apikey={FMP_API_KEY}"
+    url = f"https://financialmodelingprep.com/mcp?apikey={config.services.fmp_api_key}"
     return ServerSpec(name="fmp", url=url, allowed_tools=["analyst", "calendar"])
 
 
 def _sec_edgar() -> ServerSpec | None:
     # Dormant — kept for a future follow-up once the client-side path is proven (see CLAUDE.md).
-    if not SEC_EDGAR_MCP_URL:
+    if not config.services.sec_edgar_mcp_url:
         return None
     return ServerSpec(
-        name="sec_edgar", url=SEC_EDGAR_MCP_URL,
+        name="sec_edgar", url=config.services.sec_edgar_mcp_url,
         allowed_tools=["secedgar_get_insider_transactions"],
     )
 
@@ -109,7 +101,7 @@ def extract_text(message: Any) -> str:
 
 
 def search_context(
-    max_searches: int = TAVILY_MAX_SEARCHES,
+    max_searches: int = config.reasoning.tavily_max_searches,
     servers: list[ServerSpec] | None = None,
 ) -> dict[str, Any]:
     """Template vars for the mustache prompt tool-use block.
@@ -127,6 +119,6 @@ def search_context(
         "has_sec_edgar":     "sec_edgar" in names,
         "has_fmp":           "fmp" in names,
         "max_searches":      max_searches,
-        "max_av_calls":      ALPHA_VANTAGE_MAX_CALLS,
-        "max_fmp_calls":     FMP_MAX_CALLS,
+        "max_av_calls":      config.reasoning.alpha_vantage_max_calls,
+        "max_fmp_calls":     config.reasoning.fmp_max_calls,
     }

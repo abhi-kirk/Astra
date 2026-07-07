@@ -27,19 +27,7 @@ from src import mcp, mcp_loop
 from src.logger import timer
 
 logger = logging.getLogger(__name__)
-from src.config import (
-    ADVISOR_MAX_TOOL_ROUNDS,
-    ADVISOR_TOOL_TIMEOUT,
-    ANTHROPIC_API_KEY,
-    EXPLORATION_EFFORT,
-    EXPLORATION_MAX_AV_CALLS,
-    EXPLORATION_MAX_FMP_CALLS,
-    EXPLORATION_MAX_SEARCHES,
-    EXPLORATION_MAX_TOKENS,
-    EXPLORATION_MODEL,
-    EXPLORATION_TIMEOUT,
-    MCP_TOOL_FAILURE_LIMIT,
-)
+from src import config
 from src.timeout import run_with_timeout
 
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
@@ -130,7 +118,7 @@ def call_claude_exploration(
     Call Claude with the exploration prompt + all MCP tools.
     Returns the raw text response (parse_candidates extracts the JSON).
     """
-    if not ANTHROPIC_API_KEY:
+    if not config.services.anthropic_api_key:
         raise RuntimeError("ANTHROPIC_API_KEY not set")
 
     themes_detail   = _build_themes_detail(convictions)
@@ -140,7 +128,7 @@ def call_claude_exploration(
     known_csv       = ", ".join(sorted(already_tracked))   or "none"
 
     specs      = mcp.exploration_specs()
-    ctx        = mcp.search_context(max_searches=EXPLORATION_MAX_SEARCHES, servers=specs)
+    ctx        = mcp.search_context(max_searches=config.exploration.max_searches, servers=specs)
     template   = (PROMPTS_DIR / "exploration_candidates.mustache").read_text()
     prompt     = chevron.render(template, {
         "themes_detail":       themes_detail,
@@ -148,24 +136,24 @@ def call_claude_exploration(
         "existing_tickers_csv": existing_csv,
         "exclusions_csv":      exclusions_csv,
         "known_tickers_csv":   known_csv,
-        "max_searches":        EXPLORATION_MAX_SEARCHES,
-        "max_total_searches":  EXPLORATION_MAX_SEARCHES * max(len(theme_keys), 1),
-        "max_av_calls":        EXPLORATION_MAX_AV_CALLS,
-        "max_fmp_calls":       EXPLORATION_MAX_FMP_CALLS,
+        "max_searches":        config.exploration.max_searches,
+        "max_total_searches":  config.exploration.max_searches * max(len(theme_keys), 1),
+        "max_av_calls":        config.exploration.max_av_calls,
+        "max_fmp_calls":       config.exploration.max_fmp_calls,
         **ctx,
     })
 
     text, _usage, _tool_log = run_with_timeout(
         lambda: mcp_loop.run_agentic_sync(
             prompt, specs,
-            model=EXPLORATION_MODEL,
-            max_tokens=EXPLORATION_MAX_TOKENS,
-            effort=EXPLORATION_EFFORT,
-            tool_timeout=ADVISOR_TOOL_TIMEOUT,
-            max_rounds=ADVISOR_MAX_TOOL_ROUNDS,
-            failure_limit=MCP_TOOL_FAILURE_LIMIT,
+            model=config.exploration.model,
+            max_tokens=config.exploration.max_tokens,
+            effort=config.exploration.effort,
+            tool_timeout=config.tool_loop.advisor_tool_timeout,
+            max_rounds=config.tool_loop.advisor_max_tool_rounds,
+            failure_limit=config.tool_loop.mcp_tool_failure_limit,
         ),
-        EXPLORATION_TIMEOUT,
+        config.timeouts.exploration,
         label="Exploration Claude call",
     )
     return text or ""
@@ -295,7 +283,7 @@ def run() -> None:
         return
     logger.info(f"Active themes: {', '.join(active_themes)}")
 
-    logger.info(f"Calling Claude for candidate discovery  (model={EXPLORATION_MODEL})")
+    logger.info(f"Calling Claude for candidate discovery  (model={config.exploration.model})")
     try:
         with timer("Exploration Claude call", logger):
             raw_text = call_claude_exploration(

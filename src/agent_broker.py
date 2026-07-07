@@ -29,12 +29,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from src.config import (
-    AGENT_ACCOUNT_NUMBER,
-    AGENT_RH_MCP_URL,
-    AGENT_RH_TOKEN_KEY,
-    AGENT_RH_TOKENS_FILE,
-)
+from src import config
 from src.crypto import decrypt_json, encrypt_json
 
 logger = logging.getLogger(__name__)
@@ -67,7 +62,7 @@ class EncryptedFileTokenStorage:
     client info, so headless runs reuse the registration and silently refresh.
     """
 
-    def __init__(self, path: str = AGENT_RH_TOKENS_FILE, key_b64: str = AGENT_RH_TOKEN_KEY):
+    def __init__(self, path: str = config.agent.rh_tokens_file, key_b64: str = config.agent.rh_token_key):
         self._path = Path(path)
         self._key = key_b64
         self._cache: dict = self._read()
@@ -119,7 +114,7 @@ def _oauth_provider(storage=None, redirect_handler=None, callback_handler=None):
         token_endpoint_auth_method="none",
     )
     return OAuthClientProvider(
-        server_url=AGENT_RH_MCP_URL,
+        server_url=config.agent.rh_mcp_url,
         client_metadata=metadata,
         storage=storage or EncryptedFileTokenStorage(),
         redirect_handler=redirect_handler,
@@ -174,7 +169,7 @@ class AgenticBroker:
     the run is low-frequency (once daily, a handful of orders) so this stays simple and
     robust rather than holding a long-lived session."""
 
-    def __init__(self, url: str = AGENT_RH_MCP_URL, account_number: str = AGENT_ACCOUNT_NUMBER):
+    def __init__(self, url: str = config.agent.rh_mcp_url, account_number: str = config.agent.account_number):
         self.url = url
         self._account_number = account_number
 
@@ -375,7 +370,7 @@ async def _abootstrap(storage: EncryptedFileTokenStorage) -> None:
         return code, state
 
     provider = _oauth_provider(storage=storage, redirect_handler=redirect_handler, callback_handler=callback_handler)
-    async with streamablehttp_client(AGENT_RH_MCP_URL, auth=provider) as (r, w, _):
+    async with streamablehttp_client(config.agent.rh_mcp_url, auth=provider) as (r, w, _):
         async with ClientSession(r, w) as session:
             await session.initialize()  # triggers the OAuth dance, then persists tokens
 
@@ -386,7 +381,7 @@ def _bootstrap() -> int:
     from src.logger import setup as _setup
     _setup()
 
-    key = AGENT_RH_TOKEN_KEY or os.environ.get("AGENT_RH_TOKEN_KEY")
+    key = config.agent.rh_token_key or os.environ.get("AGENT_RH_TOKEN_KEY")
     generated = False
     if not key:
         key = base64.b64encode(os.urandom(32)).decode()
@@ -398,16 +393,16 @@ def _bootstrap() -> int:
         print("=" * 68 + "\n")
 
     # Start clean: a stale file from a prior failed run is encrypted with a lost key.
-    stale = Path(AGENT_RH_TOKENS_FILE)
+    stale = Path(config.agent.rh_tokens_file)
     if stale.exists():
         stale.unlink()
 
     storage = EncryptedFileTokenStorage(key_b64=key)
     asyncio.run(_abootstrap(storage))
 
-    enc_b64 = base64.b64encode(Path(AGENT_RH_TOKENS_FILE).read_bytes()).decode()
+    enc_b64 = base64.b64encode(Path(config.agent.rh_tokens_file).read_bytes()).decode()
     print("\n" + "=" * 68)
-    print("✅ Authorized. Agentic OAuth tokens saved to", AGENT_RH_TOKENS_FILE)
+    print("✅ Authorized. Agentic OAuth tokens saved to", config.agent.rh_tokens_file)
     print("Store these as GitHub repo secrets for the headless Autotrader workflow:")
     print("=" * 68)
     if generated:
