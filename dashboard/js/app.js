@@ -236,13 +236,26 @@ function fmtBigNum(val) {
 }
 
 function nextWeekdayRun() {
-  // Returns a short string like "Mon Jun 30 6am" for next weekday 6am PT
-  const now = new Date();
-  const next = new Date(now);
-  // Advance to next weekday
-  do { next.setDate(next.getDate() + 1); } while ([0, 6].includes(next.getDay()));
-  next.setHours(6, 0, 0, 0);
-  return next.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) + ' 6am';
+  // Returns a short string like "Mon Jun 30 6am" for the next scheduled run.
+  // The daily analysis fires weekdays at 6:00am PT (pg_cron '0 13 * * 1-5').
+  // Compute in PT wall-clock time so the label is correct regardless of the
+  // viewer's timezone, and show today's run when it hasn't fired yet.
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Los_Angeles',
+      year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', hour12: false,
+    }).formatToParts(new Date()).map(p => [p.type, p.value])
+  );
+  const hour = +parts.hour % 24;  // hour12:false yields "24" at midnight in some engines
+  // Represent the PT civil date in UTC so weekday math is timezone-free.
+  const run = new Date(Date.UTC(+parts.year, +parts.month - 1, +parts.day));
+  // If today's 6am PT run has already fired, advance to the next day.
+  if (hour >= 6) run.setUTCDate(run.getUTCDate() + 1);
+  // Skip weekends.
+  while ([0, 6].includes(run.getUTCDay())) run.setUTCDate(run.getUTCDate() + 1);
+  return run.toLocaleDateString('en-US', {
+    timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric',
+  }) + ' 6am';
 }
 
 function dataAgeText(runDateObj) {
