@@ -213,9 +213,10 @@ def test_signal_inactive_close_is_mirrored_as_sell(wired, monkeypatch):
     assert len(fb.places) == 1 and fb.places[0]["side"] == "sell"
 
 
-def test_exploration_paper_buy_is_not_mirrored(wired, monkeypatch):
-    """Exploration candidates are paper-only experiments — never a real-money mirror."""
+def test_exploration_paper_buy_not_mirrored_when_disabled(wired, monkeypatch):
+    """With mirroring disabled, exploration candidates stay paper-only — never a real-money mirror."""
     monkeypatch.setattr(config.agent, "trading_enabled", True)
+    monkeypatch.setattr(config.agent, "mirror_exploration", False)
     state, logs = wired
     state["opened"] = [{
         "id": 33, "ticker": "RKLB", "action": "buy",
@@ -225,6 +226,23 @@ def test_exploration_paper_buy_is_not_mirrored(wired, monkeypatch):
     summary = ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
     assert fb.reviews == [] and fb.places == []
     assert summary["placed"] == [] and logs == []
+
+
+def test_exploration_paper_buy_mirrored_when_enabled(wired, monkeypatch):
+    """With mirroring enabled, an exploration buy on a conviction name reaches real money
+    (the convictions-only guardrail still gates it — RKLB is an approved conviction)."""
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
+    monkeypatch.setattr(config.agent, "mirror_exploration", True)
+    state, logs = wired
+    state["opened"] = [{
+        "id": 33, "ticker": "RKLB", "action": "buy",
+        "signal_data": {"action": "buy", "source": "exploration"},
+    }]
+    fb = FakeBroker()
+    summary = ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
+    assert len(fb.places) == 1 and fb.places[0]["symbol"] == "RKLB"
+    assert summary["placed"][0]["ticker"] == "RKLB"
+    assert logs[-1]["mirrors_paper_trade_id"] == 33
 
 
 # ---------------------------------------------------------------------------

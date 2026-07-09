@@ -22,6 +22,7 @@ from typing import Any
 import chevron
 
 from src import config, mcp, mcp_loop, memory
+from src.brain.conviction import buyable_tickers
 from src.data_layer import get_market_data_bulk, get_portfolio, load_convictions
 from src.strategy import screen_all_positions
 from src.timeout import run_with_timeout
@@ -189,21 +190,31 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
     portfolio = {t: v for t, v in portfolio.items() if t not in excluded}
     logger.info(f"Portfolio loaded: {len(portfolio)} open positions (excluded: {sorted(excluded)})")
 
+    # Screening universe = held positions ∪ buyable conviction names. The latter lets the brain
+    # surface a fresh entry on a name Abhi likes but doesn't yet hold (non-held names screen with
+    # an empty position → straight to the entry decision). Sizing/caps still measure against
+    # actual holdings via full_portfolio.
+    watchlist = [t for t in buyable_tickers(convictions) if t not in excluded]
+    universe = (
+        [single_ticker] if single_ticker
+        else sorted(set(portfolio) | set(watchlist))
+    )
+    not_held = sorted(set(watchlist) - set(portfolio))
+    logger.info(f"Screening universe: {len(universe)} names ({len(not_held)} buyable convictions not currently held: {not_held})")
+
     with obs.phase("market_data"):
-        market_data = get_market_data_bulk(list(portfolio.keys()))
+        market_data = get_market_data_bulk(universe)
 
     errors = [t for t, d in market_data.items() if "error" in d]
     if errors:
         logger.warning(f"Market data missing for {len(errors)} ticker(s): {errors}")
 
-    portfolio_for_screen = (
-        {single_ticker: portfolio.get(single_ticker, {})} if single_ticker else portfolio
-    )
+    screen_input = {t: portfolio.get(t, {}) for t in universe}
 
     with obs.phase("screening"):
         signals = screen_all_positions(
-            portfolio_for_screen, market_data, convictions,
-            full_portfolio=portfolio if single_ticker else None,
+            screen_input, market_data, convictions,
+            full_portfolio=portfolio,   # sizing + theme/position caps measured against actual holdings
         )
 
     history_context = memory.build_agent_context_summary()
@@ -268,7 +279,10 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
     # Log decisions + manage paper trades
     signals_by_ticker = {s["ticker"]: s for s in signals}
 
-    # Close paper trades whose signal is no longer active
+    # Close paper trades whose signal is no longer active. Only names we actually screened this
+    # run can go "signal_inactive" — a paper lot for a ticker outside the universe (e.g. a paper-
+    # only exploration graduate) is left untouched rather than force-closed for lack of a signal.
+    screened_tickers = set(screen_input)
     open_paper_trades = memory.get_open_paper_trades()
     for pt in open_paper_trades:
         ticker = pt["ticker"]
@@ -276,7 +290,7 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
         if not price:
             continue
         sig = signals_by_ticker.get(ticker)
-        if sig is None and not single_ticker:
+        if sig is None and not single_ticker and ticker in screened_tickers:
             memory.close_paper_trade(ticker, price, run_date, "signal_inactive")
         elif sig is not None and sig["action"] == "blocked":
             memory.close_paper_trade(ticker, price, run_date, "blocked")

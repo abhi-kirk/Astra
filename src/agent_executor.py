@@ -76,8 +76,9 @@ def _build_mirrors(run_date: str) -> list[dict]:
     for pt in memory.get_paper_trades_opened_on(run_date):
         if pt.get("action") != "buy":
             continue
-        if (pt.get("signal_data") or {}).get("source") == "exploration":
-            continue  # exploration candidates are paper-only experiments — never real money
+        if (pt.get("signal_data") or {}).get("source") == "exploration" and not config.agent.mirror_exploration:
+            continue  # exploration mirroring disabled → paper-only. When enabled, the
+            # convictions-only guardrail still gates whether it reaches real money.
         mirrors.append({
             "ticker": pt["ticker"], "side": "buy",
             "mirrors_paper_trade_id": pt.get("id"),

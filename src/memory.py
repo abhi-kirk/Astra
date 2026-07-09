@@ -161,6 +161,20 @@ def save_portfolio_snapshot(positions: dict) -> None:
     }).execute()
 
 
+def _may_add_paper_lot(open_lots: list[dict], run_date: str) -> bool:
+    """Bounded-pyramiding gate: True if an additional paper lot may open now — under the
+    max-adds cap AND the newest existing lot is older than the add cooldown. Pure/testable."""
+    if len(open_lots) > config.paper.max_adds_per_ticker:  # initial lot + N adds already open
+        return False
+    newest = open_lots[0].get("run_date")
+    try:
+        prev = datetime.fromisoformat(str(newest).replace("Z", "+00:00")).replace(tzinfo=None)
+        now = datetime.fromisoformat(str(run_date).replace("Z", "+00:00")).replace(tzinfo=None)
+    except (ValueError, TypeError, AttributeError):
+        return False  # unparseable timestamp → fail safe (no add)
+    return (now - prev).days >= config.paper.add_cooldown_days
+
+
 def log_paper_trade(
     ticker: str,
     price: float,
@@ -171,16 +185,20 @@ def log_paper_trade(
     """Log a virtual BUY trade when ASTRA issues a BUY signal.
 
     Size = suggested_pct × config.paper.portfolio_size, capped at config.paper.max_position_pct.
-    Skips if an open paper position already exists for this ticker.
+    Bounded pyramiding: if an open lot already exists, opens an *additional* lot (an add) only
+    when under config.paper.max_adds_per_ticker and the newest lot is older than the cooldown;
+    otherwise returns the existing lot's id (no-op). Over-concentration is already gated upstream
+    by the position-size + averaging-down hard rules (a buy over cap is `blocked`, never here).
     Returns the paper_trade id (existing or newly inserted) so Autotrader can link
     agent_trades.mirrors_paper_trade_id; None only if the insert returns no row.
     """
     db = get_client()
     existing = db_rows(
-        db.table("paper_trades").select("id").eq("ticker", ticker).eq("is_open", True).limit(1).execute().data
+        db.table("paper_trades").select("id, run_date").eq("ticker", ticker).eq("is_open", True)
+        .order("run_date", desc=True).execute().data
     )
-    if existing:
-        return existing[0].get("id")  # no pyramiding in paper mode — return the open lot's id
+    if existing and not _may_add_paper_lot(existing, run_date):
+        return existing[0].get("id")  # at add cap or within cooldown — return the open lot's id
 
     pct = suggested_pct or config.paper.default_position_pct
     virtual_cost = min(pct * config.paper.portfolio_size, config.paper.max_position_pct * config.paper.portfolio_size)
@@ -213,37 +231,39 @@ def close_paper_trade(
     runner), leaving the per-share cost basis (price_at_signal) unchanged.
     """
     db = get_client()
-    data = db_rows(
+    lots = db_rows(
         db.table("paper_trades")
         .select("id, price_at_signal, virtual_shares, virtual_cost")
-        .eq("ticker", ticker).eq("is_open", True).limit(1)
+        .eq("ticker", ticker).eq("is_open", True)
         .execute().data
     )
-    if not data:
+    if not lots:
         return
 
-    t = data[0]
+    # A ticker may hold several open lots (bounded pyramiding). A full close closes every lot;
+    # a partial trim reduces each proportionally so the aggregate position is trimmed by `frac`.
     frac = min(max(fraction, 0.0), 1.0)
-    sold_shares = t["virtual_shares"] * frac
-    pnl_d   = (close_price - t["price_at_signal"]) * sold_shares
-    pnl_pct = (close_price - t["price_at_signal"]) / t["price_at_signal"] * 100
+    for t in lots:
+        sold_shares = t["virtual_shares"] * frac
+        pnl_d   = (close_price - t["price_at_signal"]) * sold_shares
+        pnl_pct = (close_price - t["price_at_signal"]) / t["price_at_signal"] * 100
 
-    if frac >= 1.0:
-        db.table("paper_trades").update({
-            "is_open":      False,
-            "closed_at":    run_date,
-            "close_price":  close_price,
-            "close_reason": reason,
-        }).eq("id", t["id"]).execute()
-        logger.info(f"Paper CLOSE {ticker}: ${close_price:.2f}  P&L ${pnl_d:+.2f} ({pnl_pct:+.1f}%)  reason={reason}")
-    else:
-        # Partial trim — reduce the open lot, keep the runner.
-        db.table("paper_trades").update({
-            "virtual_shares": round(t["virtual_shares"] - sold_shares, 6),
-            "virtual_cost":   round(t["virtual_cost"] * (1.0 - frac), 2),
-        }).eq("id", t["id"]).execute()
-        logger.info(f"Paper TRIM  {ticker}: sold {frac:.0%} @ ${close_price:.2f}  "
-                    f"realized ${pnl_d:+.2f} ({pnl_pct:+.1f}%)  reason={reason}")
+        if frac >= 1.0:
+            db.table("paper_trades").update({
+                "is_open":      False,
+                "closed_at":    run_date,
+                "close_price":  close_price,
+                "close_reason": reason,
+            }).eq("id", t["id"]).execute()
+            logger.info(f"Paper CLOSE {ticker}: ${close_price:.2f}  P&L ${pnl_d:+.2f} ({pnl_pct:+.1f}%)  reason={reason}")
+        else:
+            # Partial trim — reduce the open lot, keep the runner.
+            db.table("paper_trades").update({
+                "virtual_shares": round(t["virtual_shares"] - sold_shares, 6),
+                "virtual_cost":   round(t["virtual_cost"] * (1.0 - frac), 2),
+            }).eq("id", t["id"]).execute()
+            logger.info(f"Paper TRIM  {ticker}: sold {frac:.0%} @ ${close_price:.2f}  "
+                        f"realized ${pnl_d:+.2f} ({pnl_pct:+.1f}%)  reason={reason}")
 
 
 def upsert_exploration_candidate(candidate: dict) -> None:

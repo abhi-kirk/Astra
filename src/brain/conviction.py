@@ -88,3 +88,20 @@ def can_buy(guidance: dict) -> bool:
         and not guidance.get("hold_only")
         and not guidance.get("do_not_add")
     )
+
+
+def buyable_tickers(convictions: dict) -> list[str]:
+    """Every conviction name eligible for a fresh BUY — the daily screening universe beyond
+    currently-held positions. Walks the preferred/approved theme buckets + individual holdings,
+    then keeps only names that pass `can_buy` and are not hard-excluded (e.g. TSLA). This is
+    what lets the brain surface a new entry on a name Abhi likes but doesn't yet hold."""
+    candidates: set[str] = set()
+    for theme in convictions.get("themes", {}).values():
+        candidates.update(theme.get("preferred", []))
+        candidates.update(theme.get("approved", []))
+    candidates.update(convictions.get("individual_holdings", {}).keys())
+
+    return sorted(
+        t for t in candidates
+        if not is_excluded(t, convictions) and can_buy(get_ticker_guidance(t, convictions))
+    )

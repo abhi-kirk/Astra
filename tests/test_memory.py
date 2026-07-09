@@ -6,7 +6,8 @@ weekly, not on every daily run — otherwise `decisions` fills with duplicates t
 pollute the advisor's history context and any future outcome stats.
 """
 
-from src.memory import should_log_decision
+from src import config
+from src.memory import _may_add_paper_lot, should_log_decision
 
 NOW = "2026-07-06T13:00:00+00:00"
 
@@ -38,3 +39,45 @@ def test_naive_and_z_suffixed_timestamps_are_handled():
 def test_unparseable_timestamp_fails_open_and_logs():
     last = {"action": "sell", "run_date": "not-a-date"}
     assert should_log_decision(last, "sell", NOW) is True
+
+
+# ---------------------------------------------------------------------------
+# Bounded-pyramiding gate (_may_add_paper_lot)
+# ---------------------------------------------------------------------------
+
+def _lots(*run_dates):
+    return [{"run_date": d} for d in run_dates]
+
+
+def test_add_allowed_after_cooldown_and_under_cap(monkeypatch):
+    monkeypatch.setattr(config.paper, "max_adds_per_ticker", 3)
+    monkeypatch.setattr(config.paper, "add_cooldown_days", 5)
+    # one open lot, newest 6 days ago → cooldown elapsed, under cap
+    assert _may_add_paper_lot(_lots("2026-06-30T13:00:00+00:00"), NOW) is True
+
+
+def test_add_blocked_within_cooldown(monkeypatch):
+    monkeypatch.setattr(config.paper, "max_adds_per_ticker", 3)
+    monkeypatch.setattr(config.paper, "add_cooldown_days", 5)
+    # newest lot 2 days ago → still cooling down
+    assert _may_add_paper_lot(_lots("2026-07-04T13:00:00+00:00"), NOW) is False
+
+
+def test_add_blocked_at_cap(monkeypatch):
+    monkeypatch.setattr(config.paper, "max_adds_per_ticker", 2)
+    monkeypatch.setattr(config.paper, "add_cooldown_days", 5)
+    # initial + 2 adds = 3 open lots already → at cap even though cooldown elapsed
+    lots = _lots("2026-06-01T13:00:00+00:00", "2026-06-10T13:00:00+00:00", "2026-06-20T13:00:00+00:00")
+    assert _may_add_paper_lot(lots, NOW) is False
+
+
+def test_no_pyramiding_when_cap_zero(monkeypatch):
+    monkeypatch.setattr(config.paper, "max_adds_per_ticker", 0)
+    monkeypatch.setattr(config.paper, "add_cooldown_days", 5)
+    assert _may_add_paper_lot(_lots("2026-01-01T13:00:00+00:00"), NOW) is False
+
+
+def test_unparseable_lot_timestamp_fails_safe(monkeypatch):
+    monkeypatch.setattr(config.paper, "max_adds_per_ticker", 3)
+    monkeypatch.setattr(config.paper, "add_cooldown_days", 5)
+    assert _may_add_paper_lot(_lots("not-a-date"), NOW) is False

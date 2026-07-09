@@ -70,6 +70,11 @@ class PaperConfig:
     portfolio_size: float = _cfg("PAPER_PORTFOLIO_SIZE", cast=float, default=10_000.0)       # virtual book the paper track sizes against
     max_position_pct: float = _cfg("PAPER_MAX_POSITION_PCT", cast=float, default=0.10)        # hard per-name cap (fraction of book)
     default_position_pct: float = _cfg("PAPER_DEFAULT_POSITION_PCT", cast=float, default=0.04)  # fallback buy size when no explicit sizing
+    # Bounded pyramiding (adds): a persisting BUY on a held name opens an additional paper lot,
+    # up to N adds and no more often than the cooldown. Position-size + averaging-down hard rules
+    # still gate over-concentration upstream (a buy over cap is `blocked`, never reaches here).
+    max_adds_per_ticker: int = _cfg("PAPER_MAX_ADDS_PER_TICKER", cast=int, default=3)  # additional lots beyond the initial (0 = no pyramiding)
+    add_cooldown_days: int = _cfg("PAPER_ADD_COOLDOWN_DAYS", cast=int, default=5)      # min calendar days between adds on the same name
 
 
 # ── Market data ────────────────────────────────────────────────────────────────
@@ -130,13 +135,13 @@ class BrainConfig:
     weight_revisions: float = _cfg("BRAIN_WEIGHT_REVISIONS", cast=float, default=0.15)    # analyst estimate revisions (soft signal)
 
     # ── Decision thresholds on Score_buy = C·S ─────────────────────────────────
-    buy_threshold: float = _cfg("BRAIN_BUY_THRESHOLD", cast=float, default=0.50)      # Score_buy ≥ this → BUY signal
-    watch_threshold: float = _cfg("BRAIN_WATCH_THRESHOLD", cast=float, default=0.35)  # watch ≤ Score_buy < buy → WATCH; below → no action
+    buy_threshold: float = _cfg("BRAIN_BUY_THRESHOLD", cast=float, default=0.45)      # Score_buy ≥ this → BUY signal (aggressive: was 0.50)
+    watch_threshold: float = _cfg("BRAIN_WATCH_THRESHOLD", cast=float, default=0.30)  # watch ≤ Score_buy < buy → WATCH; below → no action
 
     # ── Sizing (fractional-Kelly proxy, vol-scaled) ────────────────────────────
     # target_w = f_global · Score_buy · vol_scalar ; vol_scalar = clip(vol_ref/atr_pct, min, max)
     f_global: float = _cfg("BRAIN_F_GLOBAL", cast=float, default=0.10)              # master risk dial (fraction) scaling every target weight
-    size_min_pct: float = _cfg("BRAIN_SIZE_MIN_PCT", cast=float, default=0.02)      # skip buys below this target weight (fraction, 0.02 = 2%)
+    size_min_pct: float = _cfg("BRAIN_SIZE_MIN_PCT", cast=float, default=0.015)     # skip buys below this target weight (fraction, 0.015 = 1.5%)
     vol_ref: float = _cfg("BRAIN_VOL_REF", cast=float, default=0.03)                # reference daily ATR (fraction, 0.03 = 3%) — the vol_scalar pivot
     vol_scalar_min: float = _cfg("BRAIN_VOL_SCALAR_MIN", cast=float, default=0.5)  # floor: most a high-vol name's size is cut
     vol_scalar_max: float = _cfg("BRAIN_VOL_SCALAR_MAX", cast=float, default=1.5)  # ceil: most a low-vol name's size is boosted
@@ -216,14 +221,17 @@ class AgentConfig:
     # strict bool cast; empty/unset/anything-not-truthy means disabled.
     trading_enabled: bool = _cfg("AGENT_TRADING_ENABLED", default="false").strip().lower() in ("true", "1", "yes", "on")
     account_number: str = _cfg("AGENT_ACCOUNT_NUMBER", default="")            # agentic_allowed=true account
-    max_trades_per_day: int = _cfg("AGENT_MAX_TRADES_PER_DAY", cast=int, default=3)  # cap on orders placed per day
+    max_trades_per_day: int = _cfg("AGENT_MAX_TRADES_PER_DAY", cast=int, default=6)  # cap on orders placed per day
     min_hold_days: int = _cfg("AGENT_MIN_HOLD_DAYS", cast=int, default=2)     # trading days a lot must be held before a sell is allowed
     drawdown_halt_pct: float = _cfg("AGENT_DRAWDOWN_HALT_PCT", cast=float, default=-15.0)  # halt selling if account equity draws down past this % (negative)
-    max_open_positions: int = _cfg("AGENT_MAX_OPEN_POSITIONS", cast=int, default=5)  # cap on concurrent open positions
-    # Per-buy size as a fraction of agentic sleeve equity. The sleeve is small (~$1k), so
-    # mirroring the paper track's 4–6% would leave ~75% idle cash — 20% × 5 max positions
-    # deploys the sleeve fully while keeping 5-name diversification.
-    position_pct: float = _cfg("AGENT_POSITION_PCT", cast=float, default=0.20)  # per-buy size (fraction of sleeve equity, 0.20 = 20%)
+    max_open_positions: int = _cfg("AGENT_MAX_OPEN_POSITIONS", cast=int, default=6)  # cap on concurrent open positions
+    # Per-buy size as a fraction of agentic sleeve equity. Tuned for aggression + diversity on a
+    # small (~$1k) cash sleeve: 15% × 6 max positions deploys ~90% while spreading across names.
+    position_pct: float = _cfg("AGENT_POSITION_PCT", cast=float, default=0.15)  # per-buy size (fraction of sleeve equity, 0.15 = 15%)
+    # Mirror exploration-sourced paper buys into the agentic account too (the convictions-only
+    # guardrail still gates them — a discovery only reaches real money once it's within an
+    # approved conviction/theme). False keeps exploration strictly paper-only.
+    mirror_exploration: bool = _cfg("AGENT_MIRROR_EXPLORATION", default="true").strip().lower() in ("true", "1", "yes", "on")
     # Cash account: T+1 settlement + Good-Faith-Violation aware (block selling unsettled / same-day round-trips)
     account_is_cash: bool = _cfg("AGENT_ACCOUNT_IS_CASH", cast=bool, default=True)
     # Robinhood Agentic MCP (official execution endpoint) + its own encrypted OAuth token store
