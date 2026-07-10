@@ -32,10 +32,16 @@ class FakeBroker:
         return self._quote
 
     def review_order(self, **p):
+        # Schema-accurate: review_equity_order has no ref_id param and rejects unknown props.
+        if "ref_id" in p:
+            from src.agent_broker import BrokerError
+            raise BrokerError("review_equity_order rejects unexpected property 'ref_id'")
         self.reviews.append(p)
         return {}
 
     def place_order(self, **p):
+        # place_equity_order is the only call that carries the ref_id idempotency key.
+        assert "ref_id" in p, "place_order must receive a ref_id idempotency key"
         self.places.append(p)
         return {"id": "ord-1", "state": "confirmed"}
 

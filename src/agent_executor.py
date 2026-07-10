@@ -248,8 +248,10 @@ def _execute_one(broker, ticker, side, held, estimated_cost, mirror, gr,
             return
         order_params["quantity"] = str(quantity)
 
+    # ref_id is a place_equity_order-only idempotency key. review_equity_order rejects it as an
+    # unexpected property, so it must NOT go into the shared order_params (which review also uses)
+    # — it is passed to place_order alone, below.
     ref_id = str(uuid.uuid4())
-    order_params["ref_id"] = ref_id
     rule_checks = {**gr.checks, "dollar_amount": dollar_amount, "quantity": quantity}
     submitted_at = datetime.now(timezone.utc).isoformat()
     size_desc = f"${dollar_amount:.2f}" if side == "buy" else f"x{quantity}"
@@ -274,8 +276,8 @@ def _execute_one(broker, ticker, side, held, estimated_cost, mirror, gr,
         trades_today.append({"ticker": ticker, "side": side, "status": "dry_run"})
         return
 
-    # Live placement.
-    resp = broker.place_order(**order_params)
+    # Live placement — ref_id (idempotency) is accepted only here, not by review.
+    resp = broker.place_order(ref_id=ref_id, **order_params)
     order_id = (resp.get("id") or resp.get("order_id")) if isinstance(resp, dict) else None
     status = (resp.get("state") or resp.get("status") or "submitted") if isinstance(resp, dict) else "submitted"
     tid = memory.log_agent_trade(
