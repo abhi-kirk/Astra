@@ -12,6 +12,7 @@ from src.agent_broker import (
     EncryptedFileTokenStorage,
     _parse_result,
     _unwrap,
+    extract_order,
     extract_portfolio,
     extract_positions,
 )
@@ -72,6 +73,29 @@ class TestExtractPortfolioPositions:
             {"symbol": "RKLB", "quantity": "5", "average_buy_price": "90", "shares_available_for_sells": "3"},
         ]})
         assert pos["RKLB"]["shares"] == 5.0 and pos["RKLB"]["sellable"] == 3.0
+
+
+class TestExtractOrder:
+    def test_top_level_id_and_state(self):
+        # The real order object (post data-unwrap) carries a top-level id + state.
+        resp = {"id": "abc-123", "state": "filled", "symbol": "NVDA",
+                "dollar_based_amount": {"amount": "149.86"}}
+        assert extract_order(resp) == ("abc-123", "filled")
+
+    def test_nested_under_order(self):
+        assert extract_order({"order": {"id": "o-1", "state": "confirmed"}}) == ("o-1", "confirmed")
+
+    def test_nested_orders_list(self):
+        assert extract_order({"orders": [{"id": "o-2", "state": "queued"}]}) == ("o-2", "queued")
+
+    def test_order_id_alias(self):
+        assert extract_order({"order_id": "o-3", "status": "filled"}) == ("o-3", "filled")
+
+    def test_missing_falls_back(self):
+        assert extract_order({"foo": "bar"}) == (None, "submitted")
+
+    def test_non_dict_falls_back(self):
+        assert extract_order("boom") == (None, "submitted")
 
 
 class TestTokenStorage:

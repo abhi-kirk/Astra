@@ -270,6 +270,26 @@ def extract_portfolio(portfolio_result: Any) -> dict[str, float]:
     }
 
 
+def extract_order(place_result: Any) -> tuple[str | None, str]:
+    """Pull (order_id, state) from a place_equity_order result, tolerant of nesting.
+    The order object carries a top-level `id` + `state` (e.g. 'filled'), but the place
+    envelope may nest it under `order`, `orders[0]`, or `data`. Falls back to
+    (None, 'submitted') so a successful place is never mis-logged as un-placed."""
+    if not isinstance(place_result, dict):
+        return None, "submitted"
+    order = place_result
+    if isinstance(place_result.get("orders"), list) and place_result["orders"]:
+        order = place_result["orders"][0]
+    else:
+        for key in ("order", "data", "result"):
+            if isinstance(place_result.get(key), dict):
+                order = place_result[key]
+                break
+    order_id = order.get("id") or order.get("order_id") if isinstance(order, dict) else None
+    state = (order.get("state") or order.get("status") or "submitted") if isinstance(order, dict) else "submitted"
+    return order_id, state
+
+
 def extract_positions(positions_result: Any) -> dict[str, dict]:
     """Turn a get_equity_positions result into {ticker: {shares, avg_cost}} (tolerant)."""
     rows: Any = positions_result

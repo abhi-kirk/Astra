@@ -24,6 +24,7 @@ from src import config, memory, notify
 from src.agent_broker import (
     AgenticBroker,
     BrokerError,
+    extract_order,
     extract_portfolio,
     extract_positions,
 )
@@ -292,8 +293,8 @@ def _execute_one(broker, ticker, side, held, estimated_cost, mirror, gr,
         )
         summary["failed"].append(f"{side}:{ticker}")
         return
-    order_id = (resp.get("id") or resp.get("order_id")) if isinstance(resp, dict) else None
-    status = (resp.get("state") or resp.get("status") or "submitted") if isinstance(resp, dict) else "submitted"
+    order_id, raw_state = extract_order(resp)
+    status = raw_state if raw_state in _PLACED_STATES else "submitted"
     tid = memory.log_agent_trade(
         ticker=ticker, side=side, run_date=run_date, order_type="market",
         quantity=quantity, dollar_amount=dollar_amount, order_id=order_id, ref_id=ref_id,
