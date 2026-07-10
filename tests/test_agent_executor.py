@@ -115,6 +115,30 @@ def test_live_places_marketable_limit(wired, monkeypatch):
     assert summary["placed"][0]["ticker"] == "RKLB"
 
 
+def test_place_failure_logs_failed_and_continues(wired, monkeypatch):
+    """A broker error on one order must be logged as `failed` and NOT abort the run —
+    the next mirror is still attempted. (Regression: a place error used to crash the run.)"""
+    from src.agent_broker import BrokerError
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
+    state, logs = wired
+    state["opened"] = [
+        {"id": 12, "ticker": "RKLB", "action": "buy"},
+        {"id": 14, "ticker": "NVDA", "action": "buy"},
+    ]
+
+    class OneFailBroker(FakeBroker):
+        def place_order(self, **p):
+            if p["symbol"] == "RKLB":
+                raise BrokerError("API error 400: investor profile required before second trade")
+            return super().place_order(**p)
+
+    fb = OneFailBroker()
+    summary = ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
+    assert summary["failed"] == ["buy:RKLB"]                 # RKLB logged failed, didn't crash
+    assert [pl["ticker"] for pl in summary["placed"]] == ["NVDA"]  # run continued to NVDA
+    assert any(row["status"] == "failed" and "place_error" in row["rule_checks"] for row in logs)
+
+
 def test_live_sell_mirror_exits_full_position(wired, monkeypatch):
     monkeypatch.setattr(config.agent, "trading_enabled", True)
     state, _ = wired

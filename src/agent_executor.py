@@ -107,7 +107,7 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
     # Dry-run whenever the master switch is off, unless a caller explicitly forces live.
     if dry_run is None:
         dry_run = not config.agent.trading_enabled
-    summary = {"run_date": run_date, "dry_run": dry_run, "placed": [], "blocked": [], "skipped": [], "halted": False}
+    summary = {"run_date": run_date, "dry_run": dry_run, "placed": [], "blocked": [], "skipped": [], "failed": [], "halted": False}
 
     control = memory.get_agent_control()
     if control.get("paused"):
@@ -211,8 +211,8 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
         _execute_one(broker, ticker, side, held, estimated_cost, m, gr,
                      run_date, dry_run, summary, trades_today)
 
-    logger.info("Autotrader run complete — placed=%d blocked=%d skipped=%d dry_run=%s",
-                len(summary["placed"]), len(summary["blocked"]), len(summary["skipped"]), dry_run)
+    logger.info("Autotrader run complete — placed=%d blocked=%d failed=%d skipped=%d dry_run=%s",
+                len(summary["placed"]), len(summary["blocked"]), len(summary["failed"]), len(summary["skipped"]), dry_run)
     _finalize(summary, num_mirrors=len(mirrors))
     return summary
 
@@ -276,8 +276,22 @@ def _execute_one(broker, ticker, side, held, estimated_cost, mirror, gr,
         trades_today.append({"ticker": ticker, "side": side, "status": "dry_run"})
         return
 
-    # Live placement — ref_id (idempotency) is accepted only here, not by review.
-    resp = broker.place_order(ref_id=ref_id, **order_params)
+    # Live placement — ref_id (idempotency) is accepted only here, not by review. A place
+    # failure (e.g. a Robinhood account gate, a transient broker error) is logged as `failed`
+    # and the run continues to the next mirror — one bad order must not abort the whole run.
+    try:
+        resp = broker.place_order(ref_id=ref_id, **order_params)
+    except BrokerError as e:
+        logger.error("Autotrader: place failed for %s %s — %s", side, ticker, e, exc_info=True)
+        memory.log_agent_trade(
+            ticker=ticker, side=side, run_date=run_date, order_type="market",
+            quantity=quantity, dollar_amount=dollar_amount, ref_id=ref_id, status="failed",
+            rule_checks={**rule_checks, "place_error": str(e)},
+            mirrors_paper_trade_id=mirror.get("mirrors_paper_trade_id"),
+            submitted_at=submitted_at, is_open=False,
+        )
+        summary["failed"].append(f"{side}:{ticker}")
+        return
     order_id = (resp.get("id") or resp.get("order_id")) if isinstance(resp, dict) else None
     status = (resp.get("state") or resp.get("status") or "submitted") if isinstance(resp, dict) else "submitted"
     tid = memory.log_agent_trade(
