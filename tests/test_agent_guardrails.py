@@ -1,11 +1,12 @@
 """
 Unit tests for src/agent_guardrails.py — Autotrader execution guardrails.
 
-All pure functions, no I/O. Covers every guardrail required by docs/autonomy.md
-checklist #9: convictions-only, TSLA exclusion, min-hold (+ same-day round-trip /
-cash GFV), max-trades/day, max-open-positions, drawdown-halt — plus the shared
-hard-rule reuse. No real order path is exercised here; this suite is the gate that
-must pass before execution is wired live.
+All pure functions, no I/O. Covers every guardrail the autotrader enforces:
+TSLA exclusion, min-hold (+ same-day round-trip / cash GFV), max-trades/day,
+max-open-positions, drawdown-halt — plus the shared hard-rule reuse. Conviction
+and industry strategy live in the shared brain the autotrader mirrors. No real
+order path is exercised here; this suite is the gate that must pass before
+execution is wired live.
 """
 
 from datetime import datetime
@@ -56,7 +57,7 @@ class TestPasses:
         res = run(base_kwargs)
         assert res.passed
         assert res.block_reason is None
-        assert res.checks["convictions_only"] and res.checks["not_excluded"]
+        assert res.checks["not_excluded"]
         assert res.checks["max_trades_per_day"] and res.checks["hard_rules"]
 
 
@@ -73,17 +74,18 @@ class TestExclusion:
 
 
 # ---------------------------------------------------------------------------
-# Convictions-only
+# Conviction-agnostic — the autotrader mirrors the shared brain, which owns all
+# conviction/industry strategy. Any name the brain paper-traded reaches execution,
+# whether it is an approved conviction (ASTS) or an exploration pick (PL).
 # ---------------------------------------------------------------------------
 
-class TestConvictionsOnly:
-    def test_unknown_ticker_blocked(self, base_kwargs):
-        res = run(base_kwargs, ticker="AMZN")  # not in any theme/holding
-        assert not res.passed
-        assert "CONVICTIONS ONLY" in res.block_reason
-        assert res.checks["convictions_only"] is False
+class TestConvictionAgnostic:
+    def test_exploration_pick_passes(self, base_kwargs):
+        res = run(base_kwargs, ticker="PL")  # space-adjacent exploration pick, no allowlist entry
+        assert res.passed
+        assert "convictions_only" not in res.checks
 
-    def test_approved_ticker_allowed(self, base_kwargs):
+    def test_approved_conviction_passes(self, base_kwargs):
         res = run(base_kwargs, ticker="ASTS")  # space.approved
         assert res.passed
 

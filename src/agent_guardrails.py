@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from src import config
-from src.strategy import check_hard_rules, get_ticker_guidance, is_excluded
+from src.strategy import check_hard_rules, is_excluded
 
 
 @dataclass
@@ -108,14 +108,7 @@ def check_agent_guardrails(
     if excl:
         return block(f"HARD EXCLUSION: {excl}")
 
-    # 3. Convictions-only — ticker must be a known holding or within an approved theme.
-    guidance = get_ticker_guidance(ticker, convictions)
-    known = guidance.get("status") not in (None, "unknown")
-    checks["convictions_only"] = known
-    if not known:
-        return block(f"CONVICTIONS ONLY: {ticker} is not in an approved theme or holding")
-
-    # 4. Max trades/day — cap total agentic order count per calendar day.
+    # 3. Max trades/day — cap total agentic order count per calendar day.
     under_daily_cap = len(trades_today) < config.agent.max_trades_per_day
     checks["max_trades_per_day"] = under_daily_cap
     if not under_daily_cap:
