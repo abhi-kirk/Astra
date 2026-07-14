@@ -7,7 +7,26 @@ pollute the advisor's history context and any future outcome stats.
 """
 
 from src import config
+from src.data_layer import get_advisor_book
 from src.memory import _may_add_paper_lot, should_log_decision
+
+
+class TestAdvisorBook:
+    def test_uses_live_buying_power(self, monkeypatch):
+        monkeypatch.setattr("src.memory.get_latest_portfolio_snapshot",
+                            lambda: {"positions": {}, "buying_power": 13785.57})
+        assert get_advisor_book() == 13785.57
+
+    def test_falls_back_when_no_balance(self, monkeypatch):
+        monkeypatch.setattr(config.paper, "portfolio_size", 10_000.0)
+        monkeypatch.setattr("src.memory.get_latest_portfolio_snapshot",
+                            lambda: {"positions": {}, "buying_power": None})
+        assert get_advisor_book() == 10_000.0
+
+    def test_falls_back_when_no_snapshot(self, monkeypatch):
+        monkeypatch.setattr(config.paper, "portfolio_size", 10_000.0)
+        monkeypatch.setattr("src.memory.get_latest_portfolio_snapshot", lambda: None)
+        assert get_advisor_book() == 10_000.0
 
 NOW = "2026-07-06T13:00:00+00:00"
 
