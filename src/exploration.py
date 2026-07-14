@@ -191,11 +191,17 @@ def check_graduations(portfolio_tickers: set[str]) -> None:
 # Daily bridge: screen on_radar candidates during the regular agent run
 # ---------------------------------------------------------------------------
 
-def screen_and_paper_trade_candidates(run_date: str) -> None:
+def screen_candidates() -> tuple[list[dict], dict]:
     """
-    Called by agent.py at the end of each daily run.
-    Screens on_radar candidates with quality + technical signal.
-    Fires a paper trade and promotes to paper_trading if both pass.
+    Screen on_radar exploration candidates against the quality + technical filter and
+    return their BUY signals as standard-shaped signal dicts, plus the market data fetched
+    for them. Called by agent.py *before* the advisor note so exploration decisions flow
+    through the single `signals` list — the advisor note, decision log, paper trades, and
+    the Autotrader mirror all read one source of truth.
+
+    Returns (exploration_buy_signals, market_data). Pure w.r.t. the decision store: it does
+    NOT log paper trades or promote candidate status — the unified agent.py buy loop does
+    both, so exploration buys are logged identically to conviction buys.
     """
     from src import memory
     from src.data_layer import get_market_data_bulk
@@ -203,12 +209,13 @@ def screen_and_paper_trade_candidates(run_date: str) -> None:
 
     candidates = memory.get_on_radar_candidates()
     if not candidates:
-        return
+        return [], {}
 
     tickers = [c["ticker"] for c in candidates]
     logger.info(f"Screening {len(tickers)} on-radar candidate(s): {', '.join(tickers)}")
 
     market_data = get_market_data_bulk(tickers)
+    signals: list[dict] = []
 
     for candidate in candidates:
         ticker = candidate["ticker"]
@@ -224,20 +231,16 @@ def screen_and_paper_trade_candidates(run_date: str) -> None:
         price = mdata.get("current_price")
 
         if quality_pass and tech_pass and price:
-            logger.info(f"{ticker}: BUY signal → paper trading")
-            memory.log_paper_trade(
-                ticker=ticker,
-                price=price,
-                run_date=run_date,
-                signal_data={
-                    "action": "buy",
-                    "source": "exploration",
-                    "source_theme": candidate.get("source_theme"),
-                    "reasons": quality_reasons + tech_reasons,
-                    "risk_flags": risk_flags,
-                },
-            )
-            memory.update_exploration_status(ticker, "paper_trading")
+            logger.info(f"{ticker}: BUY signal → exploration entry")
+            signals.append({
+                "ticker": ticker,
+                "action": "buy",
+                "reasons": quality_reasons + tech_reasons,
+                "risk_flags": risk_flags,
+                "suggested_position_pct": None,  # None → log_paper_trade uses the default starter size
+                "source": "exploration",
+                "source_theme": candidate.get("source_theme"),
+            })
         else:
             status_parts = []
             if not quality_pass:
@@ -245,6 +248,8 @@ def screen_and_paper_trade_candidates(run_date: str) -> None:
             if not tech_pass:
                 status_parts.append("no technical signal")
             logger.info(f"{ticker}: hold ({', '.join(status_parts)})")
+
+    return signals, market_data
 
 
 # ---------------------------------------------------------------------------

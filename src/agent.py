@@ -62,10 +62,16 @@ def call_claude_reasoning(
         intent = sig.get("intent", "opportunistic")
         catalyst = sig.get("original_catalyst")
         intent_note = f"\n    Intent: {intent}" + (f" — original catalyst: {catalyst}" if catalyst else "")
+        # Exploration discoveries are theme-aligned names not yet on a conviction roster —
+        # speculative starter entries, not conviction adds. Flag them so the note says so.
+        discovery_note = ""
+        if sig.get("source") == "exploration":
+            theme = sig.get("source_theme") or "conviction theme"
+            discovery_note = f"\n    NEW DISCOVERY (exploration) — {theme} theme, starter size, unproven"
         return (
             f"  {sig['ticker']}: price=${price:.2f}, avg_cost=${avg:.2f}, "
             f"unrealized={gain:+.0f}%, shares={pos.get('shares', 0):.1f}\n"
-            f"    Reasons: {reasons}{intent_note}"
+            f"    Reasons: {reasons}{intent_note}{discovery_note}"
         )
 
     signal_text = ""
@@ -217,6 +223,21 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
             full_portfolio=portfolio,   # sizing + theme/position caps measured against actual holdings
         )
 
+    # Exploration: discover theme-aligned candidates (on_radar names not yet on a conviction
+    # roster) and merge their BUYs into the single `signals` list, so the brain's decision flow
+    # is one source of truth — the advisor note, decision log, paper trades, and Autotrader
+    # mirror all see exploration entries. Kept out of `screen_input`/`universe` so their paper
+    # lifecycle is never force-closed. Non-fatal: a failure here must not break the main run.
+    with obs.phase("exploration"):
+        try:
+            from src.exploration import screen_candidates
+            explore_signals, explore_md = screen_candidates()
+        except Exception:
+            logger.error("Exploration screen failed — pipeline continues without it", exc_info=True)
+            explore_signals, explore_md = [], {}
+    market_data.update(explore_md)   # so the note + logging can price exploration names
+    signals.extend(explore_signals)
+
     history_context = memory.build_agent_context_summary()
 
     advisor_note = ""
@@ -332,6 +353,10 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
                 signal_data=sig,
                 suggested_pct=sig["suggested_position_pct"],
             )
+            # An exploration discovery that fires a buy graduates on_radar → paper_trading
+            # (previously done inside exploration.screen_and_paper_trade_candidates).
+            if sig.get("source") == "exploration":
+                memory.update_exploration_status(sig["ticker"], "paper_trading")
 
     buy_tickers  = [s["ticker"] for s in signals if s["action"] == "buy"]
     sell_tickers = [s["ticker"] for s in signals if s["action"] == "sell"]
@@ -372,10 +397,6 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
         advisor_note=advisor_note,
         mode=mode,
     )
-
-    # Screen on_radar exploration candidates against quality + technical signal
-    from src.exploration import screen_and_paper_trade_candidates
-    screen_and_paper_trade_candidates(run_date)
 
     # Outcome tracking: forward returns + trade journal detection
     from src.outcomes import backfill_outcomes, detect_portfolio_changes
