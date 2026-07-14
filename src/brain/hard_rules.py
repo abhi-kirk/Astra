@@ -1,7 +1,8 @@
 """
-Hard rules — non-negotiable blocks enforced before any scoring. The screener and the
-Autotrader guardrails both call check_hard_rules, so they apply identical limits.
-strategy.py re-exports these.
+Hard rules — non-negotiable strategy blocks (TSLA exclusion, do-not-add, averaging-down,
+position/theme limits) enforced by the brain before any scoring, on both tracks. The
+Autotrader mirrors the brain's decisions, so it does not re-run these. strategy.py
+re-exports them.
 """
 
 from __future__ import annotations

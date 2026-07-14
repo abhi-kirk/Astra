@@ -29,9 +29,8 @@ from src.agent_broker import (
     extract_positions,
 )
 from src.agent_guardrails import check_agent_guardrails
-from src.data_layer import get_market_data_bulk, load_convictions
+from src.data_layer import load_convictions
 from src.observability import RunObserver
-from src.strategy import compute_portfolio_summary
 
 logger = logging.getLogger(__name__)
 
@@ -77,12 +76,10 @@ def _build_mirrors(run_date: str) -> list[dict]:
     for pt in memory.get_paper_trades_opened_on(run_date):
         if pt.get("action") != "buy":
             continue
-        if (pt.get("signal_data") or {}).get("source") == "exploration" and not config.agent.mirror_exploration:
-            continue  # exploration mirroring disabled → paper-only. When enabled, the
-            # convictions-only guardrail still gates whether it reaches real money.
         mirrors.append({
             "ticker": pt["ticker"], "side": "buy",
             "mirrors_paper_trade_id": pt.get("id"),
+            "weight": pt.get("suggested_position_pct"),  # brain conviction weight → sleeve sizing
         })
     for pt in memory.get_paper_trades_closed_on(run_date):
         if pt.get("close_reason") not in _MIRRORED_CLOSE_REASONS:
@@ -99,6 +96,37 @@ def _already_handled(trades_today: list[dict], ticker: str, side: str) -> bool:
         t.get("ticker") == ticker and t.get("side") == side and t.get("status") in _PLACED_STATES
         for t in trades_today
     )
+
+
+def _sleeve_budget(buying_power: float | None, equity: float | None) -> float:
+    """Dollars the sleeve may deploy this run: at most `max_deploy_per_run_pct` of remaining
+    cash, and never dipping below the `reserve_floor_pct` cash cushion. The cushion is dry
+    powder for higher-conviction dips, not idle money — Robinhood Gold pays ~3.5% APY on it.
+    Live `buying_power` means prior fills (this run or earlier today) self-pace deployment."""
+    if not buying_power or not equity or buying_power <= 0 or equity <= 0:
+        return 0.0
+    above_floor = buying_power - config.agent.reserve_floor_pct * equity
+    per_run = config.agent.max_deploy_per_run_pct * buying_power
+    return round(max(0.0, min(above_floor, per_run)), 2)
+
+
+def _allocate_buys(buys: list[dict], budget: float, slots: int) -> None:
+    """Size today's buy mirrors together (the brain sets weights; the sleeve splits a paced
+    budget across them). Rank by conviction weight, keep the top `slots`, and split `budget`
+    in proportion to weight — higher conviction gets more (equal split if weights are absent).
+    Annotates each mirror in place with `dollars`; deferred/unfunded mirrors get 0.0."""
+    ranked = sorted(buys, key=lambda m: m.get("weight") or 0.0, reverse=True)
+    funded, deferred = ranked[: max(0, slots)], ranked[max(0, slots):]
+    for m in deferred:
+        m["dollars"] = 0.0
+    total = sum((m.get("weight") or 0.0) for m in funded)
+    n = len(funded)
+    for m in funded:
+        if budget <= 0 or n == 0:
+            m["dollars"] = 0.0
+            continue
+        share = (m.get("weight") or 0.0) / total if total > 0 else 1.0 / n
+        m["dollars"] = round(budget * share, 2)
 
 
 def run(run_date: str | None = None, broker: AgenticBroker | None = None,
@@ -161,12 +189,21 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
         return summary
 
     convictions = load_convictions()
-    tickers = sorted({m["ticker"] for m in mirrors} | set(positions.keys()))
-    market_data = get_market_data_bulk(tickers)
-    portfolio_summary = compute_portfolio_summary(positions, market_data, convictions)
     trades_today = memory.get_agent_trades_today(run_date)
-    open_tickers = set(positions.keys())
     now = datetime.now()
+
+    # Size today's buys together: rank by the brain's conviction weight, deploy a capped slice
+    # of remaining cash (never below the reserve floor), split in proportion to weight. Sells
+    # don't draw on this budget. `_allocate_buys` annotates each buy mirror with `dollars`.
+    placed_buys_today = sum(
+        1 for t in trades_today if t.get("side") == "buy" and t.get("status") in _PLACED_STATES
+    )
+    buy_slots = config.agent.max_trades_per_day - placed_buys_today
+    pending_buys = [
+        m for m in mirrors
+        if m["side"] == "buy" and not _already_handled(trades_today, m["ticker"], "buy")
+    ]
+    _allocate_buys(pending_buys, _sleeve_budget(port["buying_power"], equity), buy_slots)
 
     for m in mirrors:
         ticker, side = m["ticker"], m["side"]
@@ -176,12 +213,13 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
             continue
 
         held = positions.get(ticker, {})
-        mdata = market_data.get(ticker, {})
 
-        # Sizing — flat fraction of sleeve equity per buy (not the paper track's 4–6%,
-        # which would leave a ~$1k sleeve mostly idle; see AGENT_POSITION_PCT).
         if side == "buy":
-            estimated_cost = round(config.agent.position_pct * equity, 2) if equity else None
+            estimated_cost = m.get("dollars") or None
+            if not estimated_cost:
+                logger.info("Autotrader: buy %s not funded this run (budget/rank) — skipping.", ticker)
+                summary["skipped"].append(f"buy:{ticker}:unfunded")
+                continue
         else:
             if not held.get("shares"):
                 logger.info("Autotrader: no agentic %s position to sell — skipping.", ticker)
@@ -193,9 +231,8 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
         # dry-run rows in agent_trades must not starve real trades out of the budget.
         placed_today = [t for t in trades_today if t.get("status") in _PLACED_STATES]
         gr = check_agent_guardrails(
-            ticker=ticker, side=side, position=held, market_data=mdata,
-            convictions=convictions, portfolio_summary=portfolio_summary,
-            trades_today=placed_today, open_position_tickers=open_tickers,
+            ticker=ticker, side=side, convictions=convictions,
+            trades_today=placed_today,
             last_buy=memory.get_last_agent_buy(ticker), drawdown_pct=drawdown,
             settled_cash=port["buying_power"], estimated_cost=estimated_cost, now=now,
         )

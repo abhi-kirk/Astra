@@ -67,7 +67,7 @@ class ToolLoopConfig:
 # ── Paper trading ──────────────────────────────────────────────────────────────
 @dataclass
 class PaperConfig:
-    portfolio_size: float = _cfg("PAPER_PORTFOLIO_SIZE", cast=float, default=10_000.0)       # virtual book the paper track sizes against
+    portfolio_size: float = _cfg("PAPER_PORTFOLIO_SIZE", cast=float, default=10_000.0)       # fallback sizing book when no live Individual-account balance is on record
     max_position_pct: float = _cfg("PAPER_MAX_POSITION_PCT", cast=float, default=0.10)        # hard per-name cap (fraction of book)
     default_position_pct: float = _cfg("PAPER_DEFAULT_POSITION_PCT", cast=float, default=0.04)  # fallback buy size when no explicit sizing
     # Bounded pyramiding (adds): a persisting BUY on a held name opens an additional paper lot,
@@ -224,14 +224,11 @@ class AgentConfig:
     max_trades_per_day: int = _cfg("AGENT_MAX_TRADES_PER_DAY", cast=int, default=6)  # cap on orders placed per day
     min_hold_days: int = _cfg("AGENT_MIN_HOLD_DAYS", cast=int, default=2)     # trading days a lot must be held before a sell is allowed
     drawdown_halt_pct: float = _cfg("AGENT_DRAWDOWN_HALT_PCT", cast=float, default=-15.0)  # halt selling if account equity draws down past this % (negative)
-    max_open_positions: int = _cfg("AGENT_MAX_OPEN_POSITIONS", cast=int, default=6)  # cap on concurrent open positions
-    # Per-buy size as a fraction of agentic sleeve equity. Tuned for aggression + diversity on a
-    # small (~$1k) cash sleeve: 15% × 6 max positions deploys ~90% while spreading across names.
-    position_pct: float = _cfg("AGENT_POSITION_PCT", cast=float, default=0.15)  # per-buy size (fraction of sleeve equity, 0.15 = 15%)
-    # Mirror exploration-sourced paper buys into the agentic account too (the convictions-only
-    # guardrail still gates them — a discovery only reaches real money once it's within an
-    # approved conviction/theme). False keeps exploration strictly paper-only.
-    mirror_exploration: bool = _cfg("AGENT_MIRROR_EXPLORATION", default="true").strip().lower() in ("true", "1", "yes", "on")
+    # Sizing + pacing for the small cash sleeve. The brain sets each name's conviction weight;
+    # the sleeve deploys a capped slice of remaining cash per run, split in proportion to weight,
+    # and never below the reserve cushion — dry powder isn't idle (Robinhood Gold pays ~3.5% APY).
+    reserve_floor_pct: float = _cfg("AGENT_RESERVE_FLOOR_PCT", cast=float, default=0.30)      # keep ≥ this fraction of sleeve equity as cash
+    max_deploy_per_run_pct: float = _cfg("AGENT_MAX_DEPLOY_PER_RUN_PCT", cast=float, default=0.25)  # deploy ≤ this fraction of remaining cash per run
     # Cash account: T+1 settlement + Good-Faith-Violation aware (block selling unsettled / same-day round-trips)
     account_is_cash: bool = _cfg("AGENT_ACCOUNT_IS_CASH", cast=bool, default=True)
     # Robinhood Agentic MCP (official execution endpoint) + its own encrypted OAuth token store

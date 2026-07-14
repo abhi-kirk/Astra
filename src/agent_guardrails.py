@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from src import config
-from src.strategy import check_hard_rules, is_excluded
+from src.strategy import is_excluded
 
 
 @dataclass
@@ -75,40 +75,40 @@ def check_agent_guardrails(
     *,
     ticker: str,
     side: str,                          # "buy" | "sell"
-    position: dict,                     # held position {shares, avg_cost, num_buys} or {}
-    market_data: dict,
-    convictions: dict,
-    portfolio_summary: dict,            # {total_value, theme_allocations}
-    trades_today: list[dict],           # today's agent_trades rows (for max-trades/day)
-    open_position_tickers: set[str],    # distinct tickers currently open in the agentic account
+    convictions: dict,                  # for the TSLA fail-safe lookup only
+    trades_today: list[dict],           # today's agent_trades rows (anti-runaway cap)
     last_buy: dict | None = None,       # most recent agent BUY row for this ticker (min-hold)
     drawdown_pct: float | None = None,  # current account drawdown %
     settled_cash: float | None = None,  # settled cash available (cash-account GFV, buys)
     estimated_cost: float | None = None,  # notional of this buy
     now: datetime | None = None,
 ) -> GuardrailResult:
-    """Run every Autotrader guardrail for one prospective order. Fail-closed: any failed
-    check blocks the order and names the first failure. `checks` records each rule's
-    outcome for persistence to agent_trades.rule_checks."""
+    """Unattended-execution safety for one prospective Autotrader order. The shared brain
+    (src/brain/) owns all strategy — convictions, quality, entry/exit, sizing intent — and
+    the Autotrader mirrors its decisions, so these checks carry only what a human-in-the-loop
+    track has no need for (Abhi is his own circuit breaker): a drawdown kill switch, an
+    anti-runaway trade cap, cash-account settlement (GFV), and a sell min-hold, plus a
+    redundant TSLA fail-safe at the real-money boundary. Fail-closed: the first failed check
+    blocks the order and names it. `checks` records each rule for agent_trades.rule_checks."""
     now = now or datetime.now()
     checks: dict[str, bool] = {}
 
     def block(reason: str) -> GuardrailResult:
         return GuardrailResult(passed=False, block_reason=reason, checks=checks)
 
-    # 1. Drawdown halt (account-level) — blocks everything.
+    # 1. Drawdown halt (account-level) — kill switch, blocks everything.
     halted, halt_reason = check_halt_state(drawdown_pct)
     checks["drawdown_halt"] = not halted
     if halted:
         return block(halt_reason or "DRAWDOWN HALT")
 
-    # 2. TSLA / hard exclusion.
+    # 2. TSLA fail-safe — a redundant hard line at the money boundary; the brain excludes it upstream.
     excl = is_excluded(ticker, convictions)
     checks["not_excluded"] = excl is None
     if excl:
         return block(f"HARD EXCLUSION: {excl}")
 
-    # 3. Max trades/day — cap total agentic order count per calendar day.
+    # 3. Anti-runaway cap — bound total agentic orders per calendar day.
     under_daily_cap = len(trades_today) < config.agent.max_trades_per_day
     checks["max_trades_per_day"] = under_daily_cap
     if not under_daily_cap:
@@ -118,23 +118,7 @@ def check_agent_guardrails(
         )
 
     if side == "buy":
-        # 5. Shared hard rules (do-not-add, averaging-down, position + theme limits).
-        hard_block = check_hard_rules(ticker, position, market_data, convictions, portfolio_summary)
-        checks["hard_rules"] = hard_block is None
-        if hard_block:
-            return block(hard_block)
-
-        # 6. Max open positions — only when opening a brand-new position.
-        is_new = ticker not in open_position_tickers
-        at_cap = is_new and len(open_position_tickers) >= config.agent.max_open_positions
-        checks["max_open_positions"] = not at_cap
-        if at_cap:
-            return block(
-                f"MAX OPEN POSITIONS: {len(open_position_tickers)} open "
-                f"(limit {config.agent.max_open_positions})"
-            )
-
-        # 7. Cash-account settlement — no buying with unsettled proceeds (Good-Faith Violation).
+        # 4. Cash-account settlement — no buying with unsettled proceeds (Good-Faith Violation).
         if config.agent.account_is_cash and settled_cash is not None and estimated_cost is not None:
             funded = estimated_cost <= settled_cash + 1e-6
             checks["settled_funds"] = funded
@@ -145,8 +129,8 @@ def check_agent_guardrails(
                 )
 
     elif side == "sell":
-        # 5s. Min-hold — no selling a lot younger than AGENT_MIN_HOLD_DAYS trading days,
-        #      and never a same-day round-trip (day-trade / GFV avoidance).
+        # 5. Min-hold — no selling a lot younger than AGENT_MIN_HOLD_DAYS trading days,
+        #    and never a same-day round-trip (day-trade / GFV avoidance).
         last_dt = _parse_dt(last_buy.get("run_date")) if last_buy else None
         if last_dt is not None:
             held_days = business_days_between(last_dt, now)

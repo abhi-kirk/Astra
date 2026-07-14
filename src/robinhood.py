@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 from src import config
 
 _RH_POSITIONS_URL = "https://api.robinhood.com/positions/"
+_RH_ACCOUNTS_URL  = "https://api.robinhood.com/accounts/"
 _RH_TOKEN_URL     = "https://api.robinhood.com/oauth2/token/"
 _RH_CLIENT_ID     = "c82SH0WZOsabOXGP2sxqcj34FxkvfnWRZBKlBjFS"
 
@@ -134,6 +135,27 @@ def _fetch_positions(bearer_token: str) -> list[dict]:
 # Portfolio mapping
 # ---------------------------------------------------------------------------
 
+def _fetch_buying_power(bearer_token: str) -> float | None:
+    """Deployable cash in the Individual account (the paper track's real sizing book). Reads
+    the accounts endpoint; prefers `buying_power`, falling back to portfolio/settled cash.
+    Returns None on any failure so sizing falls back to the configured book."""
+    headers = {"Authorization": f"Bearer {bearer_token}", "Accept": "application/json"}
+    try:
+        resp = requests.get(_RH_ACCOUNTS_URL, headers=headers, timeout=15)
+        resp.raise_for_status()
+        results = resp.json().get("results") or []
+        if not results:
+            return None
+        acct = results[0]
+        for key in ("buying_power", "portfolio_cash", "cash"):
+            val = acct.get(key)
+            if val not in (None, ""):
+                return float(val)
+    except (requests.RequestException, ValueError, TypeError):
+        logger.warning("Could not fetch Robinhood buying power — paper sizing will use the fallback book.", exc_info=True)
+    return None
+
+
 def _positions_to_portfolio(positions: list[dict]) -> dict[str, dict]:
     portfolio: dict[str, dict] = {}
     for pos in positions:
@@ -195,9 +217,10 @@ def sync_portfolio_to_supabase() -> dict | None:
         positions = _fetch_positions(bearer)
         portfolio = _positions_to_portfolio(positions)
         _enrich_num_buys(portfolio)
+        buying_power = _fetch_buying_power(bearer)
 
         from src.data_layer import save_mcp_portfolio_snapshot
-        save_mcp_portfolio_snapshot(portfolio)
+        save_mcp_portfolio_snapshot(portfolio, buying_power)
         logger.info(f"Live portfolio synced: {len(portfolio)} positions.")
 
         from src.exploration import check_graduations

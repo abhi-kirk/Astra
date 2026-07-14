@@ -77,8 +77,6 @@ def wired(monkeypatch, convictions):
     monkeypatch.setattr(memory, "log_agent_trade", _log)
 
     monkeypatch.setattr(ex, "load_convictions", lambda: convictions)
-    monkeypatch.setattr(ex, "get_market_data_bulk",
-                        lambda tickers: {t: {"current_price": 100.0} for t in tickers})
     monkeypatch.setattr(ex, "_finalize", lambda *a, **k: None)  # no Telegram/DB side effects in tests
     return state, logs
 
@@ -99,14 +97,14 @@ def test_dry_run_reviews_but_never_places(wired, monkeypatch):
 
 def test_live_places_marketable_limit(wired, monkeypatch):
     monkeypatch.setattr(config.agent, "trading_enabled", True)
-    monkeypatch.setattr(config.agent, "position_pct", 0.20)
     _, logs = wired
-    fb = FakeBroker()
+    fb = FakeBroker()  # equity/buying_power = $1000
     summary = ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
     assert len(fb.reviews) == 1 and len(fb.places) == 1
     p = fb.places[0]
     assert p["symbol"] == "RKLB" and p["side"] == "buy" and p["type"] == "market"
-    assert p["dollar_amount"] == "200.00"       # AGENT_POSITION_PCT (0.20) * $1000 equity
+    # Sole buy takes the whole run budget: min(cash − 30% reserve, 25% of cash) = min(700, 250).
+    assert p["dollar_amount"] == "250.00"
     assert "quantity" not in p and "ref_id" in p
     logged = logs[-1]
     assert logged["status"] == "submitted"
@@ -243,36 +241,86 @@ def test_signal_inactive_close_is_mirrored_as_sell(wired, monkeypatch):
     assert len(fb.places) == 1 and fb.places[0]["side"] == "sell"
 
 
-def test_exploration_paper_buy_not_mirrored_when_disabled(wired, monkeypatch):
-    """With mirroring disabled, exploration candidates stay paper-only — never a real-money mirror."""
+def test_exploration_paper_buy_reaches_real_money(wired, monkeypatch):
+    """The Autotrader mirrors the brain 1:1 — an exploration paper buy reaches real money
+    even for a name outside any conviction allowlist (PL). The brain, not the executor,
+    decides what to trade."""
     monkeypatch.setattr(config.agent, "trading_enabled", True)
-    monkeypatch.setattr(config.agent, "mirror_exploration", False)
     state, logs = wired
     state["opened"] = [{
-        "id": 33, "ticker": "RKLB", "action": "buy",
+        "id": 33, "ticker": "PL", "action": "buy",
         "signal_data": {"action": "buy", "source": "exploration"},
     }]
     fb = FakeBroker()
     summary = ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
-    assert fb.reviews == [] and fb.places == []
-    assert summary["placed"] == [] and logs == []
-
-
-def test_exploration_paper_buy_mirrored_when_enabled(wired, monkeypatch):
-    """With mirroring enabled, an exploration buy on a conviction name reaches real money
-    (the convictions-only guardrail still gates it — RKLB is an approved conviction)."""
-    monkeypatch.setattr(config.agent, "trading_enabled", True)
-    monkeypatch.setattr(config.agent, "mirror_exploration", True)
-    state, logs = wired
-    state["opened"] = [{
-        "id": 33, "ticker": "RKLB", "action": "buy",
-        "signal_data": {"action": "buy", "source": "exploration"},
-    }]
-    fb = FakeBroker()
-    summary = ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
-    assert len(fb.places) == 1 and fb.places[0]["symbol"] == "RKLB"
-    assert summary["placed"][0]["ticker"] == "RKLB"
+    assert len(fb.places) == 1 and fb.places[0]["symbol"] == "PL"
+    assert summary["placed"][0]["ticker"] == "PL"
     assert logs[-1]["mirrors_paper_trade_id"] == 33
+
+
+# ---------------------------------------------------------------------------
+# Sleeve sizing + pacing (Option 1 + reserve floor)
+# ---------------------------------------------------------------------------
+
+class TestSleeveBudget:
+    def test_per_run_cap_binds(self, monkeypatch):
+        monkeypatch.setattr(config.agent, "reserve_floor_pct", 0.30)
+        monkeypatch.setattr(config.agent, "max_deploy_per_run_pct", 0.25)
+        # min(1000 − 300 reserve, 250 per-run) = 250.
+        assert ex._sleeve_budget(1000.0, 1000.0) == 250.0
+
+    def test_reserve_floor_binds(self, monkeypatch):
+        monkeypatch.setattr(config.agent, "reserve_floor_pct", 0.30)
+        monkeypatch.setattr(config.agent, "max_deploy_per_run_pct", 0.25)
+        # Cash $350 on a $1000 sleeve: floor allows only $50, below the $87.50 per-run cap.
+        assert ex._sleeve_budget(350.0, 1000.0) == 50.0
+
+    def test_below_floor_deploys_nothing(self, monkeypatch):
+        monkeypatch.setattr(config.agent, "reserve_floor_pct", 0.30)
+        assert ex._sleeve_budget(200.0, 1000.0) == 0.0
+
+    def test_zero_inputs_safe(self):
+        assert ex._sleeve_budget(0.0, 1000.0) == 0.0
+        assert ex._sleeve_budget(None, None) == 0.0
+
+
+class TestAllocateBuys:
+    def test_split_proportional_to_weight(self):
+        buys = [{"ticker": "NVDA", "weight": 0.08}, {"ticker": "PL", "weight": 0.04}]
+        ex._allocate_buys(buys, budget=300.0, slots=6)
+        by = {b["ticker"]: b["dollars"] for b in buys}
+        assert by["NVDA"] == 200.0 and by["PL"] == 100.0  # 2:1 ordering preserved
+
+    def test_slots_defer_lowest_conviction(self):
+        buys = [{"ticker": "NVDA", "weight": 0.08}, {"ticker": "PL", "weight": 0.04}]
+        ex._allocate_buys(buys, budget=300.0, slots=1)
+        by = {b["ticker"]: b["dollars"] for b in buys}
+        assert by["NVDA"] == 300.0 and by["PL"] == 0.0  # only the top-ranked name funded
+
+    def test_equal_split_when_weights_absent(self):
+        buys = [{"ticker": "A"}, {"ticker": "B"}]
+        ex._allocate_buys(buys, budget=200.0, slots=6)
+        assert all(b["dollars"] == 100.0 for b in buys)
+
+    def test_zero_budget_funds_nothing(self):
+        buys = [{"ticker": "A", "weight": 0.05}]
+        ex._allocate_buys(buys, budget=0.0, slots=6)
+        assert buys[0]["dollars"] == 0.0
+
+
+def test_higher_conviction_buy_gets_more_dollars(wired, monkeypatch):
+    """End-to-end: two same-day buys split the paced budget by conviction weight."""
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
+    state, _ = wired
+    state["opened"] = [
+        {"id": 41, "ticker": "NVDA", "action": "buy", "suggested_position_pct": 0.08},
+        {"id": 42, "ticker": "PL", "action": "buy", "suggested_position_pct": 0.04},
+    ]
+    fb = FakeBroker()  # $1000 → run budget $250, split 2:1
+    ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
+    dollars = {p["symbol"]: float(p["dollar_amount"]) for p in fb.places}
+    assert dollars["NVDA"] > dollars["PL"]
+    assert dollars["NVDA"] == 166.67 and dollars["PL"] == 83.33
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +345,8 @@ def test_blocked_and_dry_run_rows_do_not_consume_daily_cap(wired, monkeypatch):
 
 
 def test_placed_rows_still_consume_daily_cap(wired, monkeypatch):
+    """Placed orders consume the daily trade budget, so the sleeve funds no further buys —
+    RKLB gets no run allocation and is skipped (unfunded), never sent to the broker."""
     monkeypatch.setattr(config.agent, "trading_enabled", True)
     monkeypatch.setattr(config.agent, "max_trades_per_day", 3)
     state, _ = wired
@@ -308,4 +358,4 @@ def test_placed_rows_still_consume_daily_cap(wired, monkeypatch):
     fb = FakeBroker()
     summary = ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
     assert fb.places == []
-    assert summary["blocked"] == ["buy:RKLB"]
+    assert summary["skipped"] == ["buy:RKLB:unfunded"]

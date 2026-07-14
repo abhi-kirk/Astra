@@ -12,8 +12,44 @@ import pytest
 from src import config
 from src.robinhood import (
     _enrich_num_buys,
+    _fetch_buying_power,
     _positions_to_portfolio,
 )
+
+
+class _Resp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload
+
+
+class TestFetchBuyingPower:
+    def test_reads_buying_power(self, monkeypatch):
+        monkeypatch.setattr("src.robinhood.requests.get",
+                            lambda *a, **k: _Resp({"results": [{"buying_power": "13785.57", "cash": "0"}]}))
+        assert _fetch_buying_power("tok") == pytest.approx(13785.57)
+
+    def test_falls_back_to_cash_fields(self, monkeypatch):
+        monkeypatch.setattr("src.robinhood.requests.get",
+                            lambda *a, **k: _Resp({"results": [{"buying_power": "", "portfolio_cash": "500.00"}]}))
+        assert _fetch_buying_power("tok") == pytest.approx(500.0)
+
+    def test_empty_results_returns_none(self, monkeypatch):
+        monkeypatch.setattr("src.robinhood.requests.get", lambda *a, **k: _Resp({"results": []}))
+        assert _fetch_buying_power("tok") is None
+
+    def test_request_error_returns_none(self, monkeypatch):
+        import requests
+
+        def _boom(*a, **k):
+            raise requests.RequestException("network down")
+        monkeypatch.setattr("src.robinhood.requests.get", _boom)
+        assert _fetch_buying_power("tok") is None
 
 # ---------------------------------------------------------------------------
 # _positions_to_portfolio

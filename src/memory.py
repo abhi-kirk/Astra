@@ -152,12 +152,14 @@ def save_conviction_history(content: dict) -> None:
     }).execute()
 
 
-def save_portfolio_snapshot(positions: dict) -> None:
-    """Write a portfolio snapshot (called after Robinhood MCP read)."""
+def save_portfolio_snapshot(positions: dict, buying_power: float | None = None) -> None:
+    """Write a portfolio snapshot (called after a Robinhood read). `buying_power` is the
+    Individual account's deployable cash — the Advisor's real sizing book."""
     get_client().table("portfolio_snapshots").insert({
         "snapshot_time": datetime.now().isoformat(),
         "source": "robinhood_mcp",
         "positions": positions,
+        "buying_power": buying_power,
     }).execute()
 
 
@@ -184,7 +186,8 @@ def log_paper_trade(
 ) -> int | None:
     """Log a virtual BUY trade when ASTRA issues a BUY signal.
 
-    Size = suggested_pct × config.paper.portfolio_size, capped at config.paper.max_position_pct.
+    Size = suggested_pct × the Advisor book (real Individual-account deployable cash, or the
+    configured fallback), capped at config.paper.max_position_pct of that book.
     Bounded pyramiding: if an open lot already exists, opens an *additional* lot (an add) only
     when under config.paper.max_adds_per_ticker and the newest lot is older than the cooldown;
     otherwise returns the existing lot's id (no-op). Over-concentration is already gated upstream
@@ -200,8 +203,10 @@ def log_paper_trade(
     if existing and not _may_add_paper_lot(existing, run_date):
         return existing[0].get("id")  # at add cap or within cooldown — return the open lot's id
 
+    from src.data_layer import get_advisor_book
+    book = get_advisor_book()  # real Individual-account deployable cash, or the configured fallback
     pct = suggested_pct or config.paper.default_position_pct
-    virtual_cost = min(pct * config.paper.portfolio_size, config.paper.max_position_pct * config.paper.portfolio_size)
+    virtual_cost = min(pct * book, config.paper.max_position_pct * book)
     virtual_shares = round(virtual_cost / price, 6) if price else 0
 
     result = db.table("paper_trades").insert({
@@ -215,7 +220,7 @@ def log_paper_trade(
         "signal_data": signal_data or {},
         "is_open": True,
     }).execute()
-    logger.info(f"Paper BUY  {ticker}: {virtual_shares:.4f} shares @ ${price:.2f}  (${virtual_cost:.0f} = {pct:.0%} of ${config.paper.portfolio_size:.0f})")
+    logger.info(f"Paper BUY  {ticker}: {virtual_shares:.4f} shares @ ${price:.2f}  (${virtual_cost:.0f} = {pct:.0%} of ${book:.0f})")
     data = db_rows(result.data)
     return data[0].get("id") if data else None
 
@@ -553,7 +558,7 @@ def get_pending_trade_feedback() -> Rows:
 
 def get_latest_portfolio_snapshot() -> dict | None:
     data = db_rows(
-        get_client().table("portfolio_snapshots").select("positions, snapshot_time")
+        get_client().table("portfolio_snapshots").select("positions, snapshot_time, buying_power")
         .order("snapshot_time", desc=True).limit(1).execute().data
     )
     return data[0] if data else None

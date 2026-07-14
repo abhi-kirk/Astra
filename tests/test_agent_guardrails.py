@@ -25,17 +25,13 @@ TUESDAY = datetime(2026, 7, 7, 10, 0)
 
 
 @pytest.fixture
-def base_kwargs(convictions, good_market_data, portfolio_summary):
-    """A clean, passing BUY for an approved ticker. Tests override single keys."""
+def base_kwargs(convictions):
+    """A clean, passing BUY. Tests override single keys."""
     return dict(
         ticker="RKLB",
         side="buy",
-        position={},
-        market_data=good_market_data,
         convictions=convictions,
-        portfolio_summary=portfolio_summary,
         trades_today=[],
-        open_position_tickers=set(),
         last_buy=None,
         drawdown_pct=0.0,
         settled_cash=10_000.0,
@@ -57,8 +53,7 @@ class TestPasses:
         res = run(base_kwargs)
         assert res.passed
         assert res.block_reason is None
-        assert res.checks["not_excluded"]
-        assert res.checks["max_trades_per_day"] and res.checks["hard_rules"]
+        assert res.checks["not_excluded"] and res.checks["max_trades_per_day"]
 
 
 # ---------------------------------------------------------------------------
@@ -104,31 +99,6 @@ class TestMaxTradesPerDay:
     def test_under_cap_allowed(self, base_kwargs, monkeypatch):
         monkeypatch.setattr(config.agent, "max_trades_per_day", 3)
         res = run(base_kwargs, trades_today=[{}, {}])
-        assert res.passed
-
-
-# ---------------------------------------------------------------------------
-# Max open positions
-# ---------------------------------------------------------------------------
-
-class TestMaxOpenPositions:
-    def test_new_position_at_cap_blocked(self, base_kwargs, monkeypatch):
-        monkeypatch.setattr(config.agent, "max_open_positions", 5)
-        five = {"A", "B", "C", "D", "E"}
-        res = run(base_kwargs, ticker="ASTS", open_position_tickers=five)
-        assert not res.passed
-        assert "MAX OPEN POSITIONS" in res.block_reason
-
-    def test_existing_position_not_blocked_by_cap(self, base_kwargs, monkeypatch):
-        monkeypatch.setattr(config.agent, "max_open_positions", 5)
-        # RKLB already open — adding to it is not opening a new position.
-        five = {"RKLB", "B", "C", "D", "E"}
-        res = run(base_kwargs, ticker="RKLB", open_position_tickers=five)
-        assert res.passed
-
-    def test_under_cap_allowed(self, base_kwargs, monkeypatch):
-        monkeypatch.setattr(config.agent, "max_open_positions", 5)
-        res = run(base_kwargs, ticker="ASTS", open_position_tickers={"RKLB", "NVDA"})
         assert res.passed
 
 
@@ -215,18 +185,6 @@ class TestDrawdownHalt:
         assert check_halt_state(-16.0)[0] is True
         assert check_halt_state(-14.9)[0] is False
         assert check_halt_state(None)[0] is False
-
-
-# ---------------------------------------------------------------------------
-# Shared hard rules reused from strategy.py
-# ---------------------------------------------------------------------------
-
-class TestSharedHardRules:
-    def test_do_not_add_blocked(self, base_kwargs):
-        res = run(base_kwargs, ticker="SPCE")  # space.do_not_add
-        assert not res.passed
-        assert "DO NOT ADD" in res.block_reason
-        assert res.checks["hard_rules"] is False
 
 
 # ---------------------------------------------------------------------------

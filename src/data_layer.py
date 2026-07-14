@@ -169,11 +169,25 @@ def get_portfolio() -> dict[str, dict]:
     return get_cost_basis_from_csv()
 
 
-def save_mcp_portfolio_snapshot(positions: dict):
-    """Called by Claude after reading Robinhood MCP. Persists to Supabase."""
+def save_mcp_portfolio_snapshot(positions: dict, buying_power: float | None = None):
+    """Called after reading Robinhood. Persists positions + deployable cash to Supabase."""
     from src.memory import save_portfolio_snapshot
-    save_portfolio_snapshot(positions)
-    logger.info(f"Saved portfolio snapshot to Supabase: {len(positions)} positions")
+    save_portfolio_snapshot(positions, buying_power)
+    logger.info(f"Saved portfolio snapshot to Supabase: {len(positions)} positions, buying_power={buying_power}")
+
+
+def get_advisor_book() -> float:
+    """The Advisor's real sizing book: the Individual account's latest deployable cash, or the
+    configured fallback when a live balance isn't on record yet. Paper positions are sized as a
+    fraction of this, so advice tracks the cash Abhi can actually deploy."""
+    from src.memory import get_latest_portfolio_snapshot
+    try:
+        snapshot = get_latest_portfolio_snapshot()
+        if snapshot and snapshot.get("buying_power"):
+            return float(snapshot["buying_power"])
+    except Exception:
+        pass
+    return config.paper.portfolio_size
 
 
 # ---------------------------------------------------------------------------

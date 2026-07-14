@@ -9,6 +9,11 @@ on:
     workflows: ["Daily Analysis"]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Review only — read the account and size orders, but never place"
+        type: boolean
+        default: false
 
 jobs:
   execute:
@@ -58,4 +63,9 @@ jobs:
           AGENT_RH_TOKEN_KEY: ${{ secrets.AGENT_RH_TOKEN_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python -m src.agent_executor
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            python -m src.agent_executor --dry-run
+          else
+            python -m src.agent_executor
+          fi
