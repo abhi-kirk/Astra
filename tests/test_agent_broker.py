@@ -124,6 +124,68 @@ class TestTokenStorage:
         assert asyncio.run(s.get_client_info()) is None
 
 
+class TestSupabaseTokenStorage:
+    """Durable persistence: Robinhood rotates the refresh token on every refresh, so a rotated
+    token must survive to the next headless run via Supabase (an ephemeral CI file cannot)."""
+
+    def _fake_table(self, store: dict):
+        """Minimal stand-in for the supabase client's fluent table API backed by `store`."""
+        class _Q:
+            def select(self, *a): return self
+            def eq(self, *a): return self
+            def single(self): return self
+            def execute(self):
+                return SimpleNamespace(data={"encrypted_blob": store["blob"]} if store.get("blob") else None)
+            def upsert(self, row):
+                store["blob"] = row["encrypted_blob"]
+                store["row_id"] = row["id"]
+                return self
+        class _Client:
+            def table(self, name): return _Q()
+        return _Client()
+
+    def test_write_persists_to_supabase_and_read_prefers_it(self, tmp_path, monkeypatch):
+        from mcp.shared.auth import OAuthToken
+
+        from src import agent_broker
+        store: dict = {}
+        monkeypatch.setattr("src.db.get_client", lambda: self._fake_table(store))
+
+        key = base64.b64encode(os.urandom(32)).decode()
+        path = str(tmp_path / "agent_tokens.enc")
+
+        s = agent_broker.SupabaseTokenStorage(path=path, key_b64=key)
+        asyncio.run(s.set_tokens(OAuthToken(access_token="rotated-AT", token_type="Bearer",
+                                            refresh_token="rotated-RT")))
+
+        # The rotated token was persisted to Supabase (row 2), encrypted at rest.
+        assert store["row_id"] == agent_broker._AGENT_TOKENS_ROW_ID
+        assert "rotated-RT" not in store["blob"]
+
+        # A fresh instance with NO local file still recovers the token from Supabase.
+        fresh = agent_broker.SupabaseTokenStorage(path=str(tmp_path / "absent.enc"), key_b64=key)
+        got = asyncio.run(fresh.get_tokens())
+        assert got is not None and got.refresh_token == "rotated-RT"
+
+    def test_falls_back_to_file_when_supabase_empty(self, tmp_path, monkeypatch):
+        from mcp.shared.auth import OAuthToken
+
+        from src import agent_broker
+        store: dict = {}  # empty Supabase
+        monkeypatch.setattr("src.db.get_client", lambda: self._fake_table(store))
+
+        key = base64.b64encode(os.urandom(32)).decode()
+        path = str(tmp_path / "seed.enc")
+        # Seed only the local file (simulates the first cloud run decoding the GitHub secret).
+        seed = agent_broker.EncryptedFileTokenStorage(path=path, key_b64=key)
+        asyncio.run(seed.set_tokens(OAuthToken(access_token="seed-AT", token_type="Bearer",
+                                               refresh_token="seed-RT")))
+        store.clear()  # ensure Supabase has nothing; only the file holds the seed
+
+        got = asyncio.run(agent_broker.SupabaseTokenStorage(path=path, key_b64=key).get_tokens())
+        assert got is not None and got.refresh_token == "seed-RT"
+
+
 class TestOAuthRedirectCapture:
     def test_ignores_preconnect_and_captures_code(self):
         import threading

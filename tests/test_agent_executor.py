@@ -214,6 +214,36 @@ def test_idempotent_skip_when_already_placed(wired, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Account-read failure (expired token) must be a LOUD abort, not a silent no-op
+# ---------------------------------------------------------------------------
+
+def test_account_read_failure_aborts_loudly(wired, monkeypatch):
+    """An unreadable agentic account (e.g. expired OAuth token) must set `aborted`, run
+    `_finalize` (Telegram alert + failed service health), and never look like success."""
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
+    finalized: list[dict] = []
+    monkeypatch.setattr(ex, "_finalize", lambda summary, *a, **k: finalized.append(summary))
+
+    from src.agent_broker import BrokerError
+
+    class DeadBroker(FakeBroker):
+        def get_portfolio(self):
+            raise BrokerError("OAuth flow error — token expired")
+
+    summary = ex.run(broker=DeadBroker(), run_date="2026-07-06T13:00:00", dry_run=False)
+    assert summary["aborted"] == "account_read_failed"
+    assert finalized and finalized[0] is summary  # alert path was exercised
+
+
+def test_notify_agent_alerts_on_abort(monkeypatch):
+    from src import notify
+    sent: list[str] = []
+    monkeypatch.setattr(notify, "send", lambda text: sent.append(text) or True)
+    assert notify.notify_agent({"aborted": "account_read_failed"}) is True
+    assert len(sent) == 1 and "bootstrap" in sent[0].lower()
+
+
+# ---------------------------------------------------------------------------
 # Mirror-source filters: close_reason + exploration
 # ---------------------------------------------------------------------------
 

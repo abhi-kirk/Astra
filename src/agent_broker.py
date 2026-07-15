@@ -99,6 +99,58 @@ class EncryptedFileTokenStorage:
         self._write()
 
 
+# robinhood_tokens.id — the individual/advisor account persists as row 1 (src/robinhood.py);
+# the agentic account is row 2. Reuses the existing, already-GRANTed table (no new schema).
+_AGENT_TOKENS_ROW_ID = 2
+
+
+class SupabaseTokenStorage(EncryptedFileTokenStorage):
+    """Token store that persists to Supabase (durable across headless runs), with the encrypted
+    file as a bootstrap-seed fallback.
+
+    Robinhood rotates the refresh token on *every* refresh (access tokens live 24h), so the
+    rotated token MUST survive to the next run. A GitHub-secret/CI-file-only store can't — the
+    file is discarded when the job ends, so every run replays the original bootstrap token until
+    Robinhood expires it (~days) and the Autotrader silently dies. Persisting each refresh to
+    Supabase keeps the chain alive indefinitely with no re-auth. Mirrors the individual-account
+    persistence in src/robinhood.py.
+    """
+
+    def _read(self) -> dict:
+        blob = self._read_supabase()
+        if blob is not None:
+            return blob
+        return super()._read()  # first run: seed from the decoded file / GitHub secret
+
+    def _write(self) -> None:
+        super()._write()          # keep the in-run file coherent
+        self._write_supabase()    # ...and persist durably so the next run sees the rotation
+
+    def _read_supabase(self) -> dict | None:
+        if not self._key:
+            return None
+        try:
+            from src.db import get_client
+            row = (get_client().table("robinhood_tokens").select("encrypted_blob")
+                   .eq("id", _AGENT_TOKENS_ROW_ID).single().execute())
+            data: dict = row.data  # type: ignore[assignment]
+            if data and data.get("encrypted_blob"):
+                return decrypt_json(data["encrypted_blob"], self._key)
+        except Exception:
+            logger.warning("Agentic token load from Supabase failed — falling back to file.", exc_info=True)
+        return None
+
+    def _write_supabase(self) -> None:
+        try:
+            from src.db import get_client
+            get_client().table("robinhood_tokens").upsert({
+                "id": _AGENT_TOKENS_ROW_ID,
+                "encrypted_blob": encrypt_json(self._cache, self._key),
+            }).execute()
+        except Exception:
+            logger.error("Agentic token persist to Supabase failed — next run may need re-auth.", exc_info=True)
+
+
 def _oauth_provider(storage=None, redirect_handler=None, callback_handler=None):
     """Build the SDK OAuth provider. With only `storage`, it refreshes headlessly using
     the stored refresh token; the handlers are supplied only for the interactive bootstrap."""
@@ -116,7 +168,7 @@ def _oauth_provider(storage=None, redirect_handler=None, callback_handler=None):
     return OAuthClientProvider(
         server_url=config.agent.rh_mcp_url,
         client_metadata=metadata,
-        storage=storage or EncryptedFileTokenStorage(),
+        storage=storage or SupabaseTokenStorage(),
         redirect_handler=redirect_handler,
         callback_handler=callback_handler,
     )
@@ -417,7 +469,9 @@ def _bootstrap() -> int:
     if stale.exists():
         stale.unlink()
 
-    storage = EncryptedFileTokenStorage(key_b64=key)
+    # Bootstrap writes to both the local file and Supabase, so the first cloud run reads the
+    # durable copy and every subsequent refresh persists there too.
+    storage = SupabaseTokenStorage(key_b64=key)
     asyncio.run(_abootstrap(storage))
 
     enc_b64 = base64.b64encode(Path(config.agent.rh_tokens_file).read_bytes()).decode()

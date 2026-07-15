@@ -120,6 +120,14 @@ def notify_agent(summary: dict) -> bool:
     blocked = summary.get("blocked") or []
     dry = summary.get("dry_run")
 
+    if summary.get("aborted") == "account_read_failed":
+        md = ("⚠️ **ASTRA Autotrader could not run** — the agentic Robinhood account couldn't be "
+              "read. Most likely the OAuth token expired; re-authorize with "
+              "`python -m src.agent_broker --bootstrap`. No trades until fixed.")
+        return send(markdownify(md))
+    if summary.get("aborted"):
+        md = f"⚠️ **ASTRA Autotrader could not run** — {summary['aborted']}. No trades this run."
+        return send(markdownify(md))
     if summary.get("halted"):
         md = "🛑 **ASTRA Autotrader HALTED** — drawdown limit breached. Autonomous trading stopped; manual reset required."
         return send(markdownify(md))

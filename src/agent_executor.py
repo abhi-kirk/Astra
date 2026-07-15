@@ -58,7 +58,7 @@ def _finalize(summary: dict, num_mirrors: int = 0) -> None:
             buy_count=sum(1 for o in placed if o.get("side") == "buy"),
             sell_count=sum(1 for o in placed if o.get("side") == "sell"),
         )
-        obs.record_service("robinhood_agentic", ok=not summary.get("halted"))
+        obs.record_service("robinhood_agentic", ok=not summary.get("halted") and not summary.get("aborted"))
         obs.flush()
     except Exception:
         logger.error("Autotrader observability failed — non-fatal", exc_info=True)
@@ -157,6 +157,8 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
     except BrokerError:
         logger.error("Could not read agentic account — aborting Autotrader run.", exc_info=True)
         summary["skipped"].append("account_read_failed")
+        summary["aborted"] = "account_read_failed"  # hard failure — alert + non-zero exit
+        _finalize(summary)
         return summary
 
     equity = port["total_equity"]
@@ -353,4 +355,7 @@ if __name__ == "__main__":
     parser.add_argument("--live", action="store_true", help="force live even if AGENT_TRADING_ENABLED is unset")
     args = parser.parse_args()
     forced = True if args.dry_run else (False if args.live else None)
-    run(dry_run=forced)
+    result = run(dry_run=forced)
+    if result.get("aborted"):
+        # Surface the failure to CI (non-zero exit) so a broken token doesn't read as success.
+        raise SystemExit(1)
