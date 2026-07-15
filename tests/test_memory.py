@@ -8,7 +8,7 @@ pollute the advisor's history context and any future outcome stats.
 
 from src import config
 from src.data_layer import get_advisor_book
-from src.memory import _may_add_paper_lot, should_log_decision
+from src.memory import _may_add_paper_lot, paper_buy_label, should_log_decision
 
 
 class TestAdvisorBook:
@@ -100,3 +100,51 @@ def test_unparseable_lot_timestamp_fails_safe(monkeypatch):
     monkeypatch.setattr(config.paper, "max_adds_per_ticker", 3)
     monkeypatch.setattr(config.paper, "add_cooldown_days", 5)
     assert _may_add_paper_lot(_lots("not-a-date"), NOW) is False
+
+
+# ---------------------------------------------------------------------------
+# Advisor-note BUY STATE label (paper_buy_label) — mirrors the pyramiding gate
+# ---------------------------------------------------------------------------
+
+def test_label_new_entry_when_no_open_lot(monkeypatch):
+    monkeypatch.setattr(config.paper, "max_adds_per_ticker", 3)
+    monkeypatch.setattr(config.paper, "add_cooldown_days", 5)
+    assert paper_buy_label([], NOW) == "NEW ENTRY"
+
+
+def test_label_add_when_cooldown_elapsed_under_cap(monkeypatch):
+    monkeypatch.setattr(config.paper, "max_adds_per_ticker", 3)
+    monkeypatch.setattr(config.paper, "add_cooldown_days", 5)
+    # one open lot, 6 days old → this run would open add #1
+    assert paper_buy_label(_lots("2026-06-30T13:00:00+00:00"), NOW) == "ADD 1 of 3"
+
+
+def test_label_cooldown_reports_days_left(monkeypatch):
+    monkeypatch.setattr(config.paper, "max_adds_per_ticker", 3)
+    monkeypatch.setattr(config.paper, "add_cooldown_days", 5)
+    # newest lot 2 days ago → 3 days left in the cooldown
+    assert paper_buy_label(_lots("2026-07-04T13:00:00+00:00"), NOW) == "IN COOLDOWN (3d left)"
+
+
+def test_label_at_add_cap(monkeypatch):
+    monkeypatch.setattr(config.paper, "max_adds_per_ticker", 2)
+    monkeypatch.setattr(config.paper, "add_cooldown_days", 5)
+    # initial + 2 adds = 3 open lots → capped, even though the oldest is well past cooldown
+    lots = _lots("2026-06-01T13:00:00+00:00", "2026-06-10T13:00:00+00:00", "2026-06-20T13:00:00+00:00")
+    assert paper_buy_label(lots, NOW) == "AT ADD CAP"
+
+
+def test_label_matches_gate_actionability(monkeypatch):
+    """The label is actionable (NEW ENTRY / ADD) iff _may_add_paper_lot would allow the add."""
+    monkeypatch.setattr(config.paper, "max_adds_per_ticker", 3)
+    monkeypatch.setattr(config.paper, "add_cooldown_days", 5)
+    for lots in (_lots("2026-06-30T13:00:00+00:00"), _lots("2026-07-04T13:00:00+00:00")):
+        actionable = paper_buy_label(lots, NOW).startswith(("NEW ENTRY", "ADD"))
+        assert actionable == _may_add_paper_lot(lots, NOW)
+
+
+def test_label_unparseable_timestamp_fails_safe(monkeypatch):
+    monkeypatch.setattr(config.paper, "max_adds_per_ticker", 3)
+    monkeypatch.setattr(config.paper, "add_cooldown_days", 5)
+    # unparseable → not presented as actionable (matches the gate's fail-safe no-add)
+    assert paper_buy_label(_lots("not-a-date"), NOW) == "AT ADD CAP"

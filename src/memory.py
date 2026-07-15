@@ -177,6 +177,59 @@ def _may_add_paper_lot(open_lots: list[dict], run_date: str) -> bool:
     return (now - prev).days >= config.paper.add_cooldown_days
 
 
+def _days_between(newest: str | None, run_date: str) -> int | None:
+    """Whole calendar days between `newest` and `run_date`, or None if unparseable."""
+    try:
+        prev = datetime.fromisoformat(str(newest).replace("Z", "+00:00")).replace(tzinfo=None)
+        now = datetime.fromisoformat(str(run_date).replace("Z", "+00:00")).replace(tzinfo=None)
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return (now - prev).days
+
+
+def paper_buy_label(open_lots: list[dict], run_date: str) -> str:
+    """Classify how *actionable* a BUY signal is, given the ticker's open paper lots.
+
+    A conviction name in an uptrend clears the buy threshold every run, but bounded pyramiding
+    (see `_may_add_paper_lot`) only lets it actually add every few days and caps total adds. This
+    labels the signal so the advisor note can tell a fresh/actionable buy from a still-qualifying
+    but throttled one. Pure — unit-testable. Mirrors the `_may_add_paper_lot` gate exactly.
+
+    Returns one of:
+      "NEW ENTRY"              — no open lot yet; a real first buy.
+      "ADD n of N"             — an open lot exists, cooldown elapsed → an add would execute now.
+      "AT ADD CAP"             — already at the initial lot + N adds; no further adds (informational).
+      "IN COOLDOWN (Md left)"  — under the cap but the newest lot is younger than the cooldown.
+    """
+    max_adds = config.paper.max_adds_per_ticker
+    cooldown = config.paper.add_cooldown_days
+    if not open_lots:
+        return "NEW ENTRY"
+    if len(open_lots) > max_adds:  # initial lot + N adds already open
+        return "AT ADD CAP"
+    days = _days_between(open_lots[0].get("run_date"), run_date)
+    if days is None:
+        return "AT ADD CAP"  # fail safe — matches _may_add_paper_lot returning no-add
+    if days >= cooldown:
+        return f"ADD {len(open_lots)} of {max_adds}"  # this run would open add #len(open_lots)
+    return f"IN COOLDOWN ({cooldown - days}d left)"
+
+
+def get_paper_buy_labels(tickers: list[str], run_date: str) -> dict[str, str]:
+    """Pyramiding-state label per ticker for the advisor note. One query for all names."""
+    if not tickers:
+        return {}
+    rows = db_rows(
+        get_client().table("paper_trades").select("ticker, run_date")
+        .in_("ticker", tickers).eq("is_open", True)
+        .order("run_date", desc=True).execute().data
+    )
+    lots_by_ticker: dict[str, list[dict]] = {}
+    for row in rows:
+        lots_by_ticker.setdefault(row["ticker"], []).append(row)
+    return {t: paper_buy_label(lots_by_ticker.get(t, []), run_date) for t in tickers}
+
+
 def log_paper_trade(
     ticker: str,
     price: float,

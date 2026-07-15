@@ -38,6 +38,7 @@ def call_claude_reasoning(
     market_data: dict,
     history_context: str,
     convictions: dict,
+    buy_labels: dict[str, str] | None = None,
 ) -> tuple[str, Any, list[dict[str, Any]]]:
     """
     Call Claude to synthesize mechanical signals into an advisor narrative.
@@ -48,6 +49,7 @@ def call_claude_reasoning(
     if not config.services.anthropic_api_key:
         return ("Claude API key not set — mechanical signals only.", None, [])
 
+    buy_labels = buy_labels or {}
     action_groups: dict[str, list] = {}
     for sig in signals:
         action_groups.setdefault(sig["action"], []).append(sig)
@@ -68,10 +70,15 @@ def call_claude_reasoning(
         if sig.get("source") == "exploration":
             theme = sig.get("source_theme") or "conviction theme"
             discovery_note = f"\n    NEW DISCOVERY (exploration) — {theme} theme, starter size, unproven"
+        # Pyramiding state — distinguishes an actionable buy (NEW ENTRY / ADD n of N) from a
+        # still-qualifying-but-throttled one (AT ADD CAP / IN COOLDOWN) so the note doesn't read
+        # a capped/cooling add as a fresh recommendation.
+        buy_state = buy_labels.get(sig["ticker"]) if sig["action"] == "buy" else None
+        state_note = f"\n    BUY STATE: {buy_state}" if buy_state else ""
         return (
             f"  {sig['ticker']}: price=${price:.2f}, avg_cost=${avg:.2f}, "
             f"unrealized={gain:+.0f}%, shares={pos.get('shares', 0):.1f}\n"
-            f"    Reasons: {reasons}{intent_note}{discovery_note}"
+            f"    Reasons: {reasons}{intent_note}{discovery_note}{state_note}"
         )
 
     signal_text = ""
@@ -240,6 +247,12 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
 
     history_context = memory.build_agent_context_summary()
 
+    # Pyramiding state per buy name, so the advisor note can tell a fresh/actionable buy from a
+    # still-qualifying-but-capped/cooling add (the buy signal itself fires every run in an uptrend).
+    buy_labels = memory.get_paper_buy_labels(
+        [s["ticker"] for s in signals if s["action"] == "buy"], run_date
+    )
+
     advisor_note = ""
     advisor_tool_log: list[dict[str, Any]] = []
     if use_ai and any(s["action"] in ("buy", "sell", "watch") for s in signals):
@@ -247,7 +260,7 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
         try:
             with obs.phase("advisor"):
                 advisor_note, advisor_usage, advisor_tool_log = call_claude_reasoning(
-                    signals, portfolio, market_data, history_context, convictions
+                    signals, portfolio, market_data, history_context, convictions, buy_labels
                 )
             obs.record_advisor(config.reasoning.model, advisor_usage)
             obs.record_service("anthropic", ok=bool(advisor_note))
