@@ -16,7 +16,7 @@ Market/fundamental data comes from yfinance (free, EOD).
 import logging
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -145,17 +145,26 @@ def get_portfolio() -> dict[str, dict]:
     from src.memory import get_latest_portfolio_snapshot
     try:
         snapshot = get_latest_portfolio_snapshot()
-        if snapshot:
-            ts  = datetime.fromisoformat(snapshot["snapshot_time"].replace("Z", ""))
-            age = datetime.now() - ts
+    except Exception:
+        logger.warning("Portfolio snapshot read failed — falling back to trades table.", exc_info=True)
+        snapshot = None
+
+    if snapshot:
+        # Age is best-effort logging only — a parse hiccup must never drop us to the ledger.
+        # snapshot_time comes back tz-aware ("…+00:00"), so compare against an aware now().
+        try:
+            ts = datetime.fromisoformat(snapshot["snapshot_time"].replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            age = datetime.now(timezone.utc) - ts
             if age > timedelta(hours=24):
                 logger.warning(
                     f"Portfolio snapshot is {age.days}d {age.seconds // 3600}h old — "
                     "using it anyway (trades-table avg_cost unreliable for split/restructured tickers)"
                 )
-            return snapshot["positions"]
-    except Exception:
-        pass
+        except Exception:
+            logger.warning("Could not determine portfolio snapshot age — using it anyway.", exc_info=True)
+        return snapshot["positions"]
 
     logger.warning(
         "No portfolio snapshot found — falling back to trades table. "
