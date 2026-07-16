@@ -42,6 +42,29 @@ class TestFormatMessage:
         msg = notify.format_message(["MSFT"], [], "")
         assert "No advisor note" in msg
 
+    def test_throttled_buys_split_out_of_buy_line(self):
+        # NVDA is at cap / cooling → it re-fires the buy screen but is not a fresh buy.
+        # It must not sit in the BUY line; it goes to the muted "on track" line instead.
+        labels = {"AMZN": "NEW ENTRY", "NVDA": "AT ADD CAP", "MSFT": "IN COOLDOWN (3d left)"}
+        msg = notify.format_message(["AMZN", "NVDA", "MSFT"], [], "note", buy_labels=labels)
+        buy_line = next(ln for ln in msg.splitlines() if "BUY" in ln)
+        assert "AMZN" in buy_line
+        assert "NVDA" not in buy_line and "MSFT" not in buy_line
+        assert "on track" in msg and "NVDA" in msg and "MSFT" in msg
+
+    def test_all_throttled_shows_none_in_buy_line(self):
+        labels = {"NVDA": "AT ADD CAP", "MSFT": "IN COOLDOWN (5d left)"}
+        msg = notify.format_message(["NVDA", "MSFT"], [], "note", buy_labels=labels)
+        buy_line = next(ln for ln in msg.splitlines() if "BUY" in ln)
+        assert "none" in buy_line
+
+    def test_add_eligible_stays_in_buy_line(self):
+        labels = {"NVDA": "ADD 2 of 3"}
+        msg = notify.format_message(["NVDA"], [], "note", buy_labels=labels)
+        buy_line = next(ln for ln in msg.splitlines() if "BUY" in ln)
+        assert "NVDA" in buy_line
+        assert "on track" not in msg
+
     def test_includes_dashboard_link(self):
         msg = notify.format_message([], [], "n")
         assert "abhi-kirk.github.io" in msg

@@ -271,6 +271,12 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
     buy_labels = memory.get_paper_buy_labels(
         [s["ticker"] for s in signals if s["action"] == "buy"], run_date
     )
+    # Stamp the state onto each buy signal so it flows through to the stored output (dashboard)
+    # and the Telegram tally alongside the advisor note — one source of truth for "is this
+    # actually a fresh/actionable buy, or a still-qualifying-but-throttled repeat".
+    for s in signals:
+        if s["action"] == "buy":
+            s["buy_state"] = buy_labels.get(s["ticker"])
 
     advisor_note = ""
     advisor_tool_log: list[dict[str, Any]] = []
@@ -428,6 +434,7 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
         sell_tickers=sell_tickers,
         advisor_note=advisor_note,
         mode=mode,
+        buy_labels=buy_labels,
     )
 
     # Outcome tracking: forward returns + trade journal detection

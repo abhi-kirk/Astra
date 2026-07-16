@@ -43,21 +43,43 @@ def _extract_gist(md: str, max_chars: int = _GIST_MAX) -> str:
     return ""
 
 
-def format_message(buy_tickers, sell_tickers, advisor_note, mode="simulation") -> str:
+def _actionable_buy(state: str | None) -> bool:
+    """A buy is fresh/actionable only as a NEW ENTRY or a cooldown-elapsed ADD.
+    IN COOLDOWN / AT ADD CAP names still clear the buy bar but are throttled — an
+    uptrending conviction name re-fires every run, so these are "on track, no action",
+    not fresh buys. Mirrors the advisor-note PRIORITY ACTIONS rule (paper_buy_label)."""
+    if not state:
+        return True  # unlabeled (e.g. AI-less path) → don't hide it
+    return state.startswith("NEW ENTRY") or state.startswith("ADD ")
+
+
+def format_message(buy_tickers, sell_tickers, advisor_note, mode="simulation", buy_labels=None) -> str:
     """Compose the run message as Markdown and convert it to Telegram MarkdownV2.
 
     No date/title line: the bot name ("ASTRA Signals") and Telegram's own timestamp
     already supply that, so that scarce banner space goes to the advisor note instead.
     Buy/sell use 🟢/🔴 — Telegram text can't be colored, so a colored emoji is the only
     way to carry the green/red cue (arrow/chart emoji are monochrome or mis-colored).
+
+    `buy_labels` (ticker → pyramiding state) splits the BUY line into genuinely actionable
+    buys and still-qualifying-but-throttled repeats, so a conviction name in an uptrend
+    stops reading as a fresh buy every single day.
     """
-    buys = ", ".join(buy_tickers) if buy_tickers else "none"
+    buy_labels = buy_labels or {}
+    actionable = [t for t in buy_tickers if _actionable_buy(buy_labels.get(t))]
+    on_track = [t for t in buy_tickers if not _actionable_buy(buy_labels.get(t))]
+    buys = ", ".join(actionable) if actionable else "none"
     sells = ", ".join(sell_tickers) if sell_tickers else "none"
 
     head = []
     if mode and mode != "simulation":
         head.append(f"_mode: {mode}_")
     head += [f"🟢 **BUY:** {buys}", f"🔴 **SELL:** {sells}"]
+    if on_track:
+        # Muted line: these are held conviction names still passing the buy screen but
+        # throttled by pyramiding (recent add / at cap) — surfaced so their absence from BUY
+        # doesn't read as "dropped", but clearly not a fresh action.
+        head.append(f"⏸️ _on track (no action): {', '.join(on_track)}_")
     header = "\n".join(head)
     footer = f"[Open dashboard →]({DASHBOARD_URL})"
 
@@ -105,9 +127,9 @@ def send(text: str) -> bool:
         return False
 
 
-def notify_run(buy_tickers, sell_tickers, advisor_note, mode="simulation") -> bool:
+def notify_run(buy_tickers, sell_tickers, advisor_note, mode="simulation", buy_labels=None) -> bool:
     """Format and send the daily run notification."""
-    return send(format_message(buy_tickers, sell_tickers, advisor_note, mode))
+    return send(format_message(buy_tickers, sell_tickers, advisor_note, mode, buy_labels))
 
 
 def notify_agent(summary: dict) -> bool:

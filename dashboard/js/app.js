@@ -2094,10 +2094,27 @@ async function init() {
     const byAction = {};
     signals.forEach(s => { (byAction[s.action] = byAction[s.action] || []).push(s); });
 
+    // A buy is only fresh/actionable as a NEW ENTRY or a cooldown-elapsed ADD; IN COOLDOWN /
+    // AT ADD CAP names still clear the buy bar but are throttled by pyramiding (mirrors
+    // notify._actionable_buy + the advisor-note rule) — an uptrending conviction name re-fires
+    // every run, so those aren't a fresh buy today.
+    function buyThrottled(sig) {
+      const st = sig.buy_state;
+      return !!st && !(st.startsWith('NEW ENTRY') || st.startsWith('ADD '));
+    }
+
     function signalBadge(action, sig) {
-      if (action === 'buy' && sig.suggested_position_pct) {
-        const pct = (sig.suggested_position_pct * 100).toFixed(0);
-        return `<span class="summary-signal-badge buy-size">${pct}%</span>`;
+      if (action === 'buy') {
+        let html = '';
+        if (sig.suggested_position_pct) {
+          const pct = (sig.suggested_position_pct * 100).toFixed(0);
+          html += `<span class="summary-signal-badge buy-size">${pct}%</span>`;
+        }
+        if (sig.buy_state) {
+          const cls = buyThrottled(sig) ? 'buy-state-throttled' : 'buy-state-active';
+          html += `<span class="summary-signal-badge buy-state ${cls}">${sig.buy_state}</span>`;
+        }
+        return html;
       }
       if (action === 'sell' && sig.reasons?.length) {
         const m = sig.reasons[0].match(/Up (\d+)%/);
@@ -2120,7 +2137,7 @@ async function init() {
           <span class="summary-action-label ${r.action}">${r.label}</span>
           <span class="summary-tickers">${r.sigs.length
             ? r.sigs.map(s =>
-                `<span class="summary-ticker-unit"><span class="ticker-link-plain" data-ticker="${s.ticker}">${s.ticker}</span>${signalBadge(r.action, s)}</span>`
+                `<span class="summary-ticker-unit${r.action === 'buy' && buyThrottled(s) ? ' buy-throttled' : ''}"><span class="ticker-link-plain" data-ticker="${s.ticker}">${s.ticker}</span>${signalBadge(r.action, s)}</span>`
               ).join('<span class="summary-sep"> · </span>')
             : '<span class="summary-empty">—</span>'}</span>
         </div>`).join('')
