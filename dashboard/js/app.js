@@ -430,6 +430,7 @@ function renderAutotrader(sb, control, trades, snapshot) {
         toggle.disabled = false;
         return;
       }
+      logUserAction(next ? 'autotrader_pause' : 'autotrader_resume', null, { paused: next });
       renderAutotrader(sb, { ...control, paused: next }, trades, snapshot);
     });
   }
@@ -1132,6 +1133,13 @@ async function doSaveConvictions() {
       .update({ content: _convs, updated_at: new Date().toISOString(), updated_by: 'dashboard' })
       .eq('id', _convRowId);
     if (error) throw error;
+    // Historize the edit like the Python save path (conviction_history) + log the event.
+    _sb.from('conviction_history')
+      .insert({ content: _convs, saved_at: new Date().toISOString() })
+      .then(({ error: histErr }) => {
+        if (histErr) console.error('conviction_history append failed:', histErr.message);
+      });
+    logUserAction('conviction_edit', null, {});
     setSaveStatus('saved', '● Saved just now');
     setTimeout(() => setSaveStatus('', ''), 3000);
     // Rebuild swim lanes from updated convictions
@@ -1559,6 +1567,25 @@ function initConvictionsDrawer() {
   });
 }
 
+// ── Human-action event log (user_actions) ─────────────────────
+// Append-only timeline of the owner's control/feedback actions (pause/resume, ratings,
+// journal feedback, conviction edits, exploration rejects) — captured as events for future
+// ML training, not just as state overwrites. Non-fatal: a logging failure must never block
+// the underlying action. Uses whichever authenticated client is available.
+async function logUserAction(actionType, target, payload) {
+  const client = _journalSb || _sb;
+  if (!client) return;
+  try {
+    await client.from('user_actions').insert({
+      action_type: actionType,
+      target: target ?? null,
+      payload: payload ?? {},
+    });
+  } catch (err) {
+    console.error('user_actions log failed:', err?.message || err);
+  }
+}
+
 // ── Trade Journal Drawer ──────────────────────────────────────
 
 let _journalSb = null;
@@ -1731,6 +1758,11 @@ async function submitTradeJournalEntry(item, fromAstra, reason, card) {
         .eq('id', item.astra_signal_id);
     }
 
+    logUserAction('trade_feedback', item.ticker, {
+      from_astra: fromAstra, reason: reason || null,
+      trade_id: item.id, astra_signal_id: item.astra_signal_id ?? null,
+    });
+
     // Animate card out
     card.style.transition = 'opacity 0.25s, transform 0.25s';
     card.style.opacity = '0';
@@ -1788,6 +1820,7 @@ function initAdvisorRating(sb, runSummaryId, existingRating) {
     upBtn.disabled = true; downBtn.disabled = true;
     try {
       await sb.from('run_summaries').update({ advisor_rating: rating }).eq('id', runSummaryId);
+      logUserAction('advisor_rating', String(runSummaryId), { rating });
       upBtn.classList.add('hidden');
       downBtn.classList.add('hidden');
       doneEl.classList.remove('hidden');
@@ -1907,6 +1940,7 @@ function renderOnRadar(candidates, sb) {
           .update({ status: 'rejected', updated_at: new Date().toISOString() })
           .eq('ticker', ticker);
         if (!error) {
+          logUserAction('exploration_reject', ticker, {});
           btn.closest('.radar-card').remove();
           const remaining = section.querySelectorAll('.radar-card');
           if (!remaining.length) section.classList.add('hidden');

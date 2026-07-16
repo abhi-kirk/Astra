@@ -44,8 +44,14 @@ _PLACED_STATES = ("pending", "submitted", "filled")
 _MIRRORED_CLOSE_REASONS = ("profit_take", "signal_inactive", "thesis_invalidation", "trailing_stop")
 
 
-def _finalize(summary: dict, num_mirrors: int = 0) -> None:
-    """Non-fatal side effects at run exit: Telegram alert + observability metrics."""
+def _finalize(summary: dict, num_mirrors: int = 0, sleeve: dict | None = None) -> None:
+    """Non-fatal side effects at run exit: persist the run + Telegram alert + observability."""
+    try:
+        # Persist the full run (placed/blocked/skipped+reasons/failed/halted/aborted) + sleeve
+        # allocation math — previously this only reached Telegram/logs and was discarded.
+        memory.log_agent_run(summary, sleeve, run_date=summary.get("run_date"))
+    except Exception:
+        logger.error("Autotrader run persistence failed — non-fatal", exc_info=True)
     try:
         notify.notify_agent(summary)
     except Exception:
@@ -205,7 +211,18 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
         m for m in mirrors
         if m["side"] == "buy" and not _already_handled(trades_today, m["ticker"], "buy")
     ]
-    _allocate_buys(pending_buys, _sleeve_budget(port["buying_power"], equity), buy_slots)
+    sleeve_budget = _sleeve_budget(port["buying_power"], equity)
+    _allocate_buys(pending_buys, sleeve_budget, buy_slots)
+    sleeve = {
+        "budget": sleeve_budget,
+        "buy_slots": buy_slots,
+        "buying_power": port["buying_power"],
+        "equity": equity,
+        "allocations": [
+            {"ticker": m["ticker"], "weight": m.get("weight"), "dollars": m.get("dollars")}
+            for m in pending_buys
+        ],
+    }
 
     for m in mirrors:
         ticker, side = m["ticker"], m["side"]
@@ -253,7 +270,7 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
 
     logger.info("Autotrader run complete — placed=%d blocked=%d failed=%d skipped=%d dry_run=%s",
                 len(summary["placed"]), len(summary["blocked"]), len(summary["failed"]), len(summary["skipped"]), dry_run)
-    _finalize(summary, num_mirrors=len(mirrors))
+    _finalize(summary, num_mirrors=len(mirrors), sleeve=sleeve)
     return summary
 
 

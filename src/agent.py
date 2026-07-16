@@ -245,6 +245,25 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
     market_data.update(explore_md)   # so the note + logging can price exploration names
     signals.extend(explore_signals)
 
+    # ML data capture: one decision_features row per screened ticker (incl. hold/blocked) with
+    # the full feature vector + recomputed pillar/composite/conviction/regime/sizing internals —
+    # the numeric "why" the decision path otherwise discards. Logging only; never fatal.
+    with obs.phase("decision_features"):
+        try:
+            from src.brain.conviction import get_ticker_guidance
+            from src.brain.snapshot import build_snapshot
+            snapshot_rows = [
+                build_snapshot(
+                    s["ticker"], market_data.get(s["ticker"], {}),
+                    get_ticker_guidance(s["ticker"], convictions), s,
+                    held=bool(portfolio.get(s["ticker"], {}).get("shares")),
+                )
+                for s in signals
+            ]
+            memory.log_decision_features(snapshot_rows, run_date=run_date)
+        except Exception:
+            logger.error("Decision-features capture failed — pipeline continues", exc_info=True)
+
     history_context = memory.build_agent_context_summary()
 
     # Pyramiding state per buy name, so the advisor note can tell a fresh/actionable buy from a

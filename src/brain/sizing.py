@@ -19,7 +19,9 @@ from src.brain import params
 from src.brain.normalize import clamp
 
 
-def _vol_scalar(md: dict) -> float:
+def vol_scalar(md: dict) -> float:
+    """Volatility scalar — higher-vol names size smaller. Public so the decision-features
+    snapshot (src/brain/snapshot.py) can log it without recomputing the formula."""
     atr = md.get("atr_14")
     price = md.get("current_price")
     if not atr or not price or price <= 0:
@@ -32,7 +34,7 @@ def _vol_scalar(md: dict) -> float:
 
 def target_weight(score_buy: float, md: dict) -> float:
     """Raw per-name target as a fraction of the full portfolio (pre-allocation)."""
-    w = params.F_GLOBAL * score_buy * _vol_scalar(md)
+    w = params.F_GLOBAL * score_buy * vol_scalar(md)
     if w <= 0:
         return 0.0
     return clamp(w, params.SIZE_MIN_PCT, params.SIZE_MAX_PCT)

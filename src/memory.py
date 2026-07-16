@@ -565,6 +565,46 @@ def set_agent_baseline(equity: float) -> None:
 
 
 # ---------------------------------------------------------------------------
+# ML data capture (decision_features / user_orders / agent_runs)
+# ---------------------------------------------------------------------------
+
+def log_decision_features(rows: list[dict], run_date: str | None = None) -> None:
+    """Append one decision_features row per screened ticker (the ML training substrate).
+
+    Rows come from src.brain.snapshot.build_snapshot — no dedup, includes hold/blocked so
+    negative examples are captured. `run_date` is stamped onto each row here. One bulk insert.
+    """
+    if not rows:
+        return
+    run_date = run_date or datetime.now().isoformat()
+    payload = [{**r, "run_date": run_date} for r in rows]
+    get_client().table("decision_features").insert(payload).execute()
+    logger.info(f"Logged {len(payload)} decision-feature snapshot(s)")
+
+
+def upsert_user_orders(rows: list[dict]) -> None:
+    """Idempotently persist Abhi's real Robinhood fills (ground truth). Keyed on order_id,
+    so re-runs never duplicate. Rows come from robinhood.fetch_recent_orders."""
+    if not rows:
+        return
+    get_client().table("user_orders").upsert(
+        rows, on_conflict="order_id", ignore_duplicates=True
+    ).execute()
+    logger.info(f"Upserted {len(rows)} user order(s)")
+
+
+def log_agent_run(summary: dict, sleeve: dict | None = None, run_date: str | None = None) -> None:
+    """Persist one Autotrader run: the full summary (placed/blocked/skipped+reasons/failed/
+    halted/aborted) + sleeve allocation math that previously only reached Telegram/logs."""
+    get_client().table("agent_runs").insert({
+        "run_date": run_date or datetime.now().isoformat(),
+        "dry_run": bool(summary.get("dry_run")),
+        "summary": summary,
+        "sleeve": sleeve or {},
+    }).execute()
+
+
+# ---------------------------------------------------------------------------
 # Read
 # ---------------------------------------------------------------------------
 
