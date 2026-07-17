@@ -163,6 +163,40 @@ def save_portfolio_snapshot(positions: dict, buying_power: float | None = None) 
     }).execute()
 
 
+def save_paper_equity_snapshot(row: dict) -> None:
+    """Persist one forward-only snapshot of the notional paper book (see src/performance.py).
+    `holdings` carries the notional lot ledger forward for the next run's reconciliation."""
+    get_client().table("paper_equity").insert({
+        "snapshot_time":    row.get("snapshot_time") or datetime.now().isoformat(),
+        "cash":             row.get("cash"),
+        "market_value":     row.get("market_value"),
+        "total_equity":     row.get("total_equity"),
+        "invested_cost":    row.get("invested_cost"),
+        "unrealized_pnl":   row.get("unrealized_pnl"),
+        "realized_pnl_cum": row.get("realized_pnl_cum"),
+        "nav_index":        row.get("nav_index"),
+        "holdings":         row.get("holdings"),
+    }).execute()
+
+
+def get_latest_paper_equity() -> dict | None:
+    """Most recent paper-book snapshot — the carried cash / holdings / NAV for the next run."""
+    data = db_rows(
+        get_client().table("paper_equity").select("*")
+        .order("snapshot_time", desc=True).limit(1).execute().data
+    )
+    return data[0] if data else None
+
+
+def upsert_benchmark_price(symbol: str, price_date: str, close: float) -> None:
+    """Idempotent daily benchmark close (one row per symbol+date)."""
+    get_client().table("benchmark_prices").upsert({
+        "symbol":     symbol,
+        "price_date": price_date,
+        "close":      close,
+    }, on_conflict="symbol,price_date").execute()
+
+
 def _may_add_paper_lot(open_lots: list[dict], run_date: str) -> bool:
     """Bounded-pyramiding gate: True if an additional paper lot may open now — under the
     max-adds cap AND the newest existing lot is older than the add cooldown. Pure/testable."""
@@ -527,6 +561,7 @@ def save_agent_account_snapshot(snapshot: dict) -> None:
         "unrealized_pnl":      snapshot.get("unrealized_pnl"),
         "net_pnl":             snapshot.get("net_pnl"),
         "invested_cost_basis": snapshot.get("invested_cost_basis"),
+        "nav_index":           snapshot.get("nav_index"),
     }).execute()
 
 

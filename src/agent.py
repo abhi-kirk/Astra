@@ -21,9 +21,9 @@ from typing import Any
 
 import chevron
 
-from src import config, mcp, mcp_loop, memory
+from src import config, mcp, mcp_loop, memory, performance
 from src.brain.conviction import buyable_tickers
-from src.data_layer import get_market_data_bulk, get_portfolio, load_convictions
+from src.data_layer import get_market_data, get_market_data_bulk, get_portfolio, load_convictions
 from src.strategy import screen_all_positions
 from src.timeout import run_with_timeout
 
@@ -164,6 +164,46 @@ def build_public_output(output: dict) -> dict:
         "signals": public_signals,
         "market_data_snapshot": output.get("market_data_snapshot", {}),
     }
+
+
+def _capture_performance_series(market_data: dict, run_date: str) -> None:
+    """End-of-run side effect: snapshot the clean paper book (marked to market) and ingest
+    today's SPY close, feeding the dashboard's performance-vs-S&P charts. Forward-only; never
+    fatal (a chart snapshot must not fail a run). Runs post-trade, so open lots reflect today."""
+    nav0 = config.paper.portfolio_size
+    try:
+        prev = memory.get_latest_paper_equity()
+        prev_holdings = (prev.get("holdings") if prev else None) or []
+        prev_cash = float(prev["cash"]) if prev and prev.get("cash") is not None else nav0
+        prev_realized = float(prev["realized_pnl_cum"]) if prev and prev.get("realized_pnl_cum") is not None else 0.0
+
+        open_lots = memory.get_open_paper_trades()
+        prices = {t: d["current_price"] for t, d in market_data.items() if d.get("current_price")}
+        book = performance.reconcile_notional_book(
+            prev_holdings, open_lots, prev_cash, prices, nav0,
+            config.paper.max_position_pct, config.paper.default_position_pct,
+        )
+        total_equity = book["cash"] + book["market_value"]
+        memory.save_paper_equity_snapshot({
+            "snapshot_time":    run_date,
+            "cash":             round(book["cash"], 4),
+            "market_value":     round(book["market_value"], 4),
+            "total_equity":     round(total_equity, 4),
+            "invested_cost":    round(book["invested_cost"], 4),
+            "unrealized_pnl":   round(book["unrealized"], 4),
+            "realized_pnl_cum": round(prev_realized + book["realized_delta"], 4),
+            "nav_index":        round(total_equity / nav0 * 100, 6),
+            "holdings":         book["holdings"],
+        })
+    except Exception:
+        logger.error("Paper-equity snapshot failed — pipeline continues", exc_info=True)
+
+    try:
+        spy = get_market_data("SPY").get("current_price")
+        if spy:
+            memory.upsert_benchmark_price("SPY", run_date[:10], float(spy))
+    except Exception:
+        logger.error("Benchmark (SPY) ingestion failed — pipeline continues", exc_info=True)
 
 
 def run(mode: str = "simulation", single_ticker: str | None = None, use_ai: bool = True):
@@ -426,6 +466,8 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
         public_output=build_public_output(output),
         run_date=run_date,
     )
+
+    _capture_performance_series(market_data, run_date)
 
     # Push the tally + advisor note to Telegram (no-op if unconfigured; never fatal)
     from src import notify

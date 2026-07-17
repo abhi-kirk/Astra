@@ -6,7 +6,9 @@ weekly, not on every daily run — otherwise `decisions` fills with duplicates t
 pollute the advisor's history context and any future outcome stats.
 """
 
-from src import config
+from unittest.mock import MagicMock, patch
+
+from src import config, memory
 from src.data_layer import get_advisor_book
 from src.memory import _may_add_paper_lot, paper_buy_label, should_log_decision
 
@@ -148,3 +150,28 @@ def test_label_unparseable_timestamp_fails_safe(monkeypatch):
     monkeypatch.setattr(config.paper, "add_cooldown_days", 5)
     # unparseable → not presented as actionable (matches the gate's fail-safe no-add)
     assert paper_buy_label(_lots("not-a-date"), NOW) == "AT ADD CAP"
+
+
+class TestPerformanceWriters:
+    def test_save_paper_equity_snapshot_inserts_payload(self):
+        client = MagicMock()
+        with patch.object(memory, "get_client", return_value=client):
+            memory.save_paper_equity_snapshot({
+                "snapshot_time": "2026-07-17T13:00:00+00:00",
+                "cash": 9600.0, "market_value": 440.0, "total_equity": 10040.0,
+                "nav_index": 100.4, "holdings": [{"lot_id": 1}],
+            })
+        assert client.table.call_args_list[0].args[0] == "paper_equity"
+        payload = client.table.return_value.insert.call_args.args[0]
+        assert payload["nav_index"] == 100.4
+        assert payload["total_equity"] == 10040.0
+        assert payload["holdings"] == [{"lot_id": 1}]
+
+    def test_upsert_benchmark_price_is_idempotent_on_symbol_date(self):
+        client = MagicMock()
+        with patch.object(memory, "get_client", return_value=client):
+            memory.upsert_benchmark_price("SPY", "2026-07-17", 585.12)
+        assert client.table.call_args_list[0].args[0] == "benchmark_prices"
+        upsert = client.table.return_value.upsert
+        assert upsert.call_args.args[0] == {"symbol": "SPY", "price_date": "2026-07-17", "close": 585.12}
+        assert upsert.call_args.kwargs["on_conflict"] == "symbol,price_date"

@@ -20,7 +20,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from src import config, memory, notify
+from src import config, memory, notify, performance
 from src.agent_broker import (
     AgenticBroker,
     BrokerError,
@@ -196,12 +196,25 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
     capital_base = round(equity - net_pnl, 4)
     drawdown = _pnl_drawdown_pct(net_pnl, capital_base)
 
+    # Time-weighted-return index (linked Modified Dietz): deposits/withdrawals since the last
+    # snapshot are the change in capital_base (net contributed capital), so funding never fakes
+    # a return move. Seeds at 100 on the first snapshot.
+    prev = memory.get_latest_agent_snapshot()
+    if prev is not None:
+        prev_equity = float(prev["total_equity"])
+        prev_capital_base = prev_equity - float(prev.get("net_pnl") or 0.0)
+        net_flow = capital_base - prev_capital_base
+        r = performance.dietz_return(prev_equity, equity, net_flow)
+        nav_index = round(performance.chain_nav(float(prev.get("nav_index") or 100.0), r), 6)
+    else:
+        nav_index = 100.0
+
     memory.save_agent_account_snapshot({
         "cash": port["cash"], "buying_power": port["buying_power"],
         "market_value": port["equity_value"], "total_equity": equity,
         "positions": positions, "drawdown_pct": drawdown,
         "realized_pnl": realized, "unrealized_pnl": unrealized, "net_pnl": net_pnl,
-        "invested_cost_basis": invested,
+        "invested_cost_basis": invested, "nav_index": nav_index,
     })
 
     if drawdown is not None and drawdown <= config.agent.drawdown_halt_pct:
