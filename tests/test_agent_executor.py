@@ -72,12 +72,14 @@ def wired(monkeypatch, convictions):
         "closed": [],
         "today": [],
         "last_buy": None,
+        "prev_snapshot": None,
     }
     monkeypatch.setattr(memory, "get_agent_control", lambda: state["control"])
     monkeypatch.setattr(memory, "get_paper_trades_opened_on", lambda d: state["opened"])
     monkeypatch.setattr(memory, "get_paper_trades_closed_on", lambda d: state["closed"])
     monkeypatch.setattr(memory, "get_agent_trades_today", lambda d: state["today"])
     monkeypatch.setattr(memory, "get_last_agent_buy", lambda t: state["last_buy"])
+    monkeypatch.setattr(memory, "get_latest_agent_snapshot", lambda: state["prev_snapshot"])
     monkeypatch.setattr(memory, "save_agent_account_snapshot", lambda s: None)
 
     def _halt(h, r=None):
