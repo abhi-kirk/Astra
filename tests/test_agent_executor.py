@@ -13,9 +13,20 @@ from src import config, memory
 
 
 class FakeBroker:
-    def __init__(self, equity=1000.0, positions=None, quote=None):
+    def __init__(self, equity=1000.0, positions=None, quote=None,
+                 equity_value=None, cash=None, realized=0.0):
         self.equity = equity
         self._positions = positions if positions is not None else {"positions": []}
+        # Default equity_value = cost basis of any open positions (i.e. breakeven, P&L-neutral),
+        # so position-bearing tests don't accidentally trip the P&L drawdown halt.
+        if equity_value is None:
+            equity_value = sum(
+                float(p.get("quantity") or 0) * float(p.get("average_buy_price") or p.get("average_cost") or 0)
+                for p in (self._positions.get("positions") or [])
+            )
+        self._equity_value = equity_value
+        self._cash = cash if cash is not None else equity
+        self._realized = realized
         self._quote = quote or {"ask_price": 100.0, "bid_price": 99.0, "last_trade_price": 99.5}
         self.reviews: list[dict] = []
         self.places: list[dict] = []
@@ -23,10 +34,14 @@ class FakeBroker:
 
     def get_portfolio(self):
         self.portfolio_reads += 1
-        return {"total_equity": self.equity, "buying_power": self.equity, "cash": self.equity}
+        return {"total_value": self.equity, "equity_value": self._equity_value,
+                "buying_power": self._cash, "cash": self._cash}
 
     def get_positions(self):
         return self._positions
+
+    def get_realized_pnl(self):
+        return {"total_returns": str(self._realized)}
 
     def get_quote(self, symbol):
         return self._quote
@@ -50,7 +65,7 @@ class FakeBroker:
 def wired(monkeypatch, convictions):
     """Monkeypatch every Supabase writer/reader the executor touches. Returns (state, logs)."""
     logs: list[dict] = []
-    control = {"paused": False, "halted": False, "baseline_equity": None, "halt_reason": None}
+    control = {"paused": False, "halted": False, "halt_reason": None}
     state = {
         "control": control,
         "opened": [{"id": 11, "ticker": "RKLB", "action": "buy", "suggested_position_pct": 0.06}],
@@ -64,7 +79,6 @@ def wired(monkeypatch, convictions):
     monkeypatch.setattr(memory, "get_agent_trades_today", lambda d: state["today"])
     monkeypatch.setattr(memory, "get_last_agent_buy", lambda t: state["last_buy"])
     monkeypatch.setattr(memory, "save_agent_account_snapshot", lambda s: None)
-    monkeypatch.setattr(memory, "set_agent_baseline", lambda e: control.__setitem__("baseline_equity", e))
 
     def _halt(h, r=None):
         control["halted"] = h
@@ -179,11 +193,39 @@ def test_drawdown_breach_halts_before_orders(wired, monkeypatch):
     monkeypatch.setattr(config.agent, "trading_enabled", True)
     monkeypatch.setattr(config.agent, "drawdown_halt_pct", -15.0)
     state, _ = wired
-    state["control"]["baseline_equity"] = 1000.0
-    fb = FakeBroker(equity=800.0)  # -20% drawdown
+    # $1000 cost basis, now worth $800 → unrealized −$200 = −20% of deployed capital.
+    positions = {"positions": [{"symbol": "AMZN", "quantity": "10", "average_buy_price": "100"}]}
+    fb = FakeBroker(equity=800.0, equity_value=800.0, cash=0.0, positions=positions)
     summary = ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
     assert summary["halted"] is True
     assert fb.places == []
+    assert state["control"]["halted"] is True
+
+
+def test_deposit_does_not_false_trigger_halt(wired, monkeypatch):
+    """A cash deposit inflates equity but not P&L — the halt must NOT fire (the whole point
+    of the P&L-based metric). Positions are flat (+0), plus $5000 of idle deposited cash."""
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
+    monkeypatch.setattr(config.agent, "drawdown_halt_pct", -15.0)
+    state, _ = wired
+    positions = {"positions": [{"symbol": "AMZN", "quantity": "10", "average_buy_price": "100"}]}
+    # equity_value == cost basis ($1000, flat), + $5000 deposited cash sitting idle.
+    fb = FakeBroker(equity=6000.0, equity_value=1000.0, cash=5000.0, positions=positions)
+    summary = ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
+    assert summary["halted"] is False
+    assert state["control"]["halted"] is False
+
+
+def test_realized_loss_counts_after_positions_closed(wired, monkeypatch):
+    """Realized losses still halt when flat: capital_base = total_equity − net_pnl
+    reconstructs the contributed $1000 from $800 cash + $200 realized loss (no stored baseline)."""
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
+    monkeypatch.setattr(config.agent, "drawdown_halt_pct", -15.0)
+    state, _ = wired
+    # Now flat (no positions), but −$200 realized on prior closes → −20% of contributed capital.
+    fb = FakeBroker(equity=800.0, equity_value=0.0, cash=800.0, realized=-200.0)
+    summary = ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
+    assert summary["halted"] is True
     assert state["control"]["halted"] is True
 
 

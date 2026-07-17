@@ -272,6 +272,13 @@ class AgenticBroker:
     def get_orders(self, **filters) -> Any:
         return self.call("get_equity_orders", {"account_number": self.account_number(), **filters})
 
+    def get_realized_pnl(self) -> Any:
+        """All-time realized P&L for the agentic account (equities). Feeds the P&L-based
+        drawdown halt. asset_classes is required by the endpoint; the sleeve is equities-only."""
+        return self.call("get_realized_pnl", {
+            "account_number": self.account_number(), "span": "all", "asset_classes": ["equity"],
+        })
+
     # -- writes (execution) ---------------------------------------------
     def review_order(self, **params) -> Any:
         return self.call("review_equity_order", {"account_number": self.account_number(), **params})
@@ -315,10 +322,18 @@ def extract_portfolio(portfolio_result: Any) -> dict[str, float]:
     else:
         buying_power = _num("buying_power", "cash_available_for_trading")
     cash = _num("cash", "settled_cash", "uncleared_deposits")
+    total_equity = equity if equity is not None else 0.0
+    cash_val = cash if cash is not None else (buying_power or 0.0)
+    # Market value of open stock only (excludes cash) — the unrealized-P&L input. RH exposes it
+    # directly as `equity_value`; fall back to total_equity − cash for an equities-only account.
+    equity_value = _num("equity_value", "market_value")
+    if equity_value is None:
+        equity_value = max(total_equity - cash_val, 0.0)
     return {
-        "total_equity": equity if equity is not None else 0.0,
+        "total_equity": total_equity,
+        "equity_value": equity_value,
         "buying_power": buying_power if buying_power is not None else 0.0,
-        "cash": cash if cash is not None else (buying_power or 0.0),
+        "cash": cash_val,
     }
 
 
@@ -362,6 +377,22 @@ def extract_positions(positions_result: Any) -> dict[str, dict]:
         if sym and qty > 0:
             out[sym] = {"shares": qty, "sellable": sellable, "avg_cost": avg, "num_buys": 1}
     return out
+
+
+def extract_realized_pnl(pnl_result: Any) -> float:
+    """All-time realized P&L ($) from a get_realized_pnl result. The window total lives at
+    `total_returns` (a string). Shape-tolerant; a window with no closing trades returns 0.0."""
+    p = pnl_result if isinstance(pnl_result, dict) else {}
+    if "data" in p and isinstance(p["data"], dict):
+        p = p["data"]
+    for k in ("total_returns", "total_realized_gain", "realized_gain"):
+        v = p.get(k)
+        if v is not None:
+            try:
+                return float(v)
+            except (ValueError, TypeError):
+                pass
+    return 0.0
 
 
 # ---------------------------------------------------------------------------

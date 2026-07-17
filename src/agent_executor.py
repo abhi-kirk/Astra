@@ -27,6 +27,7 @@ from src.agent_broker import (
     extract_order,
     extract_portfolio,
     extract_positions,
+    extract_realized_pnl,
 )
 from src.agent_guardrails import check_agent_guardrails
 from src.data_layer import load_convictions
@@ -70,10 +71,19 @@ def _finalize(summary: dict, num_mirrors: int = 0, sleeve: dict | None = None) -
         logger.error("Autotrader observability failed — non-fatal", exc_info=True)
 
 
-def _drawdown_pct(equity: float, baseline: float | None) -> float | None:
-    if not baseline or baseline <= 0:
+def _cost_basis(positions: dict[str, dict]) -> float:
+    """Σ shares·avg_cost over open positions — the deployed cost basis (deposit-immune)."""
+    return round(sum(p.get("shares", 0) * p.get("avg_cost", 0) for p in positions.values()), 4)
+
+
+def _pnl_drawdown_pct(net_pnl: float, capital_base: float | None) -> float | None:
+    """Net trading P&L as a % of net contributed capital. capital_base = total_equity −
+    net_pnl reconstructs deposits-minus-withdrawals: it's stable under P&L (a gain lifts
+    equity and net_pnl equally), rises on a deposit, falls on a withdrawal — so the halt is
+    funding-immune with no stored baseline. None until any capital exists."""
+    if not capital_base or capital_base <= 0:
         return None
-    return round((equity - baseline) / baseline * 100, 4)
+    return round(net_pnl / capital_base * 100, 4)
 
 
 def _build_mirrors(run_date: str) -> list[dict]:
@@ -167,22 +177,38 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
         _finalize(summary)
         return summary
 
+    # Deposit/withdrawal-immune drawdown: measure trading P&L, not equity. net_pnl =
+    # realized (all-time) + unrealized (market value of open stock − cost basis). Deposits
+    # move cash but never touch realized/unrealized P&L, so no manual baseline reset is ever
+    # needed. Realized is a non-fatal read — if it fails, unrealized alone still guards.
     equity = port["total_equity"]
-    baseline = control.get("baseline_equity")
-    if not baseline and equity > 0:
-        memory.set_agent_baseline(equity)
-        baseline = equity
-        logger.info("Autotrader drawdown baseline set to $%.2f", equity)
-    drawdown = _drawdown_pct(equity, baseline)
+    invested = _cost_basis(positions)
+    unrealized = round(port["equity_value"] - invested, 4)
+    try:
+        realized = extract_realized_pnl(broker.get_realized_pnl())
+    except BrokerError:
+        logger.warning("Realized-P&L read failed — halt uses unrealized only this run.", exc_info=True)
+        realized = 0.0
+    net_pnl = round(realized + unrealized, 4)
+
+    # capital_base = net contributed capital (deposits − withdrawals), reconstructed as
+    # total_equity − net_pnl so no baseline is stored and funding events self-correct.
+    capital_base = round(equity - net_pnl, 4)
+    drawdown = _pnl_drawdown_pct(net_pnl, capital_base)
 
     memory.save_agent_account_snapshot({
         "cash": port["cash"], "buying_power": port["buying_power"],
-        "market_value": port["total_equity"], "total_equity": equity,
-        "positions": positions, "baseline_equity": baseline, "drawdown_pct": drawdown,
+        "market_value": port["equity_value"], "total_equity": equity,
+        "positions": positions, "drawdown_pct": drawdown,
+        "realized_pnl": realized, "unrealized_pnl": unrealized, "net_pnl": net_pnl,
+        "invested_cost_basis": invested,
     })
 
     if drawdown is not None and drawdown <= config.agent.drawdown_halt_pct:
-        reason = f"Drawdown {drawdown:.1f}% ≤ halt {config.agent.drawdown_halt_pct:.0f}%"
+        reason = (
+            f"P&L drawdown {drawdown:.1f}% ≤ halt {config.agent.drawdown_halt_pct:.0f}% "
+            f"(net P&L ${net_pnl:,.2f} on ${capital_base:,.2f} contributed)"
+        )
         memory.set_agent_halted(True, reason)
         logger.error("Autotrader DRAWDOWN HALT — %s. Execution stopped.", reason)
         summary["halted"] = True

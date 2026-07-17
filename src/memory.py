@@ -522,8 +522,11 @@ def save_agent_account_snapshot(snapshot: dict) -> None:
         "market_value":    snapshot.get("market_value"),
         "total_equity":    snapshot.get("total_equity"),
         "positions":       snapshot.get("positions"),
-        "baseline_equity": snapshot.get("baseline_equity"),
         "drawdown_pct":    snapshot.get("drawdown_pct"),
+        "realized_pnl":        snapshot.get("realized_pnl"),
+        "unrealized_pnl":      snapshot.get("unrealized_pnl"),
+        "net_pnl":             snapshot.get("net_pnl"),
+        "invested_cost_basis": snapshot.get("invested_cost_basis"),
     }).execute()
 
 
@@ -542,7 +545,7 @@ def get_agent_control() -> dict:
     )
     if data:
         return data[0]
-    return {"id": 1, "paused": False, "halted": False, "halt_reason": None, "baseline_equity": None}
+    return {"id": 1, "paused": False, "halted": False, "halt_reason": None}
 
 
 def set_agent_paused(paused: bool) -> None:
@@ -554,13 +557,6 @@ def set_agent_paused(paused: bool) -> None:
 def set_agent_halted(halted: bool, reason: str | None = None) -> None:
     get_client().table("agent_control").update({
         "halted": halted, "halt_reason": reason, "updated_at": datetime.now().isoformat(),
-    }).eq("id", 1).execute()
-
-
-def set_agent_baseline(equity: float) -> None:
-    """Set the drawdown baseline (first run, or a deliberate reset)."""
-    get_client().table("agent_control").update({
-        "baseline_equity": equity, "updated_at": datetime.now().isoformat(),
     }).eq("id", 1).execute()
 
 

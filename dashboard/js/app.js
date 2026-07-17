@@ -348,7 +348,7 @@ async function fetchClosedPaperTrades(sb) {
 // ── Autotrader: autonomous agentic trading (owner-only) ──
 async function fetchAgentControl(sb) {
   const { data } = await sb.from('agent_control').select('*').eq('id', 1).maybeSingle();
-  return data || { paused: false, halted: false, halt_reason: null, baseline_equity: null };
+  return data || { paused: false, halted: false, halt_reason: null };
 }
 
 async function fetchAgentTrades(sb) {

@@ -223,7 +223,7 @@ class AgentConfig:
     account_number: str = _cfg("AGENT_ACCOUNT_NUMBER", default="")            # agentic_allowed=true account
     max_trades_per_day: int = _cfg("AGENT_MAX_TRADES_PER_DAY", cast=int, default=6)  # cap on orders placed per day
     min_hold_days: int = _cfg("AGENT_MIN_HOLD_DAYS", cast=int, default=2)     # trading days a lot must be held before a sell is allowed
-    drawdown_halt_pct: float = _cfg("AGENT_DRAWDOWN_HALT_PCT", cast=float, default=-15.0)  # halt selling if account equity draws down past this % (negative)
+    drawdown_halt_pct: float = _cfg("AGENT_DRAWDOWN_HALT_PCT", cast=float, default=-15.0)  # halt if net trading P&L draws down past this % of net contributed capital (negative; deposit/withdrawal-immune)
     # Sizing + pacing for the small cash sleeve. The brain sets each name's conviction weight;
     # the sleeve deploys a capped slice of remaining cash per run, split in proportion to weight,
     # and never below the reserve cushion — dry powder isn't idle (Robinhood Gold pays ~3.5% APY).

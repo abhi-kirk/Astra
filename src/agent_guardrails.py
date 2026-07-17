@@ -62,10 +62,12 @@ def business_days_between(start: datetime, end: datetime) -> int:
 
 
 def check_halt_state(drawdown_pct: float | None) -> tuple[bool, str | None]:
-    """Account-level drawdown halt. Returns (halted, reason)."""
+    """Account-level drawdown halt. `drawdown_pct` is net trading P&L as a %% of net
+    contributed capital (deposit/withdrawal-immune; computed in the executor). Returns
+    (halted, reason)."""
     if drawdown_pct is not None and drawdown_pct <= config.agent.drawdown_halt_pct:
         return True, (
-            f"DRAWDOWN HALT: account down {drawdown_pct:.1f}% "
+            f"DRAWDOWN HALT: P&L down {drawdown_pct:.1f}% "
             f"(limit {config.agent.drawdown_halt_pct:.0f}%)"
         )
     return False, None
@@ -78,7 +80,7 @@ def check_agent_guardrails(
     convictions: dict,                  # for the TSLA fail-safe lookup only
     trades_today: list[dict],           # today's agent_trades rows (anti-runaway cap)
     last_buy: dict | None = None,       # most recent agent BUY row for this ticker (min-hold)
-    drawdown_pct: float | None = None,  # current account drawdown %
+    drawdown_pct: float | None = None,  # current P&L drawdown % (net P&L vs net contributed capital)
     settled_cash: float | None = None,  # settled cash available (cash-account GFV, buys)
     estimated_cost: float | None = None,  # notional of this buy
     now: datetime | None = None,

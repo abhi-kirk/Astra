@@ -15,6 +15,7 @@ from src.agent_broker import (
     extract_order,
     extract_portfolio,
     extract_positions,
+    extract_realized_pnl,
 )
 
 
@@ -50,16 +51,17 @@ class TestUnwrap:
 
 class TestExtractPortfolioPositions:
     def test_portfolio_flat(self):
+        # No equity_value key → falls back to total_equity − cash (= market value of stock).
         p = extract_portfolio({"total_equity": "1000", "buying_power": "950", "cash": "200"})
-        assert p == {"total_equity": 1000.0, "buying_power": 950.0, "cash": 200.0}
+        assert p == {"total_equity": 1000.0, "equity_value": 800.0, "buying_power": 950.0, "cash": 200.0}
 
     def test_portfolio_real_shape(self):
-        # The real RH payload (post data-unwrap): total_value + nested buying_power object.
+        # The real RH payload (post data-unwrap): total_value + equity_value + nested buying_power.
         p = extract_portfolio({
-            "total_value": "1000", "cash": "1000",
-            "buying_power": {"buying_power": "1000.0000", "unleveraged_buying_power": "1000.0000"},
+            "total_value": "980.78", "equity_value": "680.76", "cash": "300.02",
+            "buying_power": {"buying_power": "300.0200", "unleveraged_buying_power": "300.0200"},
         })
-        assert p == {"total_equity": 1000.0, "buying_power": 1000.0, "cash": 1000.0}
+        assert p == {"total_equity": 980.78, "equity_value": 680.76, "buying_power": 300.02, "cash": 300.02}
 
     def test_positions(self):
         pos = extract_positions({"positions": [
@@ -73,6 +75,16 @@ class TestExtractPortfolioPositions:
             {"symbol": "RKLB", "quantity": "5", "average_buy_price": "90", "shares_available_for_sells": "3"},
         ]})
         assert pos["RKLB"]["shares"] == 5.0 and pos["RKLB"]["sellable"] == 3.0
+
+    def test_realized_pnl_total(self):
+        # Real shape (post data-unwrap): window total at `total_returns`, plus buckets.
+        assert extract_realized_pnl({"total_returns": "-42.5", "data_points": []}) == -42.5
+        assert extract_realized_pnl({"data": {"total_returns": "0"}}) == 0.0
+
+    def test_realized_pnl_missing_defaults_zero(self):
+        assert extract_realized_pnl({}) == 0.0
+        assert extract_realized_pnl(None) == 0.0
+        assert extract_realized_pnl({"total_returns": None}) == 0.0
 
 
 class TestExtractOrder:
