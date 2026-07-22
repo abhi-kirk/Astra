@@ -146,7 +146,7 @@ function scrollToCard(ticker) {
 
 // Delegate ticker-link clicks from any container
 document.addEventListener('click', e => {
-  const el = e.target.closest('.ticker-link, .ticker-link-plain');
+  const el = e.target.closest('.ticker-link, .ticker-link-plain, .treemap-tile');
   if (el) {
     e.preventDefault();
     scrollToCard(el.dataset.ticker);
@@ -363,7 +363,238 @@ async function fetchAgentSnapshot(sb) {
   return data || null;
 }
 
-function renderAutotrader(sb, control, trades, snapshot) {
+// ── Performance charts (NAV vs SPY) + holdings treemap ───────────
+// Backend (migration 014) stores a truthful nav_index per run for each track and
+// raw SPY closes; the frontend only rebases the SPY line and draws. No math in JS
+// beyond that rebase. See docs/performance_charts.md.
+
+async function fetchPaperEquity(sb) {
+  const { data } = await sb.from('paper_equity')
+    .select('snapshot_time, nav_index')
+    .order('snapshot_time', { ascending: true });
+  return data || [];
+}
+
+async function fetchBenchmarkPrices(sb, symbol = 'SPY') {
+  const { data } = await sb.from('benchmark_prices')
+    .select('price_date, close')
+    .eq('symbol', symbol)
+    .order('price_date', { ascending: true });
+  return data || [];
+}
+
+async function fetchAgentNavSeries(sb) {
+  const { data } = await sb.from('agent_account_snapshots')
+    .select('snapshot_time, nav_index')
+    .order('snapshot_time', { ascending: true });
+  return data || [];
+}
+
+const _localDate = ts => new Date(ts).toLocaleDateString('en-CA'); // YYYY-MM-DD local
+
+// Rebase SPY to 100 at the track's first snapshot date; align by date (forward-fill).
+// Returns null when there aren't ≥2 NAV points yet (chart shows a placeholder).
+function buildNavVsSpy(navRows, spyRows) {
+  const nav = (navRows || []).filter(r => r.nav_index != null);
+  if (nav.length < 2) return null;
+  const spy = (spyRows || [])
+    .map(r => ({ date: String(r.price_date).slice(0, 10), close: Number(r.close) }))
+    .filter(r => !isNaN(r.close))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const spyOnOrBefore = d => {
+    let val = null;
+    for (const s of spy) { if (s.date <= d) val = s.close; else break; }
+    return val;
+  };
+  const firstDate = _localDate(nav[0].snapshot_time);
+  const spyBase = spyOnOrBefore(firstDate) ?? (spy[0] ? spy[0].close : null);
+  const labels = [], astra = [], bench = [];
+  for (const r of nav) {
+    const d = _localDate(r.snapshot_time);
+    const c = spyOnOrBefore(d);
+    labels.push(d);
+    astra.push(Number(r.nav_index));
+    bench.push(spyBase && c ? c / spyBase * 100 : null);
+  }
+  // Since-inception return (%) and outperformance vs SPY, in index points.
+  const lastAstra = astra[astra.length - 1];
+  const lastBench = [...bench].reverse().find(v => v != null);
+  return {
+    labels, astra, bench,
+    sinceInception: lastAstra - 100,
+    vsSpy: lastBench != null ? lastAstra - lastBench : null,
+  };
+}
+
+function perfPlaceholder() {
+  return `<div class="perf-empty"><span class="perf-empty-icon">◷</span>
+    <span>Collecting data — the performance chart appears once there are two daily runs.</span></div>`;
+}
+
+function renderEquityCurve(canvas, series, label) {
+  if (!canvas || !series || typeof Chart === 'undefined') return;
+  const cs = getComputedStyle(document.documentElement);
+  const v = (name, fb) => (cs.getPropertyValue(name).trim() || fb);
+  const cyan = v('--accent-cyan', '#38bdf8');
+  const muted = v('--text-muted', '#5a7a94');
+  const textSec = v('--text-secondary', '#a8bdd0');
+  const mono = 'JetBrains Mono, monospace';
+  const existing = Chart.getChart(canvas);
+  if (existing) existing.destroy();
+  const fmtDay = d => { const p = d.split('-'); return `${p[1]}/${p[2]}`; };
+  new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels: series.labels.map(fmtDay),
+      datasets: [
+        { label: label || 'ASTRA', data: series.astra, borderColor: cyan,
+          backgroundColor: 'rgba(56,189,248,0.08)', borderWidth: 2, fill: true,
+          tension: 0.25, pointRadius: 0, pointHoverRadius: 4, pointHoverBackgroundColor: cyan },
+        { label: 'S&P 500', data: series.bench, borderColor: muted,
+          backgroundColor: 'transparent', borderWidth: 1.5, borderDash: [4, 3], fill: false,
+          tension: 0.25, pointRadius: 0, pointHoverRadius: 4, pointHoverBackgroundColor: muted },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'top', align: 'end',
+          labels: { color: textSec, font: { family: mono, size: 10 },
+            boxWidth: 12, boxHeight: 2, padding: 16 } },
+        tooltip: {
+          backgroundColor: '#081422', borderColor: '#1e4060', borderWidth: 1,
+          titleColor: textSec, bodyColor: '#f0f8ff', padding: 10,
+          titleFont: { family: mono, size: 10 }, bodyFont: { family: mono, size: 11 },
+          callbacks: { label: c => `${c.dataset.label}: ${c.parsed.y == null ? '—' : c.parsed.y.toFixed(1)}` },
+        },
+      },
+      scales: {
+        x: { grid: { display: false },
+          ticks: { color: muted, font: { family: mono, size: 9 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 6 } },
+        y: { grid: { color: 'rgba(30,64,96,0.25)' },
+          ticks: { color: muted, font: { family: mono, size: 9 } } },
+      },
+    },
+  });
+}
+
+// Diverging fill for a treemap tile by P&L% (green ↔ neutral grey ↔ red).
+function _pnlTileColor(pct) {
+  if (pct == null || Math.abs(pct) < 0.1) return { bg: 'rgba(90,122,148,0.12)', edge: 'rgba(90,122,148,0.4)' };
+  const a = 0.16 + 0.5 * Math.min(Math.abs(pct) / 12, 1);
+  return pct > 0
+    ? { bg: `rgba(74,222,128,${a})`, edge: 'rgba(74,222,128,0.55)' }
+    : { bg: `rgba(248,113,113,${a})`, edge: 'rgba(248,113,113,0.55)' };
+}
+
+// Squarified treemap (Bruls et al.) — lays each row along the shorter free side so
+// tiles stay near-square. Returns [{data, x, y, w, h}] within a W×H box.
+function _squarify(data, W, H) {
+  const items = data.map(d => ({ d, area: Math.max(d.value, 0) }))
+    .filter(o => o.area > 0).sort((a, b) => b.area - a.area);
+  const totalV = items.reduce((s, o) => s + o.area, 0) || 1;
+  const scale = (W * H) / totalV;
+  items.forEach(o => (o.area *= scale));
+  const area = { x: 0, y: 0, w: W, h: H };
+  const out = [];
+  const shortest = () => Math.min(area.w, area.h);
+  const worst = (row, s) => {
+    let sum = 0, mx = -Infinity, mn = Infinity;
+    for (const o of row) { sum += o.area; mx = Math.max(mx, o.area); mn = Math.min(mn, o.area); }
+    return Math.max((s * s * mx) / (sum * sum), (sum * sum) / (s * s * mn));
+  };
+  const layout = row => {
+    const sum = row.reduce((a, o) => a + o.area, 0);
+    const thick = sum / shortest();
+    if (area.w >= area.h) {
+      let cy = area.y;
+      for (const o of row) { const ch = o.area / thick; out.push({ data: o.d, x: area.x, y: cy, w: thick, h: ch }); cy += ch; }
+      area.x += thick; area.w -= thick;
+    } else {
+      let cx = area.x;
+      for (const o of row) { const cw = o.area / thick; out.push({ data: o.d, x: cx, y: area.y, w: cw, h: thick }); cx += cw; }
+      area.y += thick; area.h -= thick;
+    }
+  };
+  let row = [];
+  for (const o of items) {
+    const s = shortest();
+    if (row.length === 0 || worst([...row, o], s) <= worst(row, s)) row.push(o);
+    else { layout(row); row = [o]; }
+  }
+  if (row.length) layout(row);
+  return out;
+}
+
+window._astraTreemaps = window._astraTreemaps || new Map();
+
+// Lay the treemap into the container's CURRENT box. Driven by a ResizeObserver so
+// the tiles always fill the real width — a one-shot clientWidth read at render time
+// can be stale (the panel is often still stretching to full width during page load).
+function _layoutTreemap(container, clean) {
+  if (!clean.length) { container.innerHTML = '<div class="treemap-empty">No open positions.</div>'; return; }
+  // Height is a fixed CSS value (reliable even mid-load); width can be read stale while
+  // the panel is still stretching. So squarify in the measured box, then emit x/width as
+  // PERCENTAGES of that box — the row fills 100% of the container's real width no matter
+  // what width we measured (no dependency on ResizeObserver/rAF timing). Height stays px.
+  const W = container.clientWidth || 640;
+  const H = container.clientHeight || 200;
+  container._tmW = W;
+  const rects = _squarify(clean, W, H);
+  const estW = container.getBoundingClientRect().width || W;  // best-effort real px
+  container.innerHTML = rects.map(r => {
+    const d = r.data;
+    const c = _pnlTileColor(d.pnlPct);
+    const pxW = r.w / W * estW;          // rendered tile width in real px
+    const pxH = r.h;                     // height space is already real px
+    const pnlTxt = d.pnlPct == null ? '—' : fmtPct(d.pnlPct);
+    // Scale the ticker so it always fits the tile (JetBrains Mono ≈ 0.6·fontSize wide),
+    // capped by height. This is what keeps 4-letter tickers from ever clipping.
+    const innerW = pxW - 12;
+    let fTk = Math.floor(innerW / (d.ticker.length * 0.62));
+    fTk = Math.max(8, Math.min(16, Math.min(fTk, Math.floor(pxH * 0.42))));
+    const showTicker = pxW >= 22 && pxH >= 15;
+    const showPnl = pxH >= 48 && pxW >= 46 && d.pnlPct != null;
+    const fPnl = Math.max(8, Math.min(11, Math.round(fTk * 0.72)));
+    const label = showTicker
+      ? `<span class="treemap-tk" style="font-size:${fTk}px">${d.ticker}</span>` +
+        (showPnl ? `<span class="treemap-pnl" style="font-size:${fPnl}px">${pnlTxt}</span>` : '')
+      : '';
+    const left = (r.x / W * 100).toFixed(4);
+    const wPct = (r.w / W * 100).toFixed(4);
+    return `<div class="treemap-tile" data-ticker="${d.ticker}"
+      title="${d.ticker} · ${pnlTxt}${d.sub ? ' · ' + d.sub : ''}"
+      style="left:${left}%;top:${r.y}px;width:calc(${wPct}% - 2px);height:${Math.max(r.h - 2, 0)}px;background:${c.bg};border-color:${c.edge}">
+      ${label}
+    </div>`;
+  }).join('');
+}
+
+let _tmObserver = null;
+function _ensureTreemapObserver() {
+  if (_tmObserver || typeof ResizeObserver === 'undefined') return;
+  _tmObserver = new ResizeObserver(entries => {
+    for (const e of entries) {
+      const items = window._astraTreemaps.get(e.target);
+      // Only reflow on a real width change — guards against ResizeObserver feedback loops.
+      if (items && Math.abs(e.target.clientWidth - (e.target._tmW || 0)) >= 2) {
+        _layoutTreemap(e.target, items);
+      }
+    }
+  });
+}
+
+function renderTreemap(container, items) {
+  if (!container) return;
+  const clean = (items || []).filter(i => i.value > 0);
+  window._astraTreemaps.set(container, clean);
+  _ensureTreemapObserver();
+  if (_tmObserver) _tmObserver.observe(container); // fires once with the real box, then on resize
+  _layoutTreemap(container, clean);                // immediate paint (re-corrected by the observer)
+}
+
+function renderAutotrader(sb, control, trades, snapshot, navRows, spyRows, marketData) {
   const section = document.getElementById("autotrader");
   if (!section) return;
   section.classList.remove('hidden');
@@ -375,48 +606,87 @@ function renderAutotrader(sb, control, trades, snapshot) {
 
   const equity = snapshot?.total_equity;
   const drawdown = snapshot?.drawdown_pct;
-  const ddColor = (drawdown != null && drawdown < 0) ? '#ff5c5c' : 'var(--text-dim)';
 
   const open = trades.filter(t => t.is_open);
   const money = v => (v == null ? '—' : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })}`);
 
-  const rows = trades.slice(0, 25).map(t => {
-    const sideColor = t.side === 'buy' ? '#38d977' : '#ff5c5c';
+  const ddClass = (drawdown != null && drawdown < 0) ? 'negative' : '';
+
+  // Holdings treemap from the latest snapshot's positions (ticker → shares, avg_cost);
+  // current price from today's screen (marketData), cost-basis fallback when absent.
+  const positions = snapshot?.positions || {};
+  const holdings = Object.entries(positions).map(([ticker, p]) => {
+    const shares = Number(p.shares) || 0;
+    const avg = Number(p.avg_cost) || 0;
+    const cur = marketData?.[ticker]?.current_price ?? null;
+    const price = cur ?? avg;
+    const value = shares * price;
+    const pnlPct = (cur && avg) ? (cur - avg) / avg * 100 : null;
+    return { ticker, value, pnlPct, sub: money(value) };
+  }).filter(h => h.value > 0);
+
+  const series = buildNavVsSpy(navRows, spyRows);
+  const vsSpyHtml = series && series.vsSpy != null
+    ? `<div class="paper-stat-value ${series.vsSpy >= 0 ? 'positive' : 'negative'}">${fmtPct(series.vsSpy)}</div>`
+    : `<div class="paper-stat-value paper-stat-na">— <span class="paper-stat-note">&lt;2 runs</span></div>`;
+
+  const orderRows = trades.map(t => {
+    const sideCls = t.side === 'buy' ? 'positive' : 'negative';
     const size = t.dollar_amount != null ? money(t.dollar_amount) : (t.quantity != null ? `${t.quantity} sh` : '—');
     return `<tr>
       <td>${(t.run_date || '').slice(0, 10)}</td>
-      <td style="font-weight:600">${t.ticker}</td>
-      <td style="color:${sideColor};font-weight:600">${(t.side || '').toUpperCase()}</td>
+      <td class="pt-ticker">${t.ticker}</td>
+      <td class="${sideCls}" style="font-weight:600">${(t.side || '').toUpperCase()}</td>
       <td>${size}</td>
       <td>${t.status || ''}${t.status === 'dry_run' ? ' <span style="color:var(--text-dim)">(sim)</span>' : ''}</td>
     </tr>`;
   }).join('');
 
   section.innerHTML = `
-    <div class="paper-header" style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
-      <div>
-        <h2 style="margin:0">AUTOTRADER · AUTONOMOUS <span style="font-size:12px;color:var(--text-dim)">real-money agentic account</span></h2>
-        <div style="margin-top:4px">
-          <span style="color:${statusColor};font-weight:700;letter-spacing:.5px">● ${statusLabel}</span>
-          ${halted && control.halt_reason ? `<span style="color:var(--text-dim);font-size:12px"> — ${control.halt_reason}</span>` : ''}
+    <div class="section-label">
+      <span class="section-icon">◆</span>
+      <span>AUTOTRADER · AUTONOMOUS</span>
+      <span class="section-badge">REAL-MONEY AGENTIC</span>
+    </div>
+    <div class="paper-card">
+      <div class="at-header">
+        <div class="at-status">
+          <span class="at-dot" style="background:${statusColor};box-shadow:0 0 8px ${statusColor}"></span>
+          <span style="color:${statusColor};font-weight:700;letter-spacing:1px">${statusLabel}</span>
+          ${halted && control.halt_reason ? `<span class="at-halt">— ${control.halt_reason}</span>` : ''}
         </div>
+        <button id="autotrader-toggle" class="paper-tab at-toggle" ${halted ? 'disabled title="Halted — reset in DB after review"' : ''}>
+          ${paused ? '▶ RESUME' : '⏸ PAUSE'}
+        </button>
       </div>
-      <button id="autotrader-toggle" class="paper-tab" ${halted ? 'disabled title="Halted — reset in DB after review"' : ''}
-        style="cursor:${halted ? 'not-allowed' : 'pointer'};min-width:120px">
-        ${paused ? '▶ RESUME' : '⏸ PAUSE'}
-      </button>
+      <div class="perf-chart-wrap">
+        ${series ? '<canvas id="at-perf-chart"></canvas>' : perfPlaceholder()}
+      </div>
+      <div class="paper-summary">
+        <div class="paper-stat"><div class="paper-stat-label">EQUITY</div><div class="paper-stat-value">${money(equity)}</div></div>
+        <div class="paper-stat-divider"></div>
+        <div class="paper-stat"><div class="paper-stat-label">DRAWDOWN</div><div class="paper-stat-value ${ddClass}">${drawdown != null ? drawdown.toFixed(1) + '%' : '—'}</div></div>
+        <div class="paper-stat-divider"></div>
+        <div class="paper-stat"><div class="paper-stat-label">vs SPY</div>${vsSpyHtml}</div>
+        <div class="paper-stat-divider"></div>
+        <div class="paper-stat"><div class="paper-stat-label">OPEN POSITIONS</div><div class="paper-stat-value">${open.length}</div></div>
+      </div>
+      <div class="treemap-section">
+        <div class="treemap-caption">HOLDINGS <span>· tile size = position weight · color = P&amp;L</span></div>
+        <div class="treemap" id="at-treemap"></div>
+      </div>
+      <details class="activity-log">
+        <summary>Activity log <span class="activity-count">${trades.length} orders</span></summary>
+        ${trades.length ? `<div class="activity-table-wrap"><table class="paper-table">
+          <thead><tr><th>DATE</th><th>TICKER</th><th>SIDE</th><th>SIZE</th><th>STATUS</th></tr></thead>
+          <tbody>${orderRows}</tbody></table></div>`
+          : '<div class="treemap-empty">No agentic orders yet.</div>'}
+      </details>
     </div>
-    <div style="display:flex;gap:24px;flex-wrap:wrap;margin:14px 0">
-      <div><div style="font-size:12px;color:var(--text-dim)">EQUITY</div><div style="font-size:20px;font-weight:700">${money(equity)}</div></div>
-      <div><div style="font-size:12px;color:var(--text-dim)">DRAWDOWN</div><div style="font-size:20px;font-weight:700;color:${ddColor}">${drawdown != null ? drawdown.toFixed(1) + '%' : '—'}</div></div>
-      <div><div style="font-size:12px;color:var(--text-dim)">OPEN POSITIONS</div><div style="font-size:20px;font-weight:700">${open.length}</div></div>
-      <div><div style="font-size:12px;color:var(--text-dim)">ORDERS LOGGED</div><div style="font-size:20px;font-weight:700">${trades.length}</div></div>
-    </div>
-    ${trades.length ? `<div style="overflow-x:auto"><table class="paper-table" style="width:100%">
-      <thead><tr><th>DATE</th><th>TICKER</th><th>SIDE</th><th>SIZE</th><th>STATUS</th></tr></thead>
-      <tbody>${rows}</tbody></table></div>`
-      : '<div style="color:var(--text-dim);padding:12px 0">No agentic orders yet.</div>'}
   `;
+
+  if (series) renderEquityCurve(document.getElementById('at-perf-chart'), series, 'Autotrader');
+  renderTreemap(document.getElementById('at-treemap'), holdings);
 
   const toggle = document.getElementById('autotrader-toggle');
   if (toggle && !halted) {
@@ -431,7 +701,7 @@ function renderAutotrader(sb, control, trades, snapshot) {
         return;
       }
       logUserAction(next ? 'autotrader_pause' : 'autotrader_resume', null, { paused: next });
-      renderAutotrader(sb, { ...control, paused: next }, trades, snapshot);
+      renderAutotrader(sb, { ...control, paused: next }, trades, snapshot, navRows, spyRows, marketData);
     });
   }
 }
@@ -487,12 +757,13 @@ async function fetchRecentDecisionHistory(sb) {
 
 // ── Paper portfolio ──────────────────────────────────────────
 
-function renderPaperPortfolio(paperTrades, marketData) {
+function renderPaperPortfolio(paperTrades, marketData, navRows, spyRows) {
   const section = document.getElementById('paper-portfolio');
   if (!paperTrades.length) { section.classList.add('hidden'); return; }
   section.classList.remove('hidden');
 
   let totalCost = 0, totalValue = 0;
+  const holdMap = {};   // aggregate lots by ticker for the treemap
   const rows = paperTrades.map(pt => {
     const mdata = marketData[pt.ticker] || {};
     const cur   = mdata.current_price ?? pt.price_at_signal;
@@ -500,6 +771,11 @@ function renderPaperPortfolio(paperTrades, marketData) {
     const pnlPct = (cur - pt.price_at_signal) / pt.price_at_signal * 100;
     totalCost  += pt.virtual_cost;
     totalValue += cur * pt.virtual_shares;
+
+    const h = holdMap[pt.ticker] || (holdMap[pt.ticker] = { ticker: pt.ticker, value: 0, cost: 0, pnlD: 0 });
+    h.value += cur * pt.virtual_shares;
+    h.cost  += pt.virtual_cost;
+    h.pnlD  += pnlD;
 
     // Bar: centred at 0, ±15% = full width
     const clampedPct  = Math.max(-15, Math.min(15, pnlPct));
@@ -533,6 +809,17 @@ function renderPaperPortfolio(paperTrades, marketData) {
 
   const totalPnlD   = totalValue - totalCost;
   const totalPnlPct = totalCost > 0 ? (totalValue - totalCost) / totalCost * 100 : 0;
+
+  const holdings = Object.values(holdMap).map(h => ({
+    ticker: h.ticker, value: h.value,
+    pnlPct: h.cost > 0 ? h.pnlD / h.cost * 100 : null,
+    sub: fmtBigNum(h.value),
+  }));
+
+  const series = buildNavVsSpy(navRows, spyRows);
+  const vsSpyHtml = series && series.vsSpy != null
+    ? `<div class="paper-stat-value ${series.vsSpy >= 0 ? 'positive' : 'negative'}" title="Since-inception return vs SPY, both rebased to 100">${fmtPct(series.vsSpy)}</div>`
+    : `<div class="paper-stat-value paper-stat-na" title="Needs ≥2 daily runs for a benchmark comparison">— <span class="paper-stat-note">&lt;2 runs</span></div>`;
 
   const closedTrades = window._astraClosedPaperTrades || [];
   const closedPnlD = closedTrades.reduce((sum, pt) => {
@@ -578,6 +865,9 @@ function renderPaperPortfolio(paperTrades, marketData) {
       <span class="section-badge">ASTRA SIMULATION</span>
     </div>
     <div class="paper-card">
+      <div class="perf-chart-wrap">
+        ${series ? '<canvas id="paper-perf-chart"></canvas>' : perfPlaceholder()}
+      </div>
       <div class="paper-summary">
         <div class="paper-stat">
           <div class="paper-stat-label">OPEN P&amp;L</div>
@@ -601,22 +891,32 @@ function renderPaperPortfolio(paperTrades, marketData) {
         <div class="paper-stat-divider"></div>
         <div class="paper-stat">
           <div class="paper-stat-label">vs SPY</div>
-          <div class="paper-stat-value paper-stat-na" title="Need 30+ days of data for benchmark comparison">— <span class="paper-stat-note">&lt;30d</span></div>
+          ${vsSpyHtml}
         </div>
       </div>
-      <div class="paper-tab-bar">
-        <button class="paper-tab active" id="paper-tab-open">OPEN <span class="paper-tab-count">${paperTrades.length}</span></button>
-        <button class="paper-tab" id="paper-tab-closed">CLOSED <span class="paper-tab-count">${closedTrades.length}</span></button>
+      <div class="treemap-section">
+        <div class="treemap-caption">OPEN POSITIONS <span>· tile size = position weight · color = P&amp;L</span></div>
+        <div class="treemap" id="paper-treemap"></div>
       </div>
-      <div id="paper-open-panel" class="paper-rows">
-        <div class="paper-rows-header"><span>POSITION</span><span>ENTRY → NOW</span><span></span><span>P&amp;L</span></div>
-        ${rows.join('')}
-      </div>
-      <div id="paper-closed-panel" class="paper-rows hidden">
-        <div class="paper-rows-header paper-closed-header"><span>POSITION</span><span>ENTRY → EXIT</span><span>REASON</span><span>P&amp;L</span></div>
-        ${closedRowsHtml}
-      </div>
+      <details class="activity-log">
+        <summary>Position detail <span class="activity-count">${paperTrades.length} open / ${closedTrades.length} closed</span></summary>
+        <div class="paper-tab-bar">
+          <button class="paper-tab active" id="paper-tab-open">OPEN <span class="paper-tab-count">${paperTrades.length}</span></button>
+          <button class="paper-tab" id="paper-tab-closed">CLOSED <span class="paper-tab-count">${closedTrades.length}</span></button>
+        </div>
+        <div id="paper-open-panel" class="paper-rows">
+          <div class="paper-rows-header"><span>POSITION</span><span>ENTRY → NOW</span><span></span><span>P&amp;L</span></div>
+          ${rows.join('')}
+        </div>
+        <div id="paper-closed-panel" class="paper-rows hidden">
+          <div class="paper-rows-header paper-closed-header"><span>POSITION</span><span>ENTRY → EXIT</span><span>REASON</span><span>P&amp;L</span></div>
+          ${closedRowsHtml}
+        </div>
+      </details>
     </div>`;
+
+  if (series) renderEquityCurve(document.getElementById('paper-perf-chart'), series, 'Paper NAV');
+  renderTreemap(document.getElementById('paper-treemap'), holdings);
 
   // Tab switching
   document.getElementById('paper-tab-open')?.addEventListener('click', () => {
@@ -2240,15 +2540,26 @@ async function init() {
 
     // ── Paper portfolio (auth-gated) ──
     const paperTradesByTicker = Object.fromEntries(paperTrades.map(pt => [pt.ticker, pt]));
-    if (isAuthenticated) renderPaperPortfolio(paperTrades, marketData);
+    // SPY benchmark series is shared by both performance charts — fetch once.
+    let spyPrices = [];
+    if (isAuthenticated) {
+      try {
+        const [paperEquity, spy] = await Promise.all([fetchPaperEquity(sb), fetchBenchmarkPrices(sb)]);
+        spyPrices = spy;
+        renderPaperPortfolio(paperTrades, marketData, paperEquity, spyPrices);
+      } catch (err) {
+        console.error('[Paper] render error:', err);
+        renderPaperPortfolio(paperTrades, marketData, [], []);
+      }
+    }
 
     // ── Autotrader autonomous panel + pause/resume (owner-only) ──
     if (isAuthenticated) {
       try {
-        const [agentControl, agentTrades, agentSnapshot] = await Promise.all([
-          fetchAgentControl(sb), fetchAgentTrades(sb), fetchAgentSnapshot(sb),
+        const [agentControl, agentTrades, agentSnapshot, agentNav] = await Promise.all([
+          fetchAgentControl(sb), fetchAgentTrades(sb), fetchAgentSnapshot(sb), fetchAgentNavSeries(sb),
         ]);
-        renderAutotrader(sb, agentControl, agentTrades, agentSnapshot);
+        renderAutotrader(sb, agentControl, agentTrades, agentSnapshot, agentNav, spyPrices, marketData);
       } catch (err) {
         console.error('[Autotrader] render error:', err);
       }
