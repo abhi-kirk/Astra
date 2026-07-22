@@ -287,6 +287,45 @@ def test_notify_agent_alerts_on_abort(monkeypatch):
     assert len(sent) == 1 and "bootstrap" in sent[0].lower()
 
 
+def test_notify_agent_rich_activity(monkeypatch):
+    """A live run alert carries per-order size + fill, block reasons, surfaced skips,
+    and the sleeve footer (equity / P&L / cash / deploy)."""
+    from src import notify
+    sent: list[str] = []
+    monkeypatch.setattr(notify, "send", lambda text: sent.append(text) or True)
+    ok = notify.notify_agent({
+        "dry_run": False,
+        "placed": [
+            {"ticker": "NVDA", "side": "buy", "dollars": 63.0, "shares": None, "status": "filled"},
+            {"ticker": "RKLB", "side": "sell", "dollars": None, "shares": 12, "status": "submitted"},
+        ],
+        "blocked": ["buy:AMD"],
+        "block_reasons": {"buy:AMD": "position cap reached"},
+        "skipped": ["buy:GOOGL:unfunded", "buy:MSFT"],  # unfunded surfaced, idempotent hidden
+        "account": {"equity": 1014.0, "net_pnl_pct": 1.4, "drawdown_pct": 0.0,
+                    "cash_pct": 12.0, "budget": 70.0},
+    })
+    assert ok is True
+    msg = sent[0]
+    assert "NVDA" in msg and "63" in msg and "filled" in msg   # size + fill
+    assert "RKLB" in msg and "12 sh" in msg                    # sell shares
+    assert "AMD" in msg and "position cap reached" in msg      # block reason
+    assert "GOOGL" in msg and "budget" in msg                  # surfaced skip
+    assert "MSFT" not in msg                                   # idempotent skip hidden
+    assert "1,014" in msg and "P&L" in msg and "deployed" in msg  # sleeve footer
+
+
+def test_notify_agent_halt_carries_sleeve(monkeypatch):
+    from src import notify
+    sent: list[str] = []
+    monkeypatch.setattr(notify, "send", lambda text: sent.append(text) or True)
+    assert notify.notify_agent({
+        "halted": True, "placed": [],
+        "account": {"equity": 800.0, "net_pnl_pct": -20.0, "drawdown_pct": -20.0, "cash_pct": 90.0},
+    }) is True
+    assert "HALTED" in sent[0] and "20" in sent[0]
+
+
 # ---------------------------------------------------------------------------
 # Mirror-source filters: close_reason + exploration
 # ---------------------------------------------------------------------------

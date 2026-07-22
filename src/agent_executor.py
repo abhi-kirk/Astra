@@ -152,7 +152,8 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
     # Dry-run whenever the master switch is off, unless a caller explicitly forces live.
     if dry_run is None:
         dry_run = not config.agent.trading_enabled
-    summary = {"run_date": run_date, "dry_run": dry_run, "placed": [], "blocked": [], "skipped": [], "failed": [], "halted": False}
+    summary = {"run_date": run_date, "dry_run": dry_run, "placed": [], "blocked": [],
+               "block_reasons": {}, "skipped": [], "failed": [], "halted": False}
 
     control = memory.get_agent_control()
     if control.get("paused"):
@@ -195,6 +196,17 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
     # total_equity − net_pnl so no baseline is stored and funding events self-correct.
     capital_base = round(equity - net_pnl, 4)
     drawdown = _pnl_drawdown_pct(net_pnl, capital_base)
+
+    # Sleeve state for the Telegram footer (equity / P&L / cash reserve). Set here so even a
+    # halt/abort alert can carry it; deploy budget is added once the sleeve is sized (below).
+    summary["account"] = {
+        "equity": equity,
+        "net_pnl": net_pnl,
+        "net_pnl_pct": round(net_pnl / capital_base * 100, 2) if capital_base else None,
+        "drawdown_pct": drawdown,
+        "cash": port["cash"],
+        "cash_pct": round(port["cash"] / equity * 100, 1) if equity else None,
+    }
 
     # Time-weighted-return index (linked Modified Dietz): deposits/withdrawals since the last
     # snapshot are the change in capital_base (net contributed capital), so funding never fakes
@@ -251,6 +263,7 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
         if m["side"] == "buy" and not _already_handled(trades_today, m["ticker"], "buy")
     ]
     sleeve_budget = _sleeve_budget(port["buying_power"], equity)
+    summary["account"]["budget"] = sleeve_budget
     _allocate_buys(pending_buys, sleeve_budget, buy_slots)
     sleeve = {
         "budget": sleeve_budget,
@@ -302,6 +315,7 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
                 mirrors_paper_trade_id=m.get("mirrors_paper_trade_id"), is_open=False,
             )
             summary["blocked"].append(f"{side}:{ticker}")
+            summary["block_reasons"][f"{side}:{ticker}"] = gr.block_reason
             continue
 
         _execute_one(broker, ticker, side, held, estimated_cost, m, gr,
@@ -368,7 +382,8 @@ def _execute_one(broker, ticker, side, held, estimated_cost, mirror, gr,
             submitted_at=submitted_at, is_open=False,
         )
         logger.info("Autotrader DRY-RUN %s %s %s (id=%s)", side, ticker, size_desc, tid)
-        summary["placed"].append({"ticker": ticker, "side": side, "dry_run": True, "id": tid})
+        summary["placed"].append({"ticker": ticker, "side": side, "dry_run": True, "id": tid,
+                                   "dollars": dollar_amount, "shares": quantity, "status": "dry_run"})
         trades_today.append({"ticker": ticker, "side": side, "status": "dry_run"})
         return
 
@@ -397,7 +412,8 @@ def _execute_one(broker, ticker, side, held, estimated_cost, mirror, gr,
         mirrors_paper_trade_id=mirror.get("mirrors_paper_trade_id"), submitted_at=submitted_at,
     )
     logger.info("Autotrader PLACED %s %s %s (order_id=%s, id=%s)", side, ticker, size_desc, order_id, tid)
-    summary["placed"].append({"ticker": ticker, "side": side, "order_id": order_id, "id": tid})
+    summary["placed"].append({"ticker": ticker, "side": side, "order_id": order_id, "id": tid,
+                              "dollars": dollar_amount, "shares": quantity, "status": status})
     trades_today.append({"ticker": ticker, "side": side, "status": "submitted"})
 
 

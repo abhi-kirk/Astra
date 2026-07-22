@@ -132,15 +132,68 @@ def notify_run(buy_tickers, sell_tickers, advisor_note, mode="simulation", buy_l
     return send(format_message(buy_tickers, sell_tickers, advisor_note, mode, buy_labels))
 
 
+# Skip reasons worth surfacing (a would-be trade that didn't happen); idempotent
+# already-handled skips (2-segment "side:ticker") are routine noise and stay hidden.
+_SKIP_LABELS = {
+    "unfunded": "budget",
+    "not_held": "not held",
+    "bad_size": "bad size",
+    "bad_qty": "bad size",
+    "review_failed": "review failed",
+}
+
+
+def _fmt_placed(o: dict) -> str:
+    """One order line with side, ticker, size ($ for buys, shares for sells) and fill state."""
+    side = (o.get("side") or "").upper()
+    arrow = "🟢" if o.get("side") == "buy" else "🔴"
+    if o.get("side") == "buy":
+        size = f"${o['dollars']:,.2f}" if o.get("dollars") else ""
+    else:
+        shares = o.get("shares")
+        size = f"{shares:g} sh" if shares else ""
+    status = o.get("status")
+    bits = [b for b in (size, status) if b]
+    tail = f" — {' · '.join(bits)}" if bits else ""
+    return f"{arrow} {side} {o.get('ticker')}{tail}"
+
+
+def _account_footer(acct: dict, placed: list) -> str | None:
+    """Sleeve state line: equity · net P&L% · drawdown · cash reserve% · deployed/budget."""
+    if not acct:
+        return None
+    parts = []
+    if acct.get("equity") is not None:
+        parts.append(f"${acct['equity']:,.0f} equity")
+    if acct.get("net_pnl_pct") is not None:
+        parts.append(f"{acct['net_pnl_pct']:+.1f}% P&L")
+    dd = acct.get("drawdown_pct")
+    if dd is not None and dd < 0:
+        parts.append(f"{dd:.1f}% drawdown")
+    if acct.get("cash_pct") is not None:
+        parts.append(f"{acct['cash_pct']:.0f}% cash")
+    deployed = sum(o.get("dollars") or 0 for o in placed if o.get("side") == "buy")
+    budget = acct.get("budget")
+    if deployed and budget:
+        parts.append(f"${deployed:,.0f} deployed of ${budget:,.0f}")
+    elif deployed:
+        parts.append(f"${deployed:,.0f} deployed")
+    return "💰 _Sleeve: " + " · ".join(parts) + "_" if parts else None
+
+
 def notify_agent(summary: dict) -> bool:
-    """Alert on an Autotrader run: real orders placed, blocks, halt/pause.
+    """Alert on an Autotrader run: real orders placed (with size + fill state), blocks
+    (with the guardrail reason), and the resulting sleeve state; halt/abort/pause first.
 
     Only sends when something noteworthy happened (an order, a block, or a halt/pause)
     so routine no-op runs stay quiet. Dry-run placements are flagged as such.
     """
     placed = summary.get("placed") or []
     blocked = summary.get("blocked") or []
+    reasons = summary.get("block_reasons") or {}
+    acct = summary.get("account") or {}
     dry = summary.get("dry_run")
+    footer = f"[Open dashboard →]({DASHBOARD_URL})"
 
     if summary.get("aborted") == "account_read_failed":
         md = ("⚠️ **ASTRA Autotrader could not run** — the agentic Robinhood account couldn't be "
@@ -151,7 +204,11 @@ def notify_agent(summary: dict) -> bool:
         md = f"⚠️ **ASTRA Autotrader could not run** — {summary['aborted']}. No trades this run."
         return send(markdownify(md))
     if summary.get("halted"):
-        md = "🛑 **ASTRA Autotrader HALTED** — drawdown limit breached. Autonomous trading stopped; manual reset required."
+        acct_line = _account_footer(acct, placed)
+        md = ("🛑 **ASTRA Autotrader HALTED** — drawdown limit breached. Autonomous trading "
+              "stopped; manual reset required.")
+        if acct_line:
+            md += f"\n{acct_line}"
         return send(markdownify(md))
     if "paused" in (summary.get("skipped") or []):
         return False  # paused is an intentional owner action — no alert needed
@@ -161,10 +218,24 @@ def notify_agent(summary: dict) -> bool:
 
     tag = " _(dry-run)_" if dry else ""
     lines = [f"🤖 **ASTRA Autotrader**{tag}"]
-    for o in placed:
-        arrow = "🟢" if o.get("side") == "buy" else "🔴"
-        lines.append(f"{arrow} {o.get('side', '').upper()} {o.get('ticker')}")
-    if blocked:
-        lines.append(f"⛔ blocked: {', '.join(blocked)}")
-    lines.append(f"[Open dashboard →]({DASHBOARD_URL})")
+    lines += [_fmt_placed(o) for o in placed]
+    for b in blocked:
+        reason = reasons.get(b)
+        ticker = b.split(":", 1)[-1]
+        lines.append(f"⛔ {ticker} blocked — {reason}" if reason else f"⛔ {ticker} blocked")
+
+    # Muted line for would-be trades that didn't happen (budget ran out, nothing to sell, …);
+    # idempotent already-handled skips are omitted as routine.
+    skips = []
+    for s in (summary.get("skipped") or []):
+        segs = s.split(":")
+        if len(segs) >= 3 and segs[2] in _SKIP_LABELS:
+            skips.append(f"{segs[1]} ({_SKIP_LABELS[segs[2]]})")
+    if skips:
+        lines.append(f"_skipped: {', '.join(skips)}_")
+
+    acct_line = _account_footer(acct, placed)
+    if acct_line:
+        lines.append(acct_line)
+    lines.append(footer)
     return send(markdownify("\n".join(lines)))
