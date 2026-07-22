@@ -207,20 +207,22 @@ class TestScreenPosition:
         assert sig["action"] == "buy"
         assert sig["suggested_position_pct"] is not None
 
-    def test_rklb_watch_weak_technicals(self, convictions, base_position, portfolio_summary):
-        # Good quality but no technical entry signal
+    def test_rklb_buys_on_business_not_technicals(self, convictions, base_position, portfolio_summary):
+        # Conviction-primary: a high-conviction name with a healthy business BUYS even without a
+        # strong technical entry — technicals no longer gate; they only size the lot (Stage 2).
         weak_tech = {
             "current_price": 85.0,
             "revenue_growth_yoy": 0.25,
             "gross_margins": 0.55,
             "debt_to_equity": 40.0,
             "free_cashflow": 500_000_000,
-            "pct_below_52w_high": 5.0,   # < 15% threshold
-            "rsi_14": 55.0,               # > 40 threshold
+            "pct_below_52w_high": 5.0,   # near its highs → small discount → smaller lot, not a veto
+            "rsi_14": 55.0,
             "price_vs_ma50_pct": 2.0,
         }
         sig = screen_position("RKLB", base_position, weak_tech, convictions, portfolio_summary)
-        assert sig["action"] == "watch"
+        assert sig["action"] == "buy"
+        assert sig["suggested_position_pct"] is not None
 
     def test_winner_at_highs_not_sold(self, convictions, good_market_data, portfolio_summary):
         # A +70% winner with an intact uptrend must NOT be sold on gain alone.

@@ -79,6 +79,10 @@ def trend(md: dict) -> Factor:
     terms: list[float] = []
     if reg == regime.UPTREND:
         terms.append(params.T_REGIME_TERM)
+    elif reg == regime.PULLBACK:
+        # Pullback in an intact long-term uptrend: neutral regime term, not the full
+        # downtrend penalty — the dip is an opportunity, not a broken trend.
+        terms.append(params.T_REGIME_PULLBACK)
     elif reg == regime.DOWNTREND:
         terms.append(-params.T_REGIME_TERM)
     else:

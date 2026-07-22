@@ -264,10 +264,19 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
 
     screen_input = {t: portfolio.get(t, {}) for t in universe}
 
+    # Broad-market drawdown (SPY below its 52wk high) drives the conviction-primary market-cycle
+    # overlay — buy a little more into a market-wide dip. Best-effort; None → no effect.
+    market_dd = None
+    try:
+        market_dd = get_market_data("SPY").get("pct_below_52w_high")
+    except Exception:
+        logger.warning("Could not fetch SPY for the market-cycle overlay — sizing without it", exc_info=True)
+
     with obs.phase("screening"):
         signals = screen_all_positions(
             screen_input, market_data, convictions,
             full_portfolio=portfolio,   # sizing + theme/position caps measured against actual holdings
+            market_drawdown_pct=market_dd,
         )
 
     # Exploration: discover theme-aligned candidates (on_radar names not yet on a conviction

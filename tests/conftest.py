@@ -10,6 +10,7 @@ def convictions():
         },
         "themes": {
             "core_tech": {
+                "conviction": "high",
                 "approved": ["GOOGL", "NVDA"],
                 "preferred": [],
                 "hold_only": [],
@@ -17,6 +18,7 @@ def convictions():
                 "notes": {},
             },
             "space": {
+                "conviction": "very_high",
                 "approved": ["RKLB", "ASTS"],
                 "preferred": [],
                 "hold_only": [],

@@ -82,6 +82,39 @@ class TestTrend:
         assert factors.trend({}).value is None
 
 
+class TestRegimePullback:
+    # A shallow dip below the 200-MA while the 200-MA is still rising is a PULLBACK
+    # (buyable dip), not a DOWNTREND — the Tier-1 fix so a market wobble on a quality
+    # name in an intact uptrend no longer gets the full downtrend penalty.
+    def _md(self, **over):
+        md = {"current_price": 96, "ma_50": 101, "ma_200": 100, "ma_200_slope_pct": 1.5,
+              "mom_12_1": 0.1, "price_vs_ma50_pct": -5.0}
+        md.update(over)
+        return md
+
+    def test_shallow_dip_rising_ma_is_pullback(self):
+        md = self._md()  # 4% below a rising 200-MA
+        assert regime.classify(md) == regime.PULLBACK
+
+    def test_pullback_not_penalized_like_downtrend(self):
+        pull = factors.trend(self._md()).value
+        down = factors.trend(self._md(ma_200_slope_pct=-1.5)).value  # same name, falling 200-MA
+        assert regime.classify(self._md(ma_200_slope_pct=-1.5)) == regime.DOWNTREND
+        assert pull > down  # the pullback keeps a materially higher trend score
+
+    def test_deep_dip_is_downtrend_even_if_ma_rising(self):
+        md = self._md(current_price=80)  # 20% below the 200-MA — a falling knife, not a dip
+        assert regime.classify(md) == regime.DOWNTREND
+
+    def test_falling_ma_is_downtrend(self):
+        assert regime.classify(self._md(ma_200_slope_pct=-0.5)) == regime.DOWNTREND
+
+    def test_slope_missing_falls_back_to_golden_cross(self):
+        md = self._md(ma_200_slope_pct=None)  # ma_50 (101) >= ma_200 (100) → still rising structure
+        assert regime.classify(md) == regime.PULLBACK
+        assert regime.classify(self._md(ma_200_slope_pct=None, ma_50=98)) == regime.DOWNTREND
+
+
 class TestEntry:
     def test_healthy_pullback_scores(self):
         md = {"current_price": 92, "ma_50": 90, "ma_200": 70, "rsi_14": 45,

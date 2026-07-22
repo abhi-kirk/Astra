@@ -71,7 +71,8 @@ def build_snapshot(
     }
     comp = entry.compute_composite(md)
     c = conviction.conviction_weight(guidance)
-    score_buy = c * comp.score
+    score_buy = entry.gate_score(md, comp, c)  # the actual gate score (C·H when conviction-primary, else C·S)
+    timing = entry.compute_timing(md)          # Stage-2 deal/timing signal M that paces the lot
 
     row["composite"] = _round(comp.score)
     row["conviction_weight"] = _round(c)
@@ -82,4 +83,8 @@ def build_snapshot(
     row["scores"] = {
         name: {"value": _round(f.value), "note": f.note} for name, f in pillars.items()
     }
+    # Conviction-primary internals — stashed in the flexible scores jsonb (no schema change).
+    row["scores"]["thesis_health"] = {"value": _round(pillars["quality"].value), "note": "H — gate axis"}
+    row["scores"]["timing"] = {"value": _round(timing), "note": "M — Stage-2 lot pacing (discount/deal)"}
+    row["scores"]["timing_multiplier"] = {"value": _round(sizing.timing_multiplier(md)), "note": "lot ×"}
     return row

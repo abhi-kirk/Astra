@@ -123,9 +123,16 @@ class TechConfig:
 class BrainConfig:
     # ── Conviction weights (the anchor C — both the BUY gate and the score multiplier;
     # a ticker must map to one of these statuses to be buyable at all) ─────────
-    conviction_preferred: float = _cfg("BRAIN_CONVICTION_PREFERRED", cast=float, default=1.0)  # named holding / core high-conviction
-    conviction_approved: float = _cfg("BRAIN_CONVICTION_APPROVED", cast=float, default=0.7)    # approved theme, not a named holding
+    conviction_preferred: float = _cfg("BRAIN_CONVICTION_PREFERRED", cast=float, default=1.0)  # (legacy bucket path) named holding / core high-conviction
+    conviction_approved: float = _cfg("BRAIN_CONVICTION_APPROVED", cast=float, default=0.7)    # (legacy bucket path) approved theme, not a named holding
     conviction_hold: float = _cfg("BRAIN_CONVICTION_HOLD", cast=float, default=0.4)            # hold-only — no fresh buys without a catalyst
+    # Conviction-primary: C is derived from the THEME conviction label (industry-level, per the
+    # "conviction is industry-level" decision), NOT the preferred/approved bucket — H (thesis-health)
+    # does the per-name differentiation the buckets used to. hold_only/do_not_add stay behavioral gates.
+    conviction_very_high: float = _cfg("BRAIN_CONVICTION_VERY_HIGH", cast=float, default=1.0)
+    conviction_high: float = _cfg("BRAIN_CONVICTION_HIGH", cast=float, default=0.8)   # < very_high, so a very_high theme leads
+    conviction_medium: float = _cfg("BRAIN_CONVICTION_MEDIUM", cast=float, default=0.6)
+    conviction_low: float = _cfg("BRAIN_CONVICTION_LOW", cast=float, default=0.4)
 
     # ── Pillar weights — composite S = Σ w·pillar; the five weights sum to 1.0 ──
     weight_quality: float = _cfg("BRAIN_WEIGHT_QUALITY", cast=float, default=0.25)        # fundamentals (growth, margins, leverage, liquidity)
@@ -134,9 +141,19 @@ class BrainConfig:
     weight_entry: float = _cfg("BRAIN_WEIGHT_ENTRY", cast=float, default=0.20)            # pullback timing (ATR depth, MA proximity, RSI)
     weight_revisions: float = _cfg("BRAIN_WEIGHT_REVISIONS", cast=float, default=0.15)    # analyst estimate revisions (soft signal)
 
-    # ── Decision thresholds on Score_buy = C·S ─────────────────────────────────
-    buy_threshold: float = _cfg("BRAIN_BUY_THRESHOLD", cast=float, default=0.45)      # Score_buy ≥ this → BUY signal (aggressive: was 0.50)
-    watch_threshold: float = _cfg("BRAIN_WATCH_THRESHOLD", cast=float, default=0.30)  # watch ≤ Score_buy < buy → WATCH; below → no action
+    # ── Decision thresholds on the gate score ──────────────────────────────────
+    buy_threshold: float = _cfg("BRAIN_BUY_THRESHOLD", cast=float, default=0.45)      # gate ≥ this → BUY signal (aggressive: was 0.50)
+    watch_threshold: float = _cfg("BRAIN_WATCH_THRESHOLD", cast=float, default=0.30)  # watch ≤ gate < buy → WATCH; below → no action
+
+    # ── Conviction-primary gate (docs/conviction_primary.md) ───────────────────
+    # When on, the buy/watch/hold GATE = conviction × thesis-health (OwnScore = C·H), NOT the
+    # market composite C·S — the market (trend/entry/valuation/revisions) never votes on whether
+    # to own, only on sizing/pacing downstream. Default off; flip to prototype/adopt Stage 1.
+    conviction_primary: bool = _cfg("BRAIN_CONVICTION_PRIMARY", cast=bool, default=True)
+    thesis_neutral: float = _cfg("BRAIN_THESIS_NEUTRAL", cast=float, default=0.5)  # H fallback when fundamentals are absent (ETFs/ADRs) — conviction then carries the gate
+    # Selective buy bar for the C·H gate (higher than the legacy C·S bars — fewer, stronger buys).
+    cp_buy_threshold: float = _cfg("BRAIN_CP_BUY_THRESHOLD", cast=float, default=0.60)    # C·H ≥ this → BUY
+    cp_watch_threshold: float = _cfg("BRAIN_CP_WATCH_THRESHOLD", cast=float, default=0.35)  # C·H ≥ this → WATCH
 
     # ── Sizing (fractional-Kelly proxy, vol-scaled) ────────────────────────────
     # target_w = f_global · Score_buy · vol_scalar ; vol_scalar = clip(vol_ref/atr_pct, min, max)
@@ -147,6 +164,16 @@ class BrainConfig:
     vol_scalar_max: float = _cfg("BRAIN_VOL_SCALAR_MAX", cast=float, default=1.5)  # ceil: most a low-vol name's size is boosted
     max_new_deploy_pct: float = _cfg("BRAIN_MAX_NEW_DEPLOY_PCT", cast=float, default=0.25)  # cap on total new BUYs per run (fraction of book)
     # (single-name cap = rules.max_position_pct, theme cap = rules.max_theme_pct — reused)
+    # Stage-2 timing multiplier (conviction-primary only): the timing/deal signal M∈[0,1]
+    # scales each buy's lot. AGGRESSIVE-DIP policy — M rewards *discount* (deeper drawdown +
+    # cheaper + pulled-back → higher M → bigger lot); a name at highs sizes small. M=0.5 → ×1.0.
+    size_timing_min: float = _cfg("BRAIN_SIZE_TIMING_MIN", cast=float, default=0.5)  # no discount (at highs) → half a lot
+    size_timing_max: float = _cfg("BRAIN_SIZE_TIMING_MAX", cast=float, default=2.0)  # full discount (deep dip) → 2× a lot (back-up-the-truck)
+    discount_full_pct: float = _cfg("BRAIN_DISCOUNT_FULL_PCT", cast=float, default=40.0)  # % below 52wk-high that counts as a full discount
+    # Market-cycle overlay: when the broad market (SPY) is in a drawdown, boost every buy's lot
+    # (buy into the cycle dip — the "market cycles" ask). Bounded; 1.0 = no effect at market highs.
+    market_overlay_max: float = _cfg("BRAIN_MARKET_OVERLAY_MAX", cast=float, default=1.25)      # max lot boost when the market is deeply down
+    market_overlay_full_dd_pct: float = _cfg("BRAIN_MARKET_OVERLAY_FULL_DD_PCT", cast=float, default=15.0)  # SPY % below its high = full boost
 
     # ── Quality pillar ramps ───────────────────────────────────────────────────
     # Each metric maps through smooth(x, lo, hi) → 0 below lo, 1 above hi, linear between;
@@ -170,9 +197,18 @@ class BrainConfig:
     v_neutral: float = _cfg("BRAIN_V_NEUTRAL", cast=float, default=0.5)    # missing data
 
     # ── Trend pillar ───────────────────────────────────────────────────────────
-    t_regime_term: float = _cfg("BRAIN_T_REGIME_TERM", cast=float, default=0.5)   # ±contribution of regime
+    t_regime_term: float = _cfg("BRAIN_T_REGIME_TERM", cast=float, default=0.5)   # ±contribution of regime (uptrend/downtrend)
+    t_regime_pullback: float = _cfg("BRAIN_T_REGIME_PULLBACK", cast=float, default=0.0)  # regime term for a pullback-in-uptrend: neutral, not the -0.5 downtrend penalty
     t_mom_scale: float = _cfg("BRAIN_T_MOM_SCALE", cast=float, default=0.25)      # tanh scale for 12-1 mom
     t_ma50_scale: float = _cfg("BRAIN_T_MA50_SCALE", cast=float, default=15.0)    # tanh scale for price-vs-50MA %
+
+    # ── Regime classification (pullback-in-uptrend vs genuine downtrend) ────────
+    # A name below its 200-MA is a *pullback* (long-term trend intact) rather than a
+    # downtrend only if it is (a) shallowly below the 200-MA and (b) the 200-MA is still
+    # rising (slope preferred; golden-cross structure as fallback when slope is unknown).
+    regime_pullback_max_below_ma200_pct: float = _cfg("BRAIN_REGIME_PULLBACK_MAX_BELOW_MA200_PCT", cast=float, default=8.0)
+    regime_slope_min_pct: float = _cfg("BRAIN_REGIME_SLOPE_MIN_PCT", cast=float, default=0.0)  # min 200-MA slope over the lookback to count as "rising"
+    ma_slope_lookback_days: int = _cfg("BRAIN_MA_SLOPE_LOOKBACK_DAYS", cast=int, default=21)   # bars back to measure the 200-MA slope
 
     # ── Entry-timing pillar (pullback measured in ATR units) ───────────────────
     e_pullback_peak_low: float = _cfg("BRAIN_E_PULLBACK_PEAK_LOW", cast=float, default=1.0)    # ATRs: start of sweet spot

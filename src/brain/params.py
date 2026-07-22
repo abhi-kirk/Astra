@@ -18,6 +18,14 @@ CONVICTION_WEIGHTS: dict[str, float] = {
     # do_not_add / written_off / unknown → 0 (structural: no BUY weight)
 }
 
+# Conviction-primary: theme conviction label → anchor weight C (industry-level).
+CONVICTION_THEME_WEIGHTS: dict[str, float] = {
+    "very_high": _b.conviction_very_high,
+    "high":      _b.conviction_high,
+    "medium":    _b.conviction_medium,
+    "low":       _b.conviction_low,
+}
+
 # ── Pillar weights (composite S = Σ w·pillar) ─────────────────────────────────
 PILLAR_WEIGHTS: dict[str, float] = {
     "quality":   _b.weight_quality,
@@ -31,6 +39,12 @@ PILLAR_WEIGHTS: dict[str, float] = {
 BUY_THRESHOLD   = _b.buy_threshold
 WATCH_THRESHOLD = _b.watch_threshold
 
+# ── Conviction-primary gate (OwnScore = C·H vs. the market composite C·S) ──────
+CONVICTION_PRIMARY = _b.conviction_primary
+THESIS_NEUTRAL     = _b.thesis_neutral
+CP_BUY_THRESHOLD   = _b.cp_buy_threshold
+CP_WATCH_THRESHOLD = _b.cp_watch_threshold
+
 # ── Sizing ────────────────────────────────────────────────────────────────────
 F_GLOBAL          = _b.f_global
 SIZE_MIN_PCT      = _b.size_min_pct
@@ -41,6 +55,11 @@ VOL_SCALAR_MAX    = _b.vol_scalar_max
 MAX_NEW_DEPLOY_PCT = _b.max_new_deploy_pct
 MAX_THEME_PCT     = config.rules.max_theme_pct       # theme cap (reused)
 THEME_CAP_EXEMPT  = config.rules.theme_cap_exempt    # theme(s) exempt from the cap
+SIZE_TIMING_MIN   = _b.size_timing_min               # Stage-2 timing multiplier bounds
+SIZE_TIMING_MAX   = _b.size_timing_max
+DISCOUNT_FULL_PCT = _b.discount_full_pct             # % below 52wk high = full discount → biggest lot
+MARKET_OVERLAY_MAX          = _b.market_overlay_max            # market-cycle lot boost bounds
+MARKET_OVERLAY_FULL_DD_PCT  = _b.market_overlay_full_dd_pct
 
 # ── Quality pillar ────────────────────────────────────────────────────────────
 Q_REV_LOW, Q_REV_HIGH   = _b.q_rev_low, _b.q_rev_high
@@ -55,9 +74,14 @@ V_PE_LOW, V_PE_HIGH     = _b.v_pe_low, _b.v_pe_high
 V_NEUTRAL               = _b.v_neutral
 
 # ── Trend pillar ──────────────────────────────────────────────────────────────
-T_REGIME_TERM = _b.t_regime_term
-T_MOM_SCALE   = _b.t_mom_scale
-T_MA50_SCALE  = _b.t_ma50_scale
+T_REGIME_TERM     = _b.t_regime_term
+T_REGIME_PULLBACK = _b.t_regime_pullback
+T_MOM_SCALE       = _b.t_mom_scale
+T_MA50_SCALE      = _b.t_ma50_scale
+
+# ── Regime classification (pullback-in-uptrend vs downtrend) ──────────────────
+REGIME_PULLBACK_MAX_BELOW_MA200_PCT = _b.regime_pullback_max_below_ma200_pct
+REGIME_SLOPE_MIN_PCT                = _b.regime_slope_min_pct
 
 # ── Entry-timing pillar ───────────────────────────────────────────────────────
 E_PULLBACK_PEAK_LOW  = _b.e_pullback_peak_low

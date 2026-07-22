@@ -40,6 +40,7 @@ def get_ticker_guidance(ticker: str, convictions: dict) -> dict:
             "notes": individual.get("thesis", ""),
             "action_note": individual.get("action", ""),
             "theme": None,
+            "theme_conviction": None,
             "do_not_add": individual.get("status") == "do_not_add",
             "hold_only": individual.get("status") == "hold",
         })
@@ -57,26 +58,39 @@ def get_ticker_guidance(ticker: str, convictions: dict) -> dict:
                     "notes": theme.get("notes", {}).get(ticker, ""),
                     "action_note": "",
                     "theme": theme_name,
+                    "theme_conviction": theme.get("conviction"),  # industry-level label → C under conviction-primary
                     "do_not_add": do_not_add,
                     "hold_only": hold_only,
                 })
 
     return _with_meta({"status": "unknown", "notes": "", "action_note": "", "theme": None,
-                       "do_not_add": False, "hold_only": False})
+                       "theme_conviction": None, "do_not_add": False, "hold_only": False})
 
 
 def conviction_weight(guidance: dict) -> float:
     """
-    Conviction weight C ∈ [0,1] used in Score_buy = C·S and in sizing.
-    preferred > approved > hold; do_not_add / written_off / unknown → 0 (no BUY).
+    Conviction weight C ∈ [0,1] — the anchor in the buy gate and in sizing.
+
+    Conviction-primary (docs/conviction_primary.md): C comes from the *theme* conviction label
+    (very_high/high/medium/low — industry-level), NOT the preferred/approved bucket; H does the
+    per-name differentiation the buckets used to. Legacy: preferred > approved > hold buckets.
+    Either way, do_not_add / unknown → 0 and hold(-only) → the hold tier (gated from BUYs anyway).
     """
     status = guidance.get("status", "unknown")
+    if status in ("do_not_add", "written_off", "unknown"):
+        return 0.0
+    if status in ("hold", "hold_only"):
+        return params.CONVICTION_WEIGHTS["hold"]
+
+    if params.CONVICTION_PRIMARY:
+        label = guidance.get("theme_conviction") or "medium"
+        # Missing/odd label → treat as mid-tier rather than silently zeroing a real conviction.
+        return params.CONVICTION_THEME_WEIGHTS.get(label, params.CONVICTION_THEME_WEIGHTS["medium"])
+
     if status == "preferred":
         return params.CONVICTION_WEIGHTS["preferred"]
     if status == "approved":
         return params.CONVICTION_WEIGHTS["approved"]
-    if status in ("hold", "hold_only"):
-        return params.CONVICTION_WEIGHTS["hold"]
     return 0.0
 
 

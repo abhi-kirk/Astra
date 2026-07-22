@@ -227,6 +227,14 @@ def get_market_data(ticker: str, period_days: int = config.market_data.period_da
         rsi = _calc_rsi(hist["Close"])
         ma_50 = float(hist["Close"].tail(50).mean())
         ma_200 = float(hist["Close"].tail(200).mean()) if len(hist) >= 200 else None
+        # 200-MA slope: % change vs the 200-MA `slope_lb` bars ago — a "long-term trend
+        # still rising" signal used by regime to tell a pullback from a real downtrend.
+        ma_200_slope_pct = None
+        slope_lb = config.brain.ma_slope_lookback_days
+        if ma_200 is not None and len(closes) >= 200 + slope_lb:
+            ma_200_prev = float(closes.iloc[-(200 + slope_lb):-slope_lb].mean())
+            if ma_200_prev > 0:
+                ma_200_slope_pct = round((ma_200 - ma_200_prev) / ma_200_prev * 100, 3)
         avg_vol_30d = float(hist["Volume"].tail(30).mean())
         atr_14 = _calc_atr(hist, config.brain.atr_period)
         recent_swing_high = float(hist["High"].tail(config.brain.swing_high_lookback).max())
@@ -244,6 +252,7 @@ def get_market_data(ticker: str, period_days: int = config.market_data.period_da
             "rsi_14": rsi,
             "ma_50": round(ma_50, 2),
             "ma_200": round(ma_200, 2) if ma_200 else None,
+            "ma_200_slope_pct": ma_200_slope_pct,
             "price_vs_ma50_pct": round((current_price - ma_50) / ma_50 * 100, 2),
             "avg_volume_30d": int(avg_vol_30d),
             # Brain technicals

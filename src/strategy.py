@@ -134,8 +134,12 @@ def screen_all_positions(
     market_data: dict[str, dict],
     convictions: dict,
     full_portfolio: dict[str, dict] | None = None,
+    market_drawdown_pct: float | None = None,
 ) -> list[Signal]:
-    """Screen all positions, then allocate sizes across BUYs under portfolio caps."""
+    """Screen all positions, then allocate sizes across BUYs under portfolio caps.
+
+    `market_drawdown_pct` (SPY % below its 52wk high) drives the conviction-primary market-cycle
+    overlay — buys size up a little when the broad market is down. None / off-flag → no effect."""
     sizing_portfolio = full_portfolio if full_portfolio else portfolio
     portfolio_summary = compute_portfolio_summary(sizing_portfolio, market_data, convictions)
     signals = [
@@ -146,7 +150,7 @@ def screen_all_positions(
     # Iterative constrained allocation across simultaneous BUYs (may downgrade some to watch).
     buys = [s for s in signals if s["action"] == "buy"]
     if buys:
-        sizing.allocate(buys, portfolio_summary)
+        sizing.allocate(buys, portfolio_summary, sizing.market_cycle_multiplier(market_drawdown_pct))
 
     priority = {"buy": 0, "sell": 1, "trim": 1, "watch": 2, "hold": 3, "blocked": 4}
     return sorted(signals, key=lambda s: priority.get(s["action"], 5))
