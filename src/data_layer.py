@@ -300,6 +300,15 @@ def get_market_data_bulk(
             except Exception as e:
                 results[t] = {"ticker": t, "error": str(e)}
                 logger.error(f"Market data fetch failed for {t}: {e}")
+
+    # Overlay cached SEC EDGAR fundamentals (free, keyless) where they beat yfinance —
+    # gated off by default until the weekly cache is validated (see src/fundamentals.py).
+    if config.market_data.sec_fundamentals_enabled:
+        try:
+            from src import fundamentals
+            fundamentals.merge_into_market_data(results)
+        except Exception as e:
+            logger.warning(f"SEC fundamentals overlay skipped: {e}")
     return results
 
 

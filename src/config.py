@@ -36,6 +36,9 @@ class ServicesConfig:
     # Community-hosted, no auth. Falls back gracefully if unavailable.
     sec_edgar_mcp_url: str = _cfg("SEC_EDGAR_MCP_URL", default="https://secedgar.caseyjhand.com/mcp")  # SEC filings MCP
     fmp_api_key: str = _cfg("FMP_API_KEY", default="")                        # analyst price-targets / grades MCP (large/mid caps only)
+    # SEC EDGAR requires a descriptive User-Agent with a contact (fair-use policy, ~10 req/s).
+    # Free + keyless XBRL fundamentals for US filers — fills the small-cap gap yfinance/FMP-free miss.
+    sec_user_agent: str = _cfg("SEC_USER_AGENT", default="ASTRA/1.0 abhikirk@icloud.com")
 
 
 # ── AI reasoning ───────────────────────────────────────────────────────────────
@@ -82,6 +85,16 @@ class PaperConfig:
 class MarketDataConfig:
     workers: int = _cfg("MARKET_DATA_WORKERS", cast=int, default=8)          # yfinance fetch thread-pool size
     period_days: int = _cfg("MARKET_DATA_PERIOD_DAYS", cast=int, default=365)  # trailing price-history window pulled per ticker
+    # When true, get_market_data_bulk overlays the cached SEC EDGAR fundamentals table over
+    # yfinance for the fields SEC provides (revenue growth, margins, ratios). LIVE — cache
+    # validated against the full book (2026-07-22). A stale/missing cache degrades to yfinance.
+    sec_fundamentals_enabled: bool = _cfg("SEC_FUNDAMENTALS_ENABLED", cast=bool, default=True)
+    # Cache staleness bound — a fundamentals row older than this is treated as absent on read.
+    fundamentals_max_age_days: int = _cfg("FUNDAMENTALS_MAX_AGE_DAYS", cast=int, default=30)
+    # Reporting-period staleness bound — a row whose latest reported quarter is older than
+    # this is not persisted (a filer with only years-old clean XBRL, e.g. a pre-revenue name
+    # with sparse tagging, would otherwise overlay stale/garbage financials over yfinance).
+    fundamentals_max_period_age_days: int = _cfg("FUNDAMENTALS_MAX_PERIOD_AGE_DAYS", cast=int, default=200)
 
 
 # ── Strategy: hard rules ───────────────────────────────────────────────────────
