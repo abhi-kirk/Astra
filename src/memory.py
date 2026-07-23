@@ -11,10 +11,28 @@ import logging
 from datetime import datetime
 
 from src import config
+from src.brain.version import (
+    brain_version_fields,
+    brain_version_registry_row,
+)
 from src.db import Rows, get_client
 from src.db import rows as db_rows
 
 logger = logging.getLogger(__name__)
+
+
+def _register_brain_version() -> None:
+    """Idempotently record the current brain config behind its hash (once per hash).
+
+    Best-effort metadata for attribution — a registry failure must never abort a trading
+    run, so it is logged and swallowed. The per-row version stamp is written regardless.
+    """
+    try:
+        get_client().table("brain_versions").upsert(
+            brain_version_registry_row(), on_conflict="config_hash", ignore_duplicates=True
+        ).execute()
+    except Exception as e:  # noqa: BLE001 — non-critical metadata, never break the run
+        logger.warning(f"brain_versions registry upsert failed (non-fatal): {e}")
 
 
 # A persistent signal (e.g. a profit-take that stays >60% up) re-logs weekly, not on
@@ -306,6 +324,7 @@ def log_paper_trade(
         "run_date": run_date,
         "signal_data": signal_data or {},
         "is_open": True,
+        **brain_version_fields(),  # stamp the brain that opened this lot (travels to close)
     }).execute()
     logger.info(f"Paper BUY  {ticker}: {virtual_shares:.4f} shares @ ${price:.2f}  (${virtual_cost:.0f} = {pct:.0%} of ${book:.0f})")
     data = db_rows(result.data)
@@ -484,6 +503,7 @@ def log_agent_trade(
         "source": source,
         "run_date": run_date,
         "is_open": is_open,
+        **brain_version_fields(),  # stamp the brain that placed this order (travels to close)
     }).execute()
     data = db_rows(result.data)
     return data[0].get("id") if data else None
@@ -608,7 +628,9 @@ def log_decision_features(rows: list[dict], run_date: str | None = None) -> None
     if not rows:
         return
     run_date = run_date or datetime.now().isoformat()
-    payload = [{**r, "run_date": run_date} for r in rows]
+    vf = brain_version_fields()
+    payload = [{**r, "run_date": run_date, **vf} for r in rows]
+    _register_brain_version()
     get_client().table("decision_features").insert(payload).execute()
     logger.info(f"Logged {len(payload)} decision-feature snapshot(s)")
 
@@ -627,11 +649,13 @@ def upsert_user_orders(rows: list[dict]) -> None:
 def log_agent_run(summary: dict, sleeve: dict | None = None, run_date: str | None = None) -> None:
     """Persist one Autotrader run: the full summary (placed/blocked/skipped+reasons/failed/
     halted/aborted) + sleeve allocation math that previously only reached Telegram/logs."""
+    _register_brain_version()
     get_client().table("agent_runs").insert({
         "run_date": run_date or datetime.now().isoformat(),
         "dry_run": bool(summary.get("dry_run")),
         "summary": summary,
         "sleeve": sleeve or {},
+        **brain_version_fields(),
     }).execute()
 
 
