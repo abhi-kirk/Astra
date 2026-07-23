@@ -2423,25 +2423,89 @@ async function init() {
       return '';
     }
 
-    // Always render all three action rows (even when empty) so BUY/SELL/WATCH
-    // labels stay vertically aligned; empty rows show a "—" placeholder.
+    // Actionable-first digest: the hero surfaces what needs attention today and
+    // folds the rest away (the exhaustive per-ticker view lives in Fleet Status).
+    //   • BUY  — actionable entries (NEW ENTRY / ADD-eligible) shown; throttled
+    //            re-fires (cooldown / at-cap) collapse into "+N on track".
+    //   • SELL — all shown (every sell is actionable).
+    //   • WATCH— capped, remainder behind "+N more".
+    const WATCH_CAP = 6;
+    const buys  = byAction.buy   || [];
+    const sells = byAction.sell  || [];
+    const watch = byAction.watch || [];
+    const buysActive    = buys.filter(s => !buyThrottled(s));
+    const buysThrottled = buys.filter(s =>  buyThrottled(s));
+
+    function tickerUnit(action, s, throttled = false) {
+      return `<span class="summary-ticker-unit${throttled ? ' buy-throttled' : ''}"><span class="ticker-link-plain" data-ticker="${s.ticker}">${s.ticker}</span>${signalBadge(action, s)}</span>`;
+    }
+    function moreToggle(id, label) {
+      return `<button class="summary-more-toggle" type="button" data-target="${id}">${label}</button>`;
+    }
+    function moreBody(id, html) {
+      return `<span class="summary-more-body hidden" id="${id}">${html}</span>`;
+    }
+
+    // BUY row content
+    let buyInner;
+    if (!buys.length) {
+      buyInner = '<span class="summary-empty">—</span>';
+    } else {
+      const parts = [];
+      if (buysActive.length) parts.push(buysActive.map(s => tickerUnit('buy', s)).join(''));
+      else parts.push('<span class="summary-empty summary-empty-inline">no fresh entries</span>');
+      if (buysThrottled.length) {
+        parts.push(moreToggle('buy-throttled', `+${buysThrottled.length} on track`));
+        parts.push(moreBody('buy-throttled', buysThrottled.map(s => tickerUnit('buy', s, true)).join('')));
+      }
+      buyInner = parts.join('');
+    }
+
+    // WATCH row content (cap + remainder)
+    let watchInner;
+    if (!watch.length) {
+      watchInner = '<span class="summary-empty">—</span>';
+    } else {
+      const shown = watch.slice(0, WATCH_CAP);
+      const rest  = watch.slice(WATCH_CAP);
+      const parts = [shown.map(s => tickerUnit('watch', s)).join('')];
+      if (rest.length) {
+        parts.push(moreToggle('watch-more', `+${rest.length} more`));
+        parts.push(moreBody('watch-more', rest.map(s => tickerUnit('watch', s)).join('')));
+      }
+      watchInner = parts.join('');
+    }
+
     const summaryRows = [
-      { action: 'buy',   label: '↑ BUY',   sigs: byAction.buy   || [] },
-      { action: 'sell',  label: '↓ SELL',  sigs: byAction.sell  || [] },
-      { action: 'watch', label: '◈ WATCH', sigs: byAction.watch || [] },
+      { action: 'buy',   label: '↑ BUY',   inner: buyInner },
+      { action: 'sell',  label: '↓ SELL',  inner: sells.length ? sells.map(s => tickerUnit('sell', s)).join('') : '<span class="summary-empty">—</span>' },
+      { action: 'watch', label: '◈ WATCH', inner: watchInner },
     ];
 
-    summaryEl.innerHTML = `<div class="summary-structured">${
-      summaryRows.map(r => `
-        <div class="summary-row">
-          <span class="summary-action-label ${r.action}">${r.label}</span>
-          <span class="summary-tickers">${r.sigs.length
-            ? r.sigs.map(s =>
-                `<span class="summary-ticker-unit${r.action === 'buy' && buyThrottled(s) ? ' buy-throttled' : ''}"><span class="ticker-link-plain" data-ticker="${s.ticker}">${s.ticker}</span>${signalBadge(r.action, s)}</span>`
-              ).join('<span class="summary-sep"> · </span>')
-            : '<span class="summary-empty">—</span>'}</span>
-        </div>`).join('')
-    }</div>`;
+    summaryEl.innerHTML = `
+      <div class="summary-head">
+        <span class="summary-head-lab">Today's signals</span>
+        <span class="summary-head-counts">
+          <span class="shc buy">${buys.length}</span><span class="shc-sep">·</span><span class="shc sell">${sells.length}</span><span class="shc-sep">·</span><span class="shc watch">${watch.length}</span>
+        </span>
+      </div>
+      <div class="summary-structured">${
+        summaryRows.map(r => `
+          <div class="summary-row">
+            <span class="summary-action-label ${r.action}">${r.label}</span>
+            <span class="summary-tickers">${r.inner}</span>
+          </div>`).join('')
+      }</div>`;
+
+    // Wire the "+N" expanders (reveal the folded chips inline on the next line).
+    summaryEl.querySelectorAll('.summary-more-toggle').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const body = summaryEl.querySelector(`#${btn.dataset.target}`);
+        if (!body) return;
+        const open = body.classList.toggle('hidden');
+        btn.classList.toggle('open', !open);
+      });
+    });
 
     // ── Advisor note ──
     const noteEl = document.getElementById('advisor-note');
