@@ -63,6 +63,10 @@
         <span class="convictions-btn-icon">✦</span>
         <span>CONVICTIONS</span>
       </button>
+      <button class="playbook-btn hidden" id="playbook-btn" title="Edit the Playbook — the strategies the contextual layer reasons over">
+        <span class="playbook-btn-icon">♟</span>
+        <span>PLAYBOOK</span>
+      </button>
       <a class="header-link" href="https://github.com/abhi-kirk/Astra" target="_blank" rel="noopener" title="Source + full write-up on GitHub">
         <span class="header-link-icon">↗</span>
         <span>GITHUB</span>
@@ -88,6 +92,19 @@
     </div>
     <div class="conv-body" id="journal-body">
       <div class="conv-loading">Loading trade history…</div>
+    </div>
+  </div>
+
+  <!-- PLAYBOOK DRAWER -->
+  <div id="playbook-backdrop" class="hidden"></div>
+  <div id="playbook-drawer" class="hidden" role="dialog" aria-label="Playbook Editor">
+    <div class="conv-header">
+      <span class="conv-title">PLAYBOOK</span>
+      <span class="conv-save-status" id="playbook-save-status"></span>
+      <button class="conv-close" id="playbook-close" aria-label="Close">✕</button>
+    </div>
+    <div class="conv-body" id="playbook-body">
+      <div class="conv-loading">Loading playbook…</div>
     </div>
   </div>
 
@@ -211,6 +228,9 @@
           <span class="advisor-rating-done hidden" id="advisor-rating-done">Rated ✓</span>
         </div>
       </section>
+
+      <!-- PLAYBOOK CONTEXTUAL PROPOSALS (owner-only, injected by JS) -->
+      <section id="playbook-panel" class="hidden"></section>
 
       <!-- PAPER PORTFOLIO (auth-gated, injected by JS) -->
       <section id="paper-portfolio" class="hidden"></section>

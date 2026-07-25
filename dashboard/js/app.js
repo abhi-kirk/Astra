@@ -363,6 +363,89 @@ async function fetchAgentSnapshot(sb) {
   return data || null;
 }
 
+// ── Contextual layer: latest run's Playbook proposals (owner-only) ──
+// Grab the most recent rows and keep only the latest run's, so the panel reflects
+// exactly what the last run's contextual layer proposed (quant + LLM, applied vs vetoed).
+async function fetchContextualInputs(sb) {
+  const { data, error } = await sb.from('contextual_inputs').select('*')
+    .order('run_date', { ascending: false }).order('id', { ascending: false }).limit(60);
+  if (error) { console.warn('contextual_inputs fetch failed:', error.message); return []; }
+  if (!data || !data.length) return [];
+  const latest = data[0].run_date;
+  return data.filter(r => r.run_date === latest);
+}
+
+// Render the owner-only "what the contextual layer did this run" panel. Groups the latest
+// run's proposals by play; each row shows the bounded delta, quant-vs-LLM source, whether it
+// survived the code clamps + hard invariants (applied), and the cited rationale.
+function renderPlaybookPanel(proposals) {
+  const section = document.getElementById('playbook-panel');
+  if (!section) return;
+  section.classList.remove('hidden');
+
+  const kindLabel = (kind, value) => {
+    const v = Number(value);
+    if (kind === 'size_multiplier') return { txt: `×${v.toFixed(2)}`, cls: v >= 1 ? 'pb-up' : 'pb-down' };
+    if (kind === 'conviction_nudge') return { txt: `${v >= 0 ? '+' : ''}${v.toFixed(2)} C`, cls: v >= 0 ? 'pb-up' : 'pb-down' };
+    if (kind === 'thesis_flag')     return { txt: `⚠ ${v.toFixed(2)}`, cls: 'pb-down' };
+    return { txt: `${v}`, cls: '' };
+  };
+  const kindName = { size_multiplier: 'size', conviction_nudge: 'conviction', thesis_flag: 'thesis' };
+
+  const runDate = proposals[0]?.run_date;
+  const runStr  = runDate ? new Date(runDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—';
+
+  let body;
+  if (!proposals.length) {
+    body = `<div class="treemap-empty">No plays fired last run — the deterministic brain baseline was unchanged.</div>`;
+  } else {
+    // Group by play, preserving first-seen order.
+    const byPlay = {};
+    proposals.forEach(p => { (byPlay[p.play] = byPlay[p.play] || []).push(p); });
+
+    body = Object.entries(byPlay).map(([play, rows]) => {
+      const appliedN = rows.filter(r => r.applied).length;
+      const cards = rows.map(r => {
+        const k = kindLabel(r.kind, r.value);
+        const srcCls = r.source === 'llm' ? 'pb-src-llm' : 'pb-src-quant';
+        const appCls = r.applied ? 'pb-applied' : 'pb-vetoed';
+        const appTxt = r.applied ? 'APPLIED' : 'VETOED';
+        const rationale = DOMPurify.sanitize(r.rationale || '');
+        return `<div class="pb-prop">
+          <div class="pb-prop-head">
+            <span class="ticker-link-plain pb-prop-ticker" data-ticker="${r.ticker}">${r.ticker}</span>
+            <span class="pb-kind">${kindName[r.kind] || r.kind}</span>
+            <span class="pb-value ${k.cls}">${k.txt}</span>
+            <span class="pb-src ${srcCls}">${(r.source || '').toUpperCase()}</span>
+            <span class="pb-app ${appCls}">${appTxt}</span>
+          </div>
+          ${rationale ? `<div class="pb-prop-rationale">${rationale}</div>` : ''}
+        </div>`;
+      }).join('');
+      return `<div class="pb-play">
+        <div class="pb-play-head">
+          <span class="pb-play-name">${play.replace(/_/g, ' ')}</span>
+          <span class="pb-play-count">${appliedN}/${rows.length} applied</span>
+        </div>
+        ${cards}
+      </div>`;
+    }).join('');
+  }
+
+  section.innerHTML = `
+    <div class="section-label">
+      <span class="section-icon">♟</span>
+      <span>PLAYBOOK · CONTEXTUAL LAYER</span>
+      <span class="section-badge">LLM-IN-LOOP · ${runStr}</span>
+    </div>
+    <div class="paper-card pb-card">
+      <div class="pb-intro">Bounded, play-tagged proposals the contextual layer fed into the deterministic brain last run. The LLM never decides — every proposal is clamped and re-checked against the hard rules in code (<span class="pb-vetoed-inline">vetoed</span> = it didn't survive).</div>
+      ${body}
+    </div>
+  `;
+  // Ticker links (.ticker-link-plain) scroll to the fleet card via the global delegated handler.
+}
+
 // ── Performance charts (NAV vs SPY) + holdings treemap ───────────
 // Backend (migration 014) stores a truthful nav_index per run for each track and
 // raw SPY closes; the frontend only rebases the SPY line and draws. No math in JS
@@ -1867,6 +1950,388 @@ function initConvictionsDrawer() {
   });
 }
 
+// ── Playbook Drawer ──────────────────────────────────────────
+// Edit the Playbook — the strategies the contextual layer reasons over. Mirrors the
+// convictions drawer exactly: a single-row JSONB blob, autosaved on any edit (UPDATE plays
+// + INSERT plays_history snapshot + logged user_action). `plays` is anon-read + owner-rw.
+
+let _plays = null;         // working copy of the plays blob { plays: [...] }
+let _playsRowId = null;
+let _playsSaveTimer = null;
+
+const PLAY_TYPES = ['quant', 'judgment', 'hybrid'];
+
+// Plain-language help for each known play param — what it means, how it changes ASTRA's
+// behavior, and its sane range (hard bounds the backend enforces noted where relevant).
+const PARAM_META = {
+  beta_min: {
+    desc: "Minimum market-beta for the play to fire. Beta = how much a stock moves with the market (1.0 = in step, >1 = amplified). A higher floor means only names that genuinely track the market qualify — so their drop is truly market-driven, not their own story.",
+    range: "0.5 – 2.0", def: "0.8",
+  },
+  residual_max_pct: {
+    desc: "Max company-specific residual (%). The slice of the drop the market does NOT explain — i.e. weakness that's about this company. Lower = the play insists the fall is macro noise, not a broken business.",
+    range: "0 – 15%", def: "5%",
+  },
+  min_drop_pct: {
+    desc: "Minimum recent drop (%) for a name to count as a dip worth sizing into. Below this the discount is too small to bother acting on.",
+    range: "3 – 25%", def: "8%",
+  },
+  min_r2: {
+    desc: "Reliability floor for the beta read (0–1) — how much of the stock's moves the market actually explains. Below the floor, the 'this is macro' read is untrustworthy and the play stays silent. Backend won't trust reads below 0.35.",
+    range: "0 – 1", def: "0.35",
+  },
+  size_mult_max: {
+    desc: "Biggest lot-size multiplier this play can request (1.0 = no change, 1.5 = buy 50% more into the dip). The backend hard-caps every play at 2.0 regardless of what you set here.",
+    range: "1.0 – 2.0", def: "2.0",
+  },
+  nudge_max: {
+    desc: "Largest upward conviction bump this play may request, used to tip a near-miss WATCH into a BUY on a clean deep dip. The backend hard-caps this at 0.10.",
+    range: "0 – 0.10", def: "0.10",
+  },
+};
+
+// A single reusable, fixed-position tooltip so param help never clips inside the scrolling
+// drawer. Shown on hover/focus of any .pb-param-info icon; content pulled from PARAM_META.
+let _pbTip = null;
+function ensurePbTooltip() {
+  if (_pbTip) return _pbTip;
+  _pbTip = document.createElement('div');
+  _pbTip.id = 'pb-tip';
+  _pbTip.className = 'pb-tip hidden';
+  document.body.appendChild(_pbTip);
+  return _pbTip;
+}
+function showPbTooltip(icon) {
+  const key = icon.dataset.param;
+  const meta = PARAM_META[key];
+  const tip = ensurePbTooltip();
+  tip.innerHTML = meta
+    ? `<div class="pb-tip-title">${key}</div>
+       <div class="pb-tip-desc">${meta.desc}</div>
+       <div class="pb-tip-range"><span>RANGE</span> ${meta.range} <span class="pb-tip-def">· default ${meta.def}</span></div>`
+    : `<div class="pb-tip-title">${key}</div>
+       <div class="pb-tip-desc">Custom parameter — no built-in description. The backend clamps it to its own safe bounds at run time.</div>`;
+  tip.classList.remove('hidden');
+  // Position above the icon, centered, flipping below if there isn't room.
+  const r = icon.getBoundingClientRect();
+  const tr = tip.getBoundingClientRect();
+  let left = r.left + r.width / 2 - tr.width / 2;
+  left = Math.max(10, Math.min(left, window.innerWidth - tr.width - 10));
+  let top = r.top - tr.height - 10;
+  tip.classList.toggle('pb-tip-below', top < 10);
+  if (top < 10) top = r.bottom + 10;
+  tip.style.left = `${left}px`;
+  tip.style.top = `${top}px`;
+}
+function hidePbTooltip() {
+  if (_pbTip) _pbTip.classList.add('hidden');
+}
+
+function setPlaysSaveStatus(state, msg) {
+  const el = document.getElementById('playbook-save-status');
+  if (!el) return;
+  el.className = 'conv-save-status ' + (state || '');
+  el.textContent = msg || '';
+}
+
+function schedulePlaysAutosave() {
+  setPlaysSaveStatus('saving', '● Saving…');
+  clearTimeout(_playsSaveTimer);
+  _playsSaveTimer = setTimeout(doSavePlays, 900);
+}
+
+async function doSavePlays() {
+  if (!_sb || !_plays || !_playsRowId) return;
+  try {
+    const { error } = await _sb.from('plays')
+      .update({ content: _plays, updated_at: new Date().toISOString(), updated_by: 'dashboard' })
+      .eq('id', _playsRowId);
+    if (error) throw error;
+    // Historize the edit like the Python save path (plays_history) + log the event.
+    _sb.from('plays_history')
+      .insert({ content: _plays, saved_at: new Date().toISOString() })
+      .then(({ error: histErr }) => {
+        if (histErr) console.error('plays_history append failed:', histErr.message);
+      });
+    logUserAction('playbook_edit', null, {});
+    setPlaysSaveStatus('saved', '● Saved just now');
+    setTimeout(() => setPlaysSaveStatus('', ''), 3000);
+  } catch (err) {
+    setPlaysSaveStatus('error', '● Save failed');
+    console.error('Playbook save error:', err.message);
+    if (err.code === '42501' || (err.message || '').includes('policy')) {
+      console.warn(
+        'Add this in Supabase SQL Editor:\n' +
+        "CREATE POLICY \"owner rw plays\" ON plays\n" +
+        "  FOR ALL TO authenticated USING (auth.email() = 'abhikirk@icloud.com');\n" +
+        "GRANT ALL ON plays TO authenticated;"
+      );
+    }
+  }
+}
+
+function openPlaybookDrawer() {
+  document.getElementById('playbook-backdrop').classList.remove('hidden');
+  document.getElementById('playbook-drawer').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  loadAndRenderPlays();
+}
+
+function closePlaybookDrawer() {
+  hidePbTooltip();
+  document.getElementById('playbook-backdrop').classList.add('hidden');
+  document.getElementById('playbook-drawer').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+async function loadAndRenderPlays() {
+  const body = document.getElementById('playbook-body');
+  body.innerHTML = '<div class="conv-loading">Loading playbook…</div>';
+  try {
+    const { data, error } = await _sb
+      .from('plays')
+      .select('id, content')
+      .order('id', { ascending: false })
+      .limit(1)
+      .single();
+    if (error) throw error;
+    _plays = JSON.parse(JSON.stringify(data.content));
+    if (!Array.isArray(_plays.plays)) _plays.plays = [];
+    _playsRowId = data.id;
+    renderPlaysDrawer();
+  } catch (err) {
+    body.innerHTML = `<div class="conv-loading" style="color:var(--accent-red)">Failed to load: ${err.message}</div>`;
+  }
+}
+
+function renderPlaysDrawer() {
+  const body = document.getElementById('playbook-body');
+  body.innerHTML = '';
+
+  const sec = document.createElement('div');
+  sec.innerHTML = '<div class="conv-section-label">PLAYS</div>' +
+    '<div class="pb-drawer-intro">Strategies the contextual reasoning layer evaluates each run. ' +
+    '<b>quant</b> = deterministic code evaluator · <b>judgment</b> = LLM-only · <b>hybrid</b> = quant arms it, the LLM confirms/vetoes. ' +
+    'Params tune within the hard bounds the code enforces.</div>';
+  const list = document.createElement('div');
+  list.style.cssText = 'display:flex;flex-direction:column;gap:10px;';
+  _plays.plays.forEach((play, i) => list.appendChild(buildPlayCard(play, i)));
+  sec.appendChild(list);
+
+  // Add play row
+  const addRow = document.createElement('div');
+  addRow.className = 'conv-add-theme-row';
+  addRow.innerHTML = `
+    <input class="conv-add-theme-input" id="pb-new-play-key" placeholder="play_name (snake_case)" spellcheck="false">
+    <button class="conv-add-theme-btn" id="pb-new-play-btn">+ ADD PLAY</button>
+  `;
+  addRow.querySelector('#pb-new-play-btn').addEventListener('click', () => {
+    const inp = addRow.querySelector('#pb-new-play-key');
+    addPlay(inp.value.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, ''));
+    inp.value = '';
+  });
+  addRow.querySelector('#pb-new-play-key').addEventListener('keydown', e => {
+    if (e.key === 'Enter') addRow.querySelector('#pb-new-play-btn').click();
+  });
+  sec.appendChild(addRow);
+  body.appendChild(sec);
+}
+
+function addPlay(name) {
+  if (!name) return;
+  if (_plays.plays.some(p => p.name === name)) { setPlaysSaveStatus('error', '● Play already exists'); return; }
+  _plays.plays.push({
+    name, enabled: true, type: 'judgment', weight: 1.0,
+    rationale: '', evaluates: '', params: {},
+  });
+  renderPlaysDrawer();
+  schedulePlaysAutosave();
+}
+
+function deletePlay(name) {
+  _plays.plays = _plays.plays.filter(p => p.name !== name);
+  renderPlaysDrawer();
+  schedulePlaysAutosave();
+}
+
+function buildPlayCard(play, idx) {
+  const card = document.createElement('div');
+  card.className = 'conv-theme-card pb-play-card';
+
+  const header = document.createElement('div');
+  header.className = 'conv-theme-header';
+  header.innerHTML = `
+    <span class="conv-theme-chevron">▶</span>
+    <span class="conv-theme-name">${play.name.replace(/_/g, ' ')}</span>
+    <span class="pb-type-badge pb-type-${play.type}">${(play.type || '').toUpperCase()}</span>
+    <label class="pb-enable-toggle" title="Enable / disable this play">
+      <input type="checkbox" ${play.enabled ? 'checked' : ''}>
+      <span class="pb-enable-slider"></span>
+    </label>
+    <button class="conv-theme-delete" title="Delete play" data-name="${play.name}">✕</button>
+  `;
+  card.appendChild(header);
+
+  header.addEventListener('click', e => {
+    if (e.target.closest('.pb-enable-toggle') || e.target.closest('.conv-theme-delete')) return;
+    card.classList.toggle('open');
+  });
+  header.querySelector('.conv-theme-delete').addEventListener('click', e => {
+    e.stopPropagation();
+    deletePlay(play.name);
+  });
+  header.querySelector('.pb-enable-toggle input').addEventListener('change', e => {
+    _plays.plays[idx].enabled = e.target.checked;
+    schedulePlaysAutosave();
+  });
+
+  const cbody = document.createElement('div');
+  cbody.className = 'conv-theme-body';
+
+  // TYPE segmented
+  const typeRow = document.createElement('div');
+  typeRow.className = 'conv-conviction-row';
+  typeRow.innerHTML = '<div class="conv-field-label">TYPE</div>';
+  const seg = document.createElement('div');
+  seg.className = 'conv-segmented';
+  for (const t of PLAY_TYPES) {
+    const btn = document.createElement('button');
+    btn.className = 'conv-seg-btn' + (play.type === t ? ' active' : '');
+    btn.dataset.val = t;
+    btn.textContent = t.toUpperCase();
+    btn.addEventListener('click', () => {
+      seg.querySelectorAll('.conv-seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      _plays.plays[idx].type = t;
+      const badge = header.querySelector('.pb-type-badge');
+      badge.className = `pb-type-badge pb-type-${t}`;
+      badge.textContent = t.toUpperCase();
+      schedulePlaysAutosave();
+    });
+    seg.appendChild(btn);
+  }
+  typeRow.appendChild(seg);
+  cbody.appendChild(typeRow);
+
+  // WEIGHT
+  const wRow = document.createElement('div');
+  wRow.className = 'pb-field';
+  wRow.innerHTML = '<div class="conv-field-label">WEIGHT <span class="pb-field-hint">0–1 · scales this play\'s influence</span></div>';
+  const wInput = document.createElement('input');
+  wInput.type = 'number'; wInput.step = '0.05'; wInput.min = '0'; wInput.max = '1';
+  wInput.className = 'pb-num-input';
+  wInput.value = play.weight ?? 1.0;
+  wInput.addEventListener('input', () => {
+    const v = Math.max(0, Math.min(1, parseFloat(wInput.value) || 0));
+    _plays.plays[idx].weight = v;
+    schedulePlaysAutosave();
+  });
+  wRow.appendChild(wInput);
+  cbody.appendChild(wRow);
+
+  // RATIONALE
+  cbody.appendChild(buildPlayTextField('RATIONALE', 'Why this play exists (human-facing).', play.rationale || '', v => {
+    _plays.plays[idx].rationale = v; schedulePlaysAutosave();
+  }));
+  // EVALUATES (the LLM reasons over this prose)
+  cbody.appendChild(buildPlayTextField('EVALUATES', 'When the play fires — the LLM reasons over this.', play.evaluates || '', v => {
+    _plays.plays[idx].evaluates = v; schedulePlaysAutosave();
+  }));
+
+  // PARAMS
+  const pRow = document.createElement('div');
+  pRow.className = 'pb-field';
+  pRow.innerHTML = '<div class="conv-field-label">PARAMS <span class="pb-field-hint">numeric knobs · tune within code-enforced bounds</span></div>';
+  const grid = document.createElement('div');
+  grid.className = 'pb-params-grid';
+  const params = _plays.plays[idx].params = _plays.plays[idx].params || {};
+  const renderParams = () => {
+    grid.innerHTML = '';
+    for (const [k, v] of Object.entries(params)) {
+      const p = document.createElement('div');
+      p.className = 'pb-param';
+      const key = document.createElement('span');
+      key.className = 'pb-param-key';
+      const name = document.createElement('span');
+      name.className = 'pb-param-name'; name.textContent = k;
+      const info = document.createElement('button');
+      info.className = 'pb-param-info'; info.type = 'button';
+      info.dataset.param = k; info.textContent = 'ⓘ';
+      info.setAttribute('aria-label', `What ${k} means`);
+      info.addEventListener('mouseenter', () => showPbTooltip(info));
+      info.addEventListener('mouseleave', hidePbTooltip);
+      info.addEventListener('focus', () => showPbTooltip(info));
+      info.addEventListener('blur', hidePbTooltip);
+      info.addEventListener('click', e => e.preventDefault());
+      key.appendChild(name); key.appendChild(info);
+      const val = document.createElement('input');
+      val.type = 'number'; val.step = 'any'; val.className = 'pb-num-input pb-param-val';
+      val.value = v;
+      val.addEventListener('input', () => {
+        const nv = parseFloat(val.value);
+        params[k] = isNaN(nv) ? val.value : nv;
+        schedulePlaysAutosave();
+      });
+      const del = document.createElement('button');
+      del.className = 'pb-param-del'; del.textContent = '✕'; del.title = 'Remove param';
+      del.addEventListener('click', () => { delete params[k]; renderParams(); schedulePlaysAutosave(); });
+      p.appendChild(key); p.appendChild(val); p.appendChild(del);
+      grid.appendChild(p);
+    }
+  };
+  renderParams();
+  pRow.appendChild(grid);
+
+  const addParam = document.createElement('div');
+  addParam.className = 'pb-add-param-row';
+  addParam.innerHTML = `
+    <input class="pb-add-param-key" placeholder="param_name" spellcheck="false">
+    <input class="pb-add-param-val" type="number" step="any" placeholder="value">
+    <button class="pb-add-param-btn">+</button>
+  `;
+  addParam.querySelector('.pb-add-param-btn').addEventListener('click', () => {
+    const kEl = addParam.querySelector('.pb-add-param-key');
+    const vEl = addParam.querySelector('.pb-add-param-val');
+    const k = kEl.value.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+    const v = parseFloat(vEl.value);
+    if (!k || isNaN(v)) { setPlaysSaveStatus('error', '● Param needs a name + number'); return; }
+    params[k] = v;
+    kEl.value = ''; vEl.value = '';
+    renderParams();
+    schedulePlaysAutosave();
+  });
+  pRow.appendChild(addParam);
+  cbody.appendChild(pRow);
+
+  card.appendChild(cbody);
+  return card;
+}
+
+function buildPlayTextField(label, hint, value, onChange) {
+  const wrap = document.createElement('div');
+  wrap.className = 'pb-field';
+  wrap.innerHTML = `<div class="conv-field-label">${label} <span class="pb-field-hint">${hint}</span></div>`;
+  const ta = document.createElement('textarea');
+  ta.className = 'pb-textarea';
+  ta.value = value;
+  ta.rows = Math.max(2, Math.min(6, Math.ceil((value.length || 40) / 60)));
+  ta.addEventListener('input', () => onChange(ta.value));
+  wrap.appendChild(ta);
+  return wrap;
+}
+
+function initPlaybookDrawer() {
+  document.getElementById('playbook-btn').addEventListener('click', openPlaybookDrawer);
+  document.getElementById('playbook-close').addEventListener('click', closePlaybookDrawer);
+  document.getElementById('playbook-backdrop').addEventListener('click', closePlaybookDrawer);
+  document.getElementById('playbook-body').addEventListener('scroll', hidePbTooltip);
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !document.getElementById('playbook-drawer').classList.contains('hidden')) {
+      closePlaybookDrawer();
+    }
+  });
+}
+
 // ── Human-action event log (user_actions) ─────────────────────
 // Append-only timeline of the owner's control/feedback actions (pause/resume, ratings,
 // journal feedback, conviction edits, exploration rejects) — captured as events for future
@@ -2314,11 +2779,13 @@ async function init() {
   updateLockBtn(isAuthenticated);
   initLockButton(sb);
   initConvictionsDrawer();
+  initPlaybookDrawer();
   initJournalDrawer();
 
   // Auth-gated header buttons
   if (isAuthenticated) {
     document.getElementById('convictions-btn').classList.remove('hidden');
+    document.getElementById('playbook-btn').classList.remove('hidden');
     loadJournalBadge(sb);  // loads count and shows journal button
   }
 
@@ -2626,6 +3093,15 @@ async function init() {
         renderAutotrader(sb, agentControl, agentTrades, agentSnapshot, agentNav, spyPrices, marketData);
       } catch (err) {
         console.error('[Autotrader] render error:', err);
+      }
+    }
+
+    // ── Playbook contextual-layer proposals (owner-only) ──
+    if (isAuthenticated) {
+      try {
+        renderPlaybookPanel(await fetchContextualInputs(sb));
+      } catch (err) {
+        console.error('[Playbook] render error:', err);
       }
     }
 
