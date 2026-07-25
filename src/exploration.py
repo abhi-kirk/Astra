@@ -263,7 +263,7 @@ def run() -> None:
     logger.info(f"ASTRA EXPLORATION — weekly discovery run  |  {run_date[:10]}")
     logger.info("=" * 60)
 
-    from src import memory
+    from src import memory, notify
     from src.data_layer import load_convictions
 
     convictions       = load_convictions()
@@ -285,6 +285,7 @@ def run() -> None:
     }
     if not active_themes:
         logger.warning("No high/very_high conviction themes found — nothing to explore.")
+        notify.notify_exploration([], themes_explored=0, already_tracked=len(already_tracked))
         return
     logger.info(f"Active themes: {', '.join(active_themes)}")
 
@@ -297,6 +298,10 @@ def run() -> None:
         candidates = parse_candidates(raw_text)
     except Exception as exc:
         logger.exception(f"Claude exploration call failed: {exc}")
+        notify.send(notify.markdownify(
+            f"🔭 **ASTRA Exploration** — discovery run failed: `{str(exc)[:200]}`. "
+            "No candidates screened this week."
+        ))
         return
 
     candidates = filter_known_tickers(
@@ -317,6 +322,12 @@ def run() -> None:
     for candidate in candidates:
         memory.upsert_exploration_candidate(candidate)
         logger.info(f"Saved: {candidate['ticker']}")
+
+    notify.notify_exploration(
+        candidates,
+        themes_explored=len(active_themes),
+        already_tracked=len(already_tracked),
+    )
 
     total_elapsed = time.perf_counter() - run_start
     logger.info(f"Exploration complete — {len(candidates)} candidate(s) saved to on_radar.")

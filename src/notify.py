@@ -181,6 +181,36 @@ def _account_footer(acct: dict, placed: list) -> str | None:
     return "💰 _Sleeve: " + " · ".join(parts) + "_" if parts else None
 
 
+def notify_exploration(candidates: list[dict], themes_explored: int, already_tracked: int) -> bool:
+    """Alert on the weekly discovery run: the new candidates ASTRA found (ticker, theme,
+    conviction, rationale gist) or an explicit "nothing new" note so a quiet run is still
+    visible on the phone instead of only a GitHub Action notification.
+
+    Always sends (unlike the daily run's noise-throttling) — the weekly cadence is rare
+    enough that a "no new names this week" is itself useful signal.
+    """
+    footer = f"[Open dashboard →]({DASHBOARD_URL})"
+    context = f"_Screened {themes_explored} theme(s); {already_tracked} already on radar._"
+    n = len(candidates)
+    if n == 0:
+        md = f"🔭 **ASTRA Exploration** — no new candidates this week\n{context}\n\n{footer}"
+        return send(markdownify(md))
+
+    lines = [f"🔭 **ASTRA Exploration** — {n} new candidate{'s' if n != 1 else ''} on radar"]
+    for c in candidates:
+        ticker = c.get("ticker", "?")
+        theme = (c.get("source_theme") or "?").replace("_", " ")
+        conviction = c.get("claude_conviction", "?")
+        rationale = (c.get("rationale") or "").strip()
+        if len(rationale) > 160:
+            rationale = rationale[:160].rstrip() + "…"
+        head = f"• **{ticker}** — {theme} · _{conviction}_"
+        lines.append(f"{head}\n{rationale}" if rationale else head)
+    lines.append(context)
+    lines.append(footer)
+    return send(markdownify("\n".join(lines)))
+
+
 def notify_agent(summary: dict) -> bool:
     """Alert on an Autotrader run: real orders placed (with size + fill state), blocks
     (with the guardrail reason), and the resulting sleeve state; halt/abort/pause first.

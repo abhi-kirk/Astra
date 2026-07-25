@@ -156,3 +156,48 @@ class TestNotifyRun:
             assert notify.notify_run(["MSFT"], [], "note text") is True
             sent_text = send.call_args.args[0]
             assert "MSFT" in sent_text and "note text" in sent_text
+
+
+# ---------------------------------------------------------------------------
+# notify_exploration
+# ---------------------------------------------------------------------------
+
+class TestNotifyExploration:
+    def test_lists_candidates_with_theme_and_rationale(self):
+        candidates = [
+            {"ticker": "RKLB", "source_theme": "space_infra",
+             "claude_conviction": "high", "rationale": "Neutron cadence ramping."},
+            {"ticker": "ASTS", "source_theme": "space_infra",
+             "claude_conviction": "medium", "rationale": "Direct-to-cell coverage."},
+        ]
+        with patch.object(notify, "send", return_value=True) as send:
+            assert notify.notify_exploration(candidates, themes_explored=3, already_tracked=5) is True
+            sent = send.call_args.args[0]
+            assert "RKLB" in sent and "ASTS" in sent
+            assert "space infra" in sent          # underscores humanized
+            assert "Neutron cadence" in sent
+            assert "2" in sent                    # candidate count
+            assert "3 theme" in sent              # context line
+
+    def test_empty_still_sends_nothing_new(self):
+        with patch.object(notify, "send", return_value=True) as send:
+            assert notify.notify_exploration([], themes_explored=4, already_tracked=7) is True
+            sent = send.call_args.args[0]
+            assert "no new candidates" in sent.lower()
+            assert "4 theme" in sent
+
+    def test_truncates_long_rationale(self):
+        candidates = [{"ticker": "XYZ", "source_theme": "t",
+                       "claude_conviction": "low", "rationale": "x" * 400}]
+        with patch.object(notify, "send", return_value=True) as send:
+            notify.notify_exploration(candidates, themes_explored=1, already_tracked=0)
+            sent = send.call_args.args[0]
+            assert "…" in sent
+
+    def test_output_is_string(self):
+        with patch.object(notify, "send", side_effect=lambda t: t):
+            out = notify.notify_exploration(
+                [{"ticker": "AA", "source_theme": "b", "claude_conviction": "high"}],
+                themes_explored=1, already_tracked=0,
+            )
+            assert isinstance(out, str) and "AA" in out
