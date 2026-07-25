@@ -131,7 +131,7 @@ header, main, #modal-overlay { position: relative; z-index: 1; }
 
 .status-divider { width: 1px; height: 32px; background: var(--border); }
 
-.header-right { display: flex; align-items: center; gap: 10px; }
+.header-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; row-gap: 8px; }
 
 .live-badge {
   display: flex; align-items: center; gap: 8px;
@@ -1813,10 +1813,54 @@ header, main, #modal-overlay { position: relative; z-index: 1; }
   .hero-headline { font-size: 26px; }
 }
 
+/* Header cluster: collapse the pill labels so the button row fits narrow screens.
+   The .header-right baseline already wraps; below 720px we also shrink the pills
+   and hide their text labels (icon + aria-label remain) so they stay on one/two rows. */
+@media (max-width: 720px) {
+  #site-header { flex-wrap: wrap; row-gap: 10px; }
+  .header-right { gap: 8px; }
+  .lock-btn, .header-link, .convictions-btn, .playbook-btn, .journal-btn {
+    padding: 5px 10px; font-size: 9px;
+  }
+  /* Drop the redundant text label on the icon+label pills; keep the glyph. */
+  .header-link span:not(.header-link-icon),
+  .convictions-btn span:not(.convictions-btn-icon):not(.hidden),
+  .playbook-btn span:not(.playbook-btn-icon),
+  .journal-btn span:not(.journal-btn-icon):not(.journal-badge) {
+    display: none;
+  }
+}
+
 @media (max-width: 600px) {
   .header-center { display: none; }
   .pos-card { width: 160px; }
   #modal-content { padding: 16px 20px 28px; }
+
+  /* KPI stat rows (paper portfolio + autotrader share these) — 2-up instead of
+     a 4-across flex row that overlaps at phone width. */
+  .paper-summary { flex-wrap: wrap; row-gap: 16px; padding: 18px 16px; }
+  .paper-stat { flex: 0 0 50%; }
+  .paper-stat-divider { display: none; }
+  .paper-stat-value { font-size: 17px; }
+
+  /* Fixed-column data tables (open/closed positions, autotrader activity log):
+     scroll sideways within their own box instead of forcing the page wider.
+     .paper-rows is the shared container; the grids keep alignment via min-width. */
+  .paper-rows { overflow-x: auto; -webkit-overflow-scrolling: touch; padding: 0 16px 20px; }
+  .paper-rows-header, .paper-row { min-width: 460px; }
+
+  /* On-radar cards: single column (min 320px column can't fit a 320px viewport). */
+  .radar-grid { grid-template-columns: 1fr; }
+}
+
+/* Touch ergonomics: enforce the 44px minimum tap target on coarse pointers only,
+   so mouse-driven desktop keeps its compact pills. */
+@media (pointer: coarse) {
+  .lock-btn, .header-link, .convictions-btn, .playbook-btn, .journal-btn,
+  .summary-more-toggle, .advisor-rating-btn {
+    min-height: 44px;
+  }
+  .summary-more-toggle { padding: 6px 12px; }
 }
 
 /* ============================================================
