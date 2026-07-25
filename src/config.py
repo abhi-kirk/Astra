@@ -249,6 +249,31 @@ class BrainConfig:
     swing_high_lookback: int = _cfg("BRAIN_SWING_HIGH_LOOKBACK", cast=int, default=22)  # Chandelier/pullback high window
     mom_lookback_days: int = _cfg("BRAIN_MOM_LOOKBACK_DAYS", cast=int, default=252)     # 12-month
     mom_skip_days: int = _cfg("BRAIN_MOM_SKIP_DAYS", cast=int, default=21)              # skip most-recent month (12-1)
+    # Length of the recent daily-return series retained in market_data (feeds beta decomposition
+    # in the contextual layer). Must cover the beta estimation window below.
+    returns_recent_days: int = _cfg("BRAIN_RETURNS_RECENT_DAYS", cast=int, default=60)
+
+    # ── Contextual reasoning layer (docs/contextual_reasoning.md) ──────────────
+    # A Playbook of strategy "plays" feeds the deterministic pipeline as bounded, logged,
+    # structured proposals. The quant "macro_dip" evidence (beta decomposition + selloff state)
+    # and the hard clamps on any proposal live here; per-play `params` tune WITHIN these bounds.
+    # Master switch defaults False — the pipeline is byte-identical to today until flipped.
+    contextual_enabled: bool = _cfg("BRAIN_CONTEXTUAL_ENABLED", cast=bool, default=True)
+    # Beta decomposition: estimate beta over `beta_window` daily returns; decompose the recent
+    # move over `beta_drop_window`. A drop is "macro" when beta ≥ min and residual ≤ max fraction.
+    beta_window_days: int = _cfg("BRAIN_BETA_WINDOW_DAYS", cast=int, default=45)
+    beta_drop_window_days: int = _cfg("BRAIN_BETA_DROP_WINDOW_DAYS", cast=int, default=10)
+    # r² reliability floor: below this, SPY explains too little of the name's moves to call a drop
+    # "market-driven" at all — the beta decomposition is noise, so macro_dip must not lean on it.
+    beta_min_r2: float = _cfg("BRAIN_BETA_MIN_R2", cast=float, default=0.35)
+    # Selloff state: SPY N-day return below this (%) with breadth this wide (% of names down) = panic.
+    selloff_nday: int = _cfg("BRAIN_SELLOFF_NDAY", cast=int, default=5)
+    selloff_panic_return_pct: float = _cfg("BRAIN_SELLOFF_PANIC_RETURN_PCT", cast=float, default=-4.0)
+    selloff_breadth_min_pct: float = _cfg("BRAIN_SELLOFF_BREADTH_MIN_PCT", cast=float, default=55.0)
+    # Hard clamps enforced in code on ANY proposal, regardless of what a play/LLM emits.
+    contextual_size_mult_min: float = _cfg("BRAIN_CONTEXTUAL_SIZE_MULT_MIN", cast=float, default=0.5)
+    contextual_size_mult_max: float = _cfg("BRAIN_CONTEXTUAL_SIZE_MULT_MAX", cast=float, default=2.0)
+    contextual_nudge_cap: float = _cfg("BRAIN_CONTEXTUAL_NUDGE_CAP", cast=float, default=0.10)  # max |ΔC| a play may apply
 
 
 # ── Robinhood live portfolio sync ──────────────────────────────────────────────
@@ -297,6 +322,18 @@ class ExplorationConfig:
     max_fmp_calls: int = _cfg("EXPLORATION_MAX_FMP_CALLS", cast=int, default=15)  # FMP calls per run
 
 
+# ── Contextual reasoning LLM layer (docs/contextual_reasoning.md) ──────────────
+# The ≤3-pass judgment layer that reasons over the Playbook and emits bounded structured
+# proposals via a forced tool call. Reuses the reasoning model; its own effort/round budget.
+@dataclass
+class ContextualConfig:
+    model: str = _cfg("CONTEXTUAL_MODEL", default="claude-opus-4-8")
+    max_tokens: int = _cfg("CONTEXTUAL_MAX_TOKENS", cast=int, default=8000)
+    effort: str = _cfg("CONTEXTUAL_EFFORT", default="high")  # output_config.effort
+    max_rounds: int = _cfg("CONTEXTUAL_MAX_ROUNDS", cast=int, default=6)   # gather/reason tool rounds before the forced emit
+    max_searches: int = _cfg("CONTEXTUAL_MAX_SEARCHES", cast=int, default=4)  # web searches per run
+
+
 # ── Claude API call timeouts ───────────────────────────────────────────────────
 # Wall-clock backstop for the whole client-side tool loop. Each tool call is bounded by
 # tool_loop.advisor_tool_timeout, so these should now rarely fire.
@@ -304,6 +341,7 @@ class ExplorationConfig:
 class TimeoutsConfig:
     advisor: int = _cfg("ADVISOR_TIMEOUT", cast=int, default=300)          # seconds — 5 min backstop
     exploration: int = _cfg("EXPLORATION_TIMEOUT", cast=int, default=300)  # seconds — 5 min backstop
+    contextual: int = _cfg("CONTEXTUAL_TIMEOUT", cast=int, default=300)    # seconds — 5 min backstop
 
 
 # ── Notifications (Telegram) ───────────────────────────────────────────────────
@@ -328,5 +366,6 @@ brain = BrainConfig()
 robinhood = RobinhoodConfig()
 agent = AgentConfig()
 exploration = ExplorationConfig()
+contextual = ContextualConfig()
 timeouts = TimeoutsConfig()
 telegram = TelegramConfig()

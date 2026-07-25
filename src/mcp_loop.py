@@ -232,16 +232,130 @@ async def _dispatch_tool(
     return result
 
 
-async def _create(client: Any, model: str, max_tokens: int, messages: list[Any], tools: list[Any], effort: str) -> Any:
-    """One model turn. Adaptive thinking + effort ride in extra_body (version-independent)."""
-    extra = {"thinking": {"type": "adaptive"}, "output_config": {"effort": effort}}
+async def _create(client: Any, model: str, max_tokens: int, messages: list[Any], tools: list[Any],
+                  effort: str, tool_choice: dict[str, Any] | None = None, thinking: bool = True) -> Any:
+    """One model turn. Adaptive thinking + effort ride in extra_body (version-independent).
+
+    `tool_choice` forces a specific tool (used for the structured emit); adaptive thinking is
+    disabled on a forced call since extended thinking is incompatible with forced tool use."""
+    extra: dict[str, Any] = {"output_config": {"effort": effort}}
+    if thinking and tool_choice is None:
+        extra["thinking"] = {"type": "adaptive"}
+    kwargs: dict[str, Any] = dict(model=model, max_tokens=max_tokens, messages=messages, extra_body=extra)
     if tools:
-        return await client.messages.create(
-            model=model, max_tokens=max_tokens, messages=messages, tools=tools, extra_body=extra,
-        )
-    return await client.messages.create(
-        model=model, max_tokens=max_tokens, messages=messages, extra_body=extra,
-    )
+        kwargs["tools"] = tools
+    if tool_choice is not None:
+        kwargs["tool_choice"] = tool_choice
+    return await client.messages.create(**kwargs)
+
+
+StructuredResult = tuple[dict[str, Any], Any, list[dict[str, Any]]]
+
+
+def run_structured_sync(prompt: str, specs: list[ServerSpec], emit_tool: dict[str, Any],
+                        **kwargs: Any) -> StructuredResult:
+    """Synchronous entry point for the structured tool loop (wrap in run_with_timeout)."""
+    return asyncio.run(run_structured(prompt, specs, emit_tool, **kwargs))
+
+
+async def run_structured(
+    prompt: str,
+    specs: list[ServerSpec],
+    emit_tool: dict[str, Any],
+    *,
+    model: str,
+    max_tokens: int,
+    effort: str = "high",
+    tool_timeout: int = 45,
+    max_rounds: int = 6,
+    failure_limit: int = 2,
+) -> StructuredResult:
+    """Run the agentic gather/reason loop, then FORCE a final structured emit via `emit_tool`
+    (`tool_choice` → that tool), returning (emitted_input_dict, usage, tool_log).
+
+    `emit_tool` is a tool schema {name, description, input_schema}; its input_schema IS the output
+    contract, so the boundary object is schema-valid by construction. Returns {} if nothing was
+    emitted (the caller treats that as "no proposals")."""
+    usage = _Usage()
+    tool_log: list[dict[str, Any]] = []
+
+    async with anthropic.AsyncAnthropic(api_key=config.services.anthropic_api_key) as client, AsyncExitStack() as stack:
+        tool_to_session: dict[str, ClientSession] = {}
+        tool_to_server: dict[str, str] = {}
+        tools: list[Any] = []
+
+        for spec in specs:
+            session = await _connect(stack, spec, tool_timeout)
+            if session is None:
+                continue
+            try:
+                listed = await asyncio.wait_for(session.list_tools(), timeout=tool_timeout)
+            except Exception:
+                logger.warning("MCP %s: list_tools failed — skipping server", spec.name, exc_info=True)
+                continue
+            allowed = set(spec.allowed_tools)
+            for t in listed.tools:
+                if allowed and t.name not in allowed:
+                    continue
+                tools.append({"name": t.name, "description": t.description or "", "input_schema": t.inputSchema})
+                tool_to_session[t.name] = session
+                tool_to_server[t.name] = spec.name
+
+        # Expose the emit tool DURING the gather loop (alongside the MCP tools) so the model can
+        # emit its proposals the moment it's done reasoning — rather than being told "unknown tool"
+        # when it reaches for emit_proposals mid-loop. A forced emit is kept only as a fallback for
+        # when the model stops (or runs out of rounds) without emitting on its own.
+        gather_tools = tools + [emit_tool]
+        failures: dict[str, int] = {}
+        messages: list[Any] = [{"role": "user", "content": prompt}]
+        final: Any = None
+        payload: dict[str, Any] = {}
+        emitted_early = False
+
+        def _emit_block(msg: Any) -> Any:
+            return next((b for b in list(getattr(msg, "content", []) or [])
+                         if getattr(b, "type", None) == "tool_use"
+                         and getattr(b, "name", None) == emit_tool["name"]), None)
+
+        for round_no in range(1, max_rounds + 1):
+            final = await _create(client, model, max_tokens, messages, gather_tools, effort)
+            usage.add(getattr(final, "usage", None))
+            emit = _emit_block(final)
+            if emit is not None:                                   # model emitted on its own — done
+                payload = dict(getattr(emit, "input", {}) or {})
+                emitted_early = True
+                break
+            if getattr(final, "stop_reason", None) != "tool_use":  # stopped with text, no emit
+                messages.append({"role": "assistant", "content": final.content})
+                break
+            messages.append({"role": "assistant", "content": final.content})
+            results: list[dict[str, Any]] = []
+            for block in list(final.content):
+                if getattr(block, "type", None) != "tool_use":
+                    continue
+                results.append(await _dispatch_tool(
+                    block, tool_to_session, tool_to_server, failures,
+                    failure_limit, tool_timeout, round_no, tool_log,
+                ))
+            messages.append({"role": "user", "content": results})
+
+        # -- forced structured emit (fallback) -------------------------------
+        if not emitted_early:
+            if messages[-1]["role"] == "assistant":  # keep roles alternating before the forced turn
+                messages.append({"role": "user", "content":
+                                 "Now call emit_proposals with your final proposals (empty list if none fire)."})
+            emitted = await _create(
+                client, model, max_tokens, messages, [emit_tool], effort,
+                tool_choice={"type": "tool", "name": emit_tool["name"]},
+            )
+            usage.add(getattr(emitted, "usage", None))
+            emit = _emit_block(emitted)
+            if emit is not None:
+                payload = dict(getattr(emit, "input", {}) or {})
+
+        logger.info("Structured loop: emitted_early=%s, %d tool call(s), tokens in=%d out=%d",
+                    emitted_early, len(tool_log), usage.input_tokens, usage.output_tokens)
+        return (payload, usage, tool_log)
 
 
 def _result_text(call_res: Any) -> tuple[str, bool]:

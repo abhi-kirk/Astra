@@ -61,6 +61,18 @@ DISCOUNT_FULL_PCT = _b.discount_full_pct             # % below 52wk high = full 
 MARKET_OVERLAY_MAX          = _b.market_overlay_max            # market-cycle lot boost bounds
 MARKET_OVERLAY_FULL_DD_PCT  = _b.market_overlay_full_dd_pct
 
+# ── Contextual reasoning layer (docs/contextual_reasoning.md) ─────────────────
+CONTEXTUAL_ENABLED        = _b.contextual_enabled
+BETA_WINDOW_DAYS          = _b.beta_window_days           # daily returns used to estimate beta
+BETA_DROP_WINDOW_DAYS     = _b.beta_drop_window_days      # window over which the recent move is decomposed
+BETA_MIN_R2               = _b.beta_min_r2                # min r² to trust a "market-driven" read
+SELLOFF_NDAY              = _b.selloff_nday               # SPY lookback for the selloff-velocity read
+SELLOFF_PANIC_RETURN_PCT  = _b.selloff_panic_return_pct   # SPY N-day return ≤ this (%) = fast risk-off
+SELLOFF_BREADTH_MIN_PCT   = _b.selloff_breadth_min_pct    # + this share of names down = panic
+CONTEXTUAL_SIZE_MULT_MIN  = _b.contextual_size_mult_min   # hard clamp on any size_multiplier proposal
+CONTEXTUAL_SIZE_MULT_MAX  = _b.contextual_size_mult_max
+CONTEXTUAL_NUDGE_CAP      = _b.contextual_nudge_cap       # hard clamp on |ΔC| any conviction_nudge may apply
+
 # ── Quality pillar ────────────────────────────────────────────────────────────
 Q_REV_LOW, Q_REV_HIGH   = _b.q_rev_low, _b.q_rev_high
 Q_GM_LOW, Q_GM_HIGH     = _b.q_gm_low, _b.q_gm_high

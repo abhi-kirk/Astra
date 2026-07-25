@@ -44,6 +44,13 @@ def load_convictions() -> dict:
     return convictions
 
 
+def load_plays() -> dict:
+    """Load the Playbook from Supabase. Unlike convictions, an empty/missing Playbook is a valid
+    "no plays" state (the contextual layer simply produces no proposals), so this never raises."""
+    from src.memory import get_latest_plays
+    return get_latest_plays() or {"plays": []}
+
+
 def get_cost_basis_from_db() -> dict[str, dict]:
     """Compute per-ticker cost basis from Supabase trades table."""
     from src.db import get_client
@@ -239,6 +246,12 @@ def get_market_data(ticker: str, period_days: int = config.market_data.period_da
         atr_14 = _calc_atr(hist, config.brain.atr_period)
         recent_swing_high = float(hist["High"].tail(config.brain.swing_high_lookback).max())
         mom_12_1 = _calc_momentum(closes, config.brain.mom_lookback_days, config.brain.mom_skip_days)
+        # Recent daily returns (most-recent N), retained for the contextual layer's beta
+        # decomposition (macro-vs-idiosyncratic drop split). Cheap: reuses `closes` already loaded.
+        returns_recent = [
+            round(float(r), 6)
+            for r in closes.pct_change().dropna().tail(config.brain.returns_recent_days).tolist()
+        ]
 
         info = tk.info or {}
         revisions = _get_revisions(tk)
@@ -259,6 +272,7 @@ def get_market_data(ticker: str, period_days: int = config.market_data.period_da
             "atr_14": round(atr_14, 4) if atr_14 else None,
             "recent_swing_high": round(recent_swing_high, 2),
             "mom_12_1": round(mom_12_1, 4) if mom_12_1 is not None else None,
+            "returns_recent": returns_recent,
             "revisions": revisions,
             # Fundamentals
             "market_cap": info.get("marketCap"),

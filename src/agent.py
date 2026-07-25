@@ -266,9 +266,13 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
 
     # Broad-market drawdown (SPY below its 52wk high) drives the conviction-primary market-cycle
     # overlay — buy a little more into a market-wide dip. Best-effort; None → no effect.
+    # SPY's recent-return series also feeds the contextual layer's beta decomposition + selloff read.
     market_dd = None
+    spy_returns: list[float] | None = None
     try:
-        market_dd = get_market_data("SPY").get("pct_below_52w_high")
+        spy_md = get_market_data("SPY")
+        market_dd = spy_md.get("pct_below_52w_high")
+        spy_returns = spy_md.get("returns_recent")
     except Exception:
         logger.warning("Could not fetch SPY for the market-cycle overlay — sizing without it", exc_info=True)
 
@@ -293,6 +297,31 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
             explore_signals, explore_md = [], {}
     market_data.update(explore_md)   # so the note + logging can price exploration names
     signals.extend(explore_signals)
+
+    # Contextual reasoning layer (docs/contextual_reasoning.md): a Playbook of strategy "plays"
+    # (quant + LLM-judgment) feeds bounded, logged, structured proposals into the deterministic
+    # pipeline — size/pace nudges + a clamped conviction nudge — BEFORE anything consumes `signals`.
+    # The LLM never decides; code clamps every proposal and re-checks all hard rules. Fail-open:
+    # any error leaves `signals` on the pure quant baseline. Gated off until BRAIN_CONTEXTUAL_ENABLED.
+    with obs.phase("contextual"):
+        try:
+            if config.brain.contextual_enabled:
+                from src.brain import market_context, playbook, sizing
+                market_ctx = {
+                    "spy_returns": spy_returns,
+                    "selloff": market_context.selloff_state(spy_returns, market_data),
+                }
+                proposals = playbook.evaluate(
+                    signals, market_data, market_ctx, convictions, use_ai=use_ai
+                )
+                if proposals:
+                    playbook.apply_proposals(
+                        signals, proposals, portfolio, market_data, convictions,
+                        market_scalar=sizing.market_cycle_multiplier(market_dd),
+                    )
+                    memory.log_contextual_inputs(proposals, run_date=run_date)
+        except Exception:
+            logger.error("Contextual layer failed — pipeline continues on the quant baseline", exc_info=True)
 
     # ML data capture: one decision_features row per screened ticker (incl. hold/blocked) with
     # the full feature vector + recomputed pillar/composite/conviction/regime/sizing internals —

@@ -170,6 +170,32 @@ def save_conviction_history(content: dict) -> None:
     }).execute()
 
 
+def save_plays_snapshot(content: dict) -> None:
+    """Overwrite the single `plays` (Playbook) row and append a history snapshot — the exact
+    upsert+historize pattern as convictions. `content` is the full {"plays": [...]} blob."""
+    db = get_client()
+    existing = db_rows(db.table("plays").select("id").limit(1).execute().data)
+    if existing:
+        db.table("plays").update({
+            "content": content,
+            "updated_at": datetime.now().isoformat(),
+        }).eq("id", existing[0]["id"]).execute()
+    else:
+        db.table("plays").insert({
+            "content": content,
+            "updated_at": datetime.now().isoformat(),
+        }).execute()
+    save_plays_history(content)
+
+
+def save_plays_history(content: dict) -> None:
+    """Append a full Playbook snapshot for audit/history purposes."""
+    get_client().table("plays_history").insert({
+        "content": content,
+        "saved_at": datetime.now().isoformat(),
+    }).execute()
+
+
 def save_portfolio_snapshot(positions: dict, buying_power: float | None = None) -> None:
     """Write a portfolio snapshot (called after a Robinhood read). `buying_power` is the
     Individual account's deployable cash — the Advisor's real sizing book."""
@@ -635,6 +661,23 @@ def log_decision_features(rows: list[dict], run_date: str | None = None) -> None
     logger.info(f"Logged {len(payload)} decision-feature snapshot(s)")
 
 
+def log_contextual_inputs(rows: list[dict], run_date: str | None = None) -> None:
+    """Append one contextual_inputs row per structured proposal from the contextual layer
+    (docs/contextual_reasoning.md) — the play-tagged, bounded input the LLM/quant plays fed into
+    the deterministic pipeline. `run_date` + the brain-version pair are stamped here so attribution
+    can segment per play, proposed-vs-applied (`applied`), and quant-vs-LLM (`source`).
+
+    Each row: ticker, play, kind, value, applied, source, rationale, evidence."""
+    if not rows:
+        return
+    run_date = run_date or datetime.now().isoformat()
+    vf = brain_version_fields()
+    payload = [{**r, "run_date": run_date, **vf} for r in rows]
+    _register_brain_version()
+    get_client().table("contextual_inputs").insert(payload).execute()
+    logger.info(f"Logged {len(payload)} contextual-input proposal(s)")
+
+
 def upsert_user_orders(rows: list[dict]) -> None:
     """Idempotently persist Abhi's real Robinhood fills (ground truth). Keyed on order_id,
     so re-runs never duplicate. Rows come from robinhood.fetch_recent_orders."""
@@ -689,6 +732,14 @@ def get_run_summaries(n: int = 10) -> Rows:
 def get_latest_convictions() -> dict | None:
     data = db_rows(
         get_client().table("convictions").select("content")
+        .order("updated_at", desc=True).limit(1).execute().data
+    )
+    return data[0]["content"] if data else None
+
+
+def get_latest_plays() -> dict | None:
+    data = db_rows(
+        get_client().table("plays").select("content")
         .order("updated_at", desc=True).limit(1).execute().data
     )
     return data[0]["content"] if data else None
