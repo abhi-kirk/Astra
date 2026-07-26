@@ -37,11 +37,12 @@ logger = logging.getLogger(__name__)
 
 _PLACED_STATES = ("pending", "submitted", "filled")
 
-# Sells mirror only deliberate paper exits. A `blocked` close comes from a buy-side rule
+# Full sells mirror only deliberate paper exits. A `blocked` close comes from a buy-side rule
 # tripping on the MAIN portfolio (averaging-down cap, theme/position limit) and says
 # nothing about the agentic position — never a real-money sell trigger.
-# `parabolic_trim` is intentionally excluded: a trim keeps the paper lot open (never
-# enters this close-based mirror), and partial real-money sells are a deferred follow-up.
+# `parabolic_trim` is intentionally absent here: a trim keeps the paper lot open, so it never
+# enters this close-based mirror — it flows through the separate trim-event source instead
+# (memory.get_paper_trims_on → a partial sell of the agentic holding). See _build_mirrors.
 _MIRRORED_CLOSE_REASONS = ("profit_take", "signal_inactive", "thesis_invalidation", "trailing_stop")
 
 
@@ -103,6 +104,17 @@ def _build_mirrors(run_date: str) -> list[dict]:
         mirrors.append({
             "ticker": pt["ticker"], "side": "sell",
             "mirrors_paper_trade_id": pt.get("id"),
+        })
+    # Parabolic trims: partial sells that keep the paper lot open, so they never appear as a
+    # close. Mirror the ACTION — sell `fraction` of whatever the agentic account holds — not the
+    # paper dollars (basis-independent, matching how buys mirror the decision). `_execute_one`
+    # sizes the real order off the live holding × fraction.
+    for tr in memory.get_paper_trims_on(run_date):
+        frac = tr.get("fraction")
+        if not frac or frac <= 0 or frac >= 1:
+            continue
+        mirrors.append({
+            "ticker": tr["ticker"], "side": "sell", "trim_fraction": frac,
         })
     return mirrors
 
@@ -356,6 +368,15 @@ def _execute_one(broker, ticker, side, held, estimated_cost, mirror, gr,
             logger.warning("Autotrader: no sellable shares for %s — skipping.", ticker)
             summary["skipped"].append(f"sell:{ticker}:bad_qty")
             return
+        # Parabolic trim → sell only `trim_fraction` of the agentic holding (keep the runner);
+        # a full-close mirror carries no fraction and sells the whole sellable quantity.
+        trim_fraction = mirror.get("trim_fraction")
+        if trim_fraction and 0 < trim_fraction < 1:
+            quantity = round(quantity * trim_fraction, 6)
+            if quantity <= 0:
+                logger.warning("Autotrader: trim of %s rounds to zero shares — skipping.", ticker)
+                summary["skipped"].append(f"sell:{ticker}:trim_zero")
+                return
         order_params["quantity"] = str(quantity)
 
     # ref_id is a place_equity_order-only idempotency key. review_equity_order rejects it as an

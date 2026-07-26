@@ -380,6 +380,8 @@ def close_paper_trade(
     # A ticker may hold several open lots (bounded pyramiding). A full close closes every lot;
     # a partial trim reduces each proportionally so the aggregate position is trimmed by `frac`.
     frac = min(max(fraction, 0.0), 1.0)
+    trim_realized = 0.0
+    trim_sold_shares = 0.0
     for t in lots:
         sold_shares = t["virtual_shares"] * frac
         pnl_d   = (close_price - t["price_at_signal"]) * sold_shares
@@ -399,8 +401,35 @@ def close_paper_trade(
                 "virtual_shares": round(t["virtual_shares"] - sold_shares, 6),
                 "virtual_cost":   round(t["virtual_cost"] * (1.0 - frac), 2),
             }).eq("id", t["id"]).execute()
+            trim_realized += pnl_d
+            trim_sold_shares += sold_shares
             logger.info(f"Paper TRIM  {ticker}: sold {frac:.0%} @ ${close_price:.2f}  "
                         f"realized ${pnl_d:+.2f} ({pnl_pct:+.1f}%)  reason={reason}")
+
+    # Persist one aggregate trim event (append-only) so the Autotrader can mirror the ACTION —
+    # sell `frac` of its own holding — and for trim attribution. A full close never lands here;
+    # it flows to the Autotrader via the close-based sell mirror (get_paper_trades_closed_on).
+    if 0.0 < frac < 1.0:
+        db.table("paper_trims").insert({
+            "ticker":       ticker,
+            "run_date":     run_date,
+            "close_price":  close_price,
+            "fraction":     round(frac, 6),
+            "realized_pnl": round(trim_realized, 2),
+            "sold_shares":  round(trim_sold_shares, 6),
+            "close_reason": reason,
+            **brain_version_fields(),
+        }).execute()
+
+
+def get_paper_trims_on(day: str) -> Rows:
+    """Parabolic-trim events fired on the calendar day of `day` (Autotrader trim-mirror source)."""
+    d = str(day)[:10]
+    return db_rows(
+        get_client().table("paper_trims").select("*")
+        .gte("run_date", f"{d}T00:00:00").lte("run_date", f"{d}T23:59:59.999999")
+        .order("run_date", desc=True).execute().data
+    )
 
 
 def upsert_exploration_candidate(candidate: dict) -> None:

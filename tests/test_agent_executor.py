@@ -70,6 +70,7 @@ def wired(monkeypatch, convictions):
         "control": control,
         "opened": [{"id": 11, "ticker": "RKLB", "action": "buy", "suggested_position_pct": 0.06}],
         "closed": [],
+        "trims": [],
         "today": [],
         "last_buy": None,
         "prev_snapshot": None,
@@ -77,6 +78,7 @@ def wired(monkeypatch, convictions):
     monkeypatch.setattr(memory, "get_agent_control", lambda: state["control"])
     monkeypatch.setattr(memory, "get_paper_trades_opened_on", lambda d: state["opened"])
     monkeypatch.setattr(memory, "get_paper_trades_closed_on", lambda d: state["closed"])
+    monkeypatch.setattr(memory, "get_paper_trims_on", lambda d: state["trims"])
     monkeypatch.setattr(memory, "get_agent_trades_today", lambda d: state["today"])
     monkeypatch.setattr(memory, "get_last_agent_buy", lambda t: state["last_buy"])
     monkeypatch.setattr(memory, "get_latest_agent_snapshot", lambda: state["prev_snapshot"])
@@ -165,6 +167,33 @@ def test_live_sell_mirror_exits_full_position(wired, monkeypatch):
     p = fb.places[0]
     assert p["side"] == "sell" and p["type"] == "market" and float(p["quantity"]) == 5.0
     assert "dollar_amount" not in p
+
+
+def test_live_trim_mirror_sells_fraction_of_holding(wired, monkeypatch):
+    """A parabolic trim mirrors the ACTION: sell trim_fraction of the agentic holding, keep the runner."""
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
+    state, _ = wired
+    state["opened"] = []
+    state["trims"] = [{"ticker": "RKLB", "fraction": 0.3333, "close_price": 120.0}]
+    state["last_buy"] = {"run_date": "2026-01-01T00:00:00"}  # long ago → min-hold ok
+    fb = FakeBroker(positions={"positions": [{"symbol": "RKLB", "quantity": 6, "average_cost": 90}]})
+    ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
+    assert len(fb.places) == 1
+    p = fb.places[0]
+    assert p["side"] == "sell" and p["type"] == "market"
+    assert float(p["quantity"]) == pytest.approx(6 * 0.3333, rel=1e-6)  # partial, not the full 6
+    assert "dollar_amount" not in p
+
+
+def test_trim_mirror_skipped_when_position_not_held(wired, monkeypatch):
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
+    state, _ = wired
+    state["opened"] = []
+    state["trims"] = [{"ticker": "RKLB", "fraction": 0.3333, "close_price": 120.0}]
+    fb = FakeBroker()  # no positions → nothing to trim
+    summary = ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
+    assert len(fb.places) == 0
+    assert "sell:RKLB:not_held" in summary["skipped"]
 
 
 # ---------------------------------------------------------------------------

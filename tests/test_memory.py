@@ -167,6 +167,45 @@ class TestPerformanceWriters:
         assert payload["total_equity"] == 10040.0
         assert payload["holdings"] == [{"lot_id": 1}]
 
+    def test_partial_trim_writes_one_aggregate_trim_event(self):
+        """A parabolic trim shrinks the open lot(s) AND appends one paper_trims row so the
+        Autotrader can mirror the action. A full close writes no trim event."""
+        tables = {name: MagicMock() for name in ("paper_trades", "paper_trims")}
+        lots = [{"id": 1, "price_at_signal": 90.0, "virtual_shares": 6.0, "virtual_cost": 540.0}]
+        (tables["paper_trades"].select.return_value.eq.return_value
+         .eq.return_value.execute.return_value.data) = lots
+        client = MagicMock()
+        client.table.side_effect = lambda name: tables[name]
+
+        with patch.object(memory, "get_client", return_value=client), \
+                patch.object(memory, "brain_version_fields", return_value={}):
+            memory.close_paper_trade("RKLB", 120.0, "2026-07-06T13:00:00", "parabolic_trim", fraction=0.3333)
+
+        # open lot reduced (kept open), not closed
+        upd = tables["paper_trades"].update.call_args.args[0]
+        assert upd["virtual_shares"] == round(6.0 - 6.0 * 0.3333, 6)
+        assert "is_open" not in upd
+        # exactly one trim event, carrying the fraction the mirror sizes off
+        payload = tables["paper_trims"].insert.call_args.args[0]
+        assert payload["ticker"] == "RKLB"
+        assert payload["fraction"] == round(0.3333, 6)
+        assert payload["realized_pnl"] == round((120.0 - 90.0) * 6.0 * 0.3333, 2)
+
+    def test_full_close_writes_no_trim_event(self):
+        tables = {name: MagicMock() for name in ("paper_trades", "paper_trims")}
+        lots = [{"id": 1, "price_at_signal": 90.0, "virtual_shares": 6.0, "virtual_cost": 540.0}]
+        (tables["paper_trades"].select.return_value.eq.return_value
+         .eq.return_value.execute.return_value.data) = lots
+        client = MagicMock()
+        client.table.side_effect = lambda name: tables[name]
+
+        with patch.object(memory, "get_client", return_value=client), \
+                patch.object(memory, "brain_version_fields", return_value={}):
+            memory.close_paper_trade("RKLB", 120.0, "2026-07-06T13:00:00", "profit_take", fraction=1.0)
+
+        tables["paper_trims"].insert.assert_not_called()
+        assert tables["paper_trades"].update.call_args.args[0]["is_open"] is False
+
     def test_upsert_benchmark_price_is_idempotent_on_symbol_date(self):
         client = MagicMock()
         with patch.object(memory, "get_client", return_value=client):
