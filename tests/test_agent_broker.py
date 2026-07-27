@@ -198,6 +198,75 @@ class TestSupabaseTokenStorage:
         assert got is not None and got.refresh_token == "seed-RT"
 
 
+class TestProactiveRefresh:
+    """The SDK never refreshes proactively on headless runs, so the broker drives the
+    refresh_token grant itself when the access token is near expiry, and persists the rotation."""
+
+    ENDPOINT = "https://api.robinhood.com/oauth2/token/"
+
+    def _seed(self, tmp_path, expires_in, obtained_ago_s):
+        import time
+
+        from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
+
+        from src import agent_broker
+        key = base64.b64encode(os.urandom(32)).decode()
+        path = str(tmp_path / "agent_tokens.enc")
+        s = agent_broker.EncryptedFileTokenStorage(path=path, key_b64=key)
+        asyncio.run(s.set_tokens(OAuthToken(access_token="old-AT", token_type="Bearer",
+                                            refresh_token="old-RT", expires_in=expires_in)))
+        asyncio.run(s.set_client_info(OAuthClientInformationFull(
+            client_id="cid-123", redirect_uris=["http://127.0.0.1:8765/callback"])))
+        # Backdate obtained_at so the token is (or isn't) within the refresh buffer.
+        s._cache["obtained_at"] = int(time.time()) - obtained_ago_s
+        s._write()
+        return agent_broker.EncryptedFileTokenStorage(path=path, key_b64=key)
+
+    def test_refreshes_when_near_expiry_and_persists(self, tmp_path, monkeypatch):
+        # 8-day token, obtained 7 days ago → ~1 day left < 2-day buffer → refresh.
+        s = self._seed(tmp_path, expires_in=8 * 86400, obtained_ago_s=7 * 86400)
+        captured = {}
+
+        def fake_post(url, data, headers, timeout):
+            captured["url"] = url
+            captured["data"] = data
+            return SimpleNamespace(status_code=200, json=lambda: {
+                "access_token": "new-AT", "token_type": "Bearer",
+                "refresh_token": "rotated-RT", "expires_in": 400000})
+        monkeypatch.setattr("httpx.post", fake_post)
+
+        did = s.ensure_fresh(buffer_s=2 * 86400, endpoint=self.ENDPOINT)
+        assert did is True
+        assert captured["url"] == self.ENDPOINT
+        assert captured["data"]["grant_type"] == "refresh_token"
+        assert captured["data"]["refresh_token"] == "old-RT"
+        assert captured["data"]["client_id"] == "cid-123"
+        # Rotation persisted to the store.
+        got = asyncio.run(s.get_tokens())
+        assert got.access_token == "new-AT" and got.refresh_token == "rotated-RT"
+
+    def test_skips_when_still_fresh(self, tmp_path, monkeypatch):
+        # 8-day token, obtained 1 day ago → ~7 days left > buffer → no refresh, no HTTP call.
+        s = self._seed(tmp_path, expires_in=8 * 86400, obtained_ago_s=86400)
+        monkeypatch.setattr("httpx.post", lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("should not refresh a fresh token")))
+        assert s.ensure_fresh(buffer_s=2 * 86400, endpoint=self.ENDPOINT) is False
+
+    def test_raises_on_rejected_refresh(self, tmp_path, monkeypatch):
+        from src.agent_broker import BrokerError
+        s = self._seed(tmp_path, expires_in=8 * 86400, obtained_ago_s=7 * 86400)
+        monkeypatch.setattr("httpx.post", lambda *a, **k: SimpleNamespace(
+            status_code=400, text='{"error":"invalid_grant"}'))
+        with pytest.raises(BrokerError, match="refresh chain is dead|rejected"):
+            s.ensure_fresh(buffer_s=2 * 86400, endpoint=self.ENDPOINT)
+
+    def test_noop_without_stored_credentials(self, tmp_path):
+        from src import agent_broker
+        key = base64.b64encode(os.urandom(32)).decode()
+        s = agent_broker.EncryptedFileTokenStorage(path=str(tmp_path / "none.enc"), key_b64=key)
+        assert s.ensure_fresh(buffer_s=2 * 86400, endpoint=self.ENDPOINT) is False
+
+
 class TestOAuthRedirectCapture:
     def test_ignores_preconnect_and_captures_code(self):
         import threading

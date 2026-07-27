@@ -11,12 +11,16 @@ Auth: OAuth 2.0 bearer token, obtained once via Robinhood's desktop onboarding (
 agent authorizes a dedicated `agentic_allowed=true` sub-account) and stored encrypted
 (same AES-256-GCM scheme as src/robinhood.py). The token is loaded at call time.
 
-    HEADLESS-OAUTH — PENDING VERIFICATION (docs/autonomy.md checklist #3):
-    Robinhood has not published the agentic token refresh flow. `_load_access_token`
-    supports a stored access token today; `_refresh_access_token` is a marked stub to be
-    wired once the refresh endpoint is confirmed during onboarding. Until then, run the
-    read-only smoke test (`python -m src.agent_broker --check`) after a fresh bootstrap
-    to confirm connectivity, and treat token expiry as an operational item.
+    HEADLESS-OAUTH — proactive refresh (verified 2026-07-27):
+    Robinhood's agentic access token lives ~4-8 days and its OAuth server exposes a standard
+    refresh_token grant at `https://api.robinhood.com/oauth2/token/` (public client, PKCE). The
+    MCP SDK does NOT refresh proactively on headless runs — it never restores token_expiry_time
+    after loading tokens, so it always believes the stored access token is valid, and when the
+    token finally expires the server 401s and the SDK runs a *full interactive re-auth* (needs a
+    browser) instead of a refresh. So `SupabaseTokenStorage.ensure_fresh` drives the refresh_token
+    grant ourselves before the first call and persists the rotation; the chain stays alive with no
+    re-auth. A rejected refresh (dead chain) aborts loudly. Bootstrap is only needed once (or if
+    the refresh token is ever revoked); confirm with `python -m src.agent_broker --check`.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ import base64
 import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +92,7 @@ class EncryptedFileTokenStorage:
 
     async def set_tokens(self, tokens) -> None:
         self._cache["tokens"] = tokens.model_dump(exclude_none=True, mode="json")
+        self._cache["obtained_at"] = int(time.time())  # anchor for proactive-refresh expiry math
         self._write()
 
     async def get_client_info(self):
@@ -98,6 +104,54 @@ class EncryptedFileTokenStorage:
         self._cache["client_info"] = client_info.model_dump(exclude_none=True, mode="json")
         self._write()
 
+    # -- proactive refresh (the SDK does not do this on headless runs) ----
+    def ensure_fresh(self, buffer_s: int, endpoint: str) -> bool:
+        """Refresh the access token via our own refresh_token grant when it's within
+        `buffer_s` seconds of expiry, and persist the rotation. Returns True if it refreshed.
+
+        Why we do this ourselves: the MCP SDK only refreshes proactively when
+        `is_token_valid()` is False, but it never restores `token_expiry_time` after loading
+        tokens from storage, so on every headless run it believes the stored access token is
+        valid and never refreshes. Then, when the token is actually expired, the server 401s
+        and the SDK's 401 path runs a *full interactive re-authorization* (which needs a
+        browser) instead of a refresh — aborting the run. Driving the refresh here keeps the
+        chain alive with no re-auth.
+        """
+        import httpx
+
+        tok = self._cache.get("tokens") or {}
+        ci = self._cache.get("client_info") or {}
+        refresh_token = tok.get("refresh_token")
+        client_id = ci.get("client_id")
+        if not refresh_token or not client_id:
+            return False  # nothing stored yet — bootstrap/first-run path handles this
+
+        obtained_at = self._cache.get("obtained_at")
+        expires_in = tok.get("expires_in")
+        if obtained_at and expires_in:
+            remaining = (int(obtained_at) + int(expires_in)) - time.time()
+            if remaining > buffer_s:
+                return False  # still comfortably fresh — don't rotate needlessly
+
+        resp = httpx.post(
+            endpoint,
+            data={"grant_type": "refresh_token", "refresh_token": refresh_token, "client_id": client_id},
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            raise BrokerError(
+                f"Robinhood agentic token refresh rejected ({resp.status_code}): {resp.text[:200]}. "
+                "The refresh chain is dead — re-bootstrap on a browser machine with "
+                "`python -m src.agent_broker --bootstrap` and update the AGENT_RH_TOKENS_ENC secret."
+            )
+        self._cache["tokens"] = resp.json()
+        self._cache["obtained_at"] = int(time.time())
+        self._write()
+        logger.info("Agentic access token proactively refreshed (expires_in=%ss).",
+                    self._cache["tokens"].get("expires_in"))
+        return True
+
 
 # robinhood_tokens.id — the individual/advisor account persists as row 1 (src/robinhood.py);
 # the agentic account is row 2. Reuses the existing, already-GRANTed table (no new schema).
@@ -108,7 +162,7 @@ class SupabaseTokenStorage(EncryptedFileTokenStorage):
     """Token store that persists to Supabase (durable across headless runs), with the encrypted
     file as a bootstrap-seed fallback.
 
-    Robinhood rotates the refresh token on *every* refresh (access tokens live 24h), so the
+    Robinhood rotates the refresh token on *every* refresh (access tokens live ~4-8 days), so the
     rotated token MUST survive to the next run. A GitHub-secret/CI-file-only store can't — the
     file is discarded when the job ends, so every run replays the original bootstrap token until
     Robinhood expires it (~days) and the Autotrader silently dies. Persisting each refresh to
@@ -146,6 +200,7 @@ class SupabaseTokenStorage(EncryptedFileTokenStorage):
             get_client().table("robinhood_tokens").upsert({
                 "id": _AGENT_TOKENS_ROW_ID,
                 "encrypted_blob": encrypt_json(self._cache, self._key),
+                "updated_at": "now()",  # bump so token freshness is observable (no UPDATE trigger on the table)
             }).execute()
         except Exception:
             logger.error("Agentic token persist to Supabase failed — next run may need re-auth.", exc_info=True)
@@ -224,6 +279,23 @@ class AgenticBroker:
     def __init__(self, url: str = config.agent.rh_mcp_url, account_number: str = config.agent.account_number):
         self.url = url
         self._account_number = account_number
+        self._token_ensured = False
+
+    # -- token freshness -------------------------------------------------
+    def _ensure_fresh_token(self) -> None:
+        """Proactively refresh the OAuth access token once per broker lifetime, before the
+        first MCP call — the SDK never does this on headless runs (see
+        SupabaseTokenStorage.ensure_fresh). A dead chain raises BrokerError (loud abort)."""
+        if self._token_ensured:
+            return
+        self._token_ensured = True
+        try:
+            SupabaseTokenStorage().ensure_fresh(
+                config.agent.token_refresh_buffer_s, config.agent.rh_token_endpoint)
+        except BrokerError:
+            raise
+        except Exception as exc:
+            logger.warning("Proactive token-freshness check failed (%s) — proceeding on stored token.", exc)
 
     # -- transport -------------------------------------------------------
     async def _acall(self, name: str, arguments: dict) -> Any:
@@ -238,6 +310,7 @@ class AgenticBroker:
 
     def call(self, name: str, arguments: dict) -> Any:
         """Invoke one MCP tool synchronously. Overridden/mocked in tests."""
+        self._ensure_fresh_token()
         try:
             return asyncio.run(self._acall(name, arguments))
         except BrokerError:

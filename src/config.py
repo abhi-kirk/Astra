@@ -309,6 +309,12 @@ class AgentConfig:
     rh_mcp_url: str = _cfg("AGENT_RH_MCP_URL", default="https://agent.robinhood.com/mcp/trading")
     rh_token_key: str = _cfg("AGENT_RH_TOKEN_KEY", default="")                # base64 AES-256 key for the agentic OAuth blob
     rh_tokens_file: str = _cfg("AGENT_RH_TOKENS_FILE", default="agent_tokens.enc")
+    # OAuth token endpoint (from RH's .well-known/oauth-authorization-server) — used to drive our
+    # OWN proactive refresh_token grant, because the MCP SDK never refreshes proactively on a
+    # headless run (it doesn't restore token_expiry_time on load and its 401 path does a full
+    # interactive re-auth). We refresh when the access token is within the buffer of expiry.
+    rh_token_endpoint: str = _cfg("AGENT_RH_TOKEN_ENDPOINT", default="https://api.robinhood.com/oauth2/token/")
+    token_refresh_buffer_s: int = _cfg("AGENT_TOKEN_REFRESH_BUFFER_S", cast=int, default=172800)  # refresh if < 2 days of access-token life remain
 
 
 # ── Exploration (weekly discovery run) ─────────────────────────────────────────
