@@ -45,6 +45,80 @@ class BrokerError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
+# Transient-failure retry (READS ONLY)
+# ---------------------------------------------------------------------------
+# Robinhood's agentic API occasionally 500s on an otherwise healthy account. Observed
+# 2026-07-28 13:03 UTC: `get_portfolio` returned
+#   "market value fetch: API error 500: {"code":13,"message":"failed to get market value ...
+#    because > failed to get interpolated current holdings ..."}"
+# which aborted the whole Autotrader run; the identical call succeeded minutes later. The run
+# fires in one daily window, so a few seconds of blip cost a full trading day of autonomy.
+#
+# Only idempotent READS are retried. `place_equity_order` / `cancel_equity_order` are
+# deliberately absent: a 500 on a write is ambiguous (the order may have reached the matching
+# engine), and re-sending could double-spend real money. A failed placement keeps its existing
+# behaviour — logged as `failed`, the run continues, and the mirror re-fires on the next run.
+# This allowlist is the invariant; keep it read-only even if `_is_transient` ever widens.
+_RETRYABLE_TOOLS = frozenset({
+    "get_accounts",
+    "get_portfolio",
+    "get_equity_positions",
+    "get_equity_orders",
+    "get_realized_pnl",
+    "review_equity_order",  # explicitly no-side-effect: RH prices/validates but places nothing
+})
+
+# Matched against the error *text*, because _parse_result flattens RH's structured error into a
+# string. Anything not listed here fails on the first attempt — notably auth failures (a dead
+# refresh chain needs a re-bootstrap, not a retry) and 4xx business errors (investor-profile
+# gate, insufficient funds), which retrying would only delay.
+_TRANSIENT_MARKERS = (
+    "api error 500", "api error 502", "api error 503", "api error 504", "api error 429",
+    "internal server error", "bad gateway", "service unavailable", "gateway timeout",
+    "too many requests", "rate limit",
+    "timeout", "timed out", "connection reset", "connection refused",
+    "connection error", "server disconnected", "remote protocol error", "temporarily unavailable",
+)
+
+# Checked first: these win over the markers above, so "OAuth ... timeout" is treated as auth
+# (fatal), not as a transient blip worth retrying.
+_FATAL_MARKERS = (
+    "oauth", "unauthorized", "invalid_grant", "invalid_token", "refresh chain is dead",
+    "forbidden", "api error 401", "api error 403",
+)
+
+
+def _exc_text(exc: BaseException, _depth: int = 0) -> str:
+    """Flatten an exception and everything nested inside it into one lowercase string.
+
+    Must recurse: the MCP streamable-http client runs its work in an anyio task group, so the
+    real error arrives wrapped as `ExceptionGroup: unhandled errors in a TaskGroup (1
+    sub-exception)` — a top-level `str()` shows none of the actual cause. The observed RH 500
+    (and the earlier OAuthFlowError) both hid one or two levels down, so classifying on the
+    outer message alone would never match anything."""
+    if _depth > 6:  # cycle/pathological-nesting guard
+        return ""
+    parts = [f"{type(exc).__name__}: {exc}"]
+    for nested in getattr(exc, "exceptions", None) or []:  # ExceptionGroup members
+        parts.append(_exc_text(nested, _depth + 1))
+    for link in (exc.__cause__, exc.__context__):
+        if link is not None and link is not exc:
+            parts.append(_exc_text(link, _depth + 1))
+    return " ".join(parts).lower()
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """True when `exc` looks like a temporary Robinhood-side/transport failure worth retrying.
+
+    Conservative by construction: unrecognized errors are NOT transient, so a genuine problem
+    still aborts loudly on the first attempt rather than being masked by retries."""
+    text = _exc_text(exc)
+    if any(m in text for m in _FATAL_MARKERS):
+        return False
+    return any(m in text for m in _TRANSIENT_MARKERS)
+
+
+# ---------------------------------------------------------------------------
 # OAuth token store (AES-256-GCM encrypted; SDK-driven refresh)
 # ---------------------------------------------------------------------------
 # Robinhood's agentic MCP advertises standard OAuth 2.0 metadata:
@@ -309,14 +383,28 @@ class AgenticBroker:
                 return _parse_result(result)
 
     def call(self, name: str, arguments: dict) -> Any:
-        """Invoke one MCP tool synchronously. Overridden/mocked in tests."""
+        """Invoke one MCP tool synchronously. Overridden/mocked in tests.
+
+        Read-only tools are retried with exponential backoff on transient Robinhood/transport
+        failures (see _RETRYABLE_TOOLS / _is_transient). Order placement is never retried."""
         self._ensure_fresh_token()
-        try:
-            return asyncio.run(self._acall(name, arguments))
-        except BrokerError:
-            raise
-        except Exception as exc:  # transport / connection failures
-            raise BrokerError(f"Agentic MCP call '{name}' failed: {exc}") from exc
+        attempts = max(1, config.agent.retry_attempts) if name in _RETRYABLE_TOOLS else 1
+        for attempt in range(1, attempts + 1):
+            try:
+                return asyncio.run(self._acall(name, arguments))
+            except BaseException as exc:  # noqa: BLE001 — re-raised below; ExceptionGroup is a BaseException
+                if attempt < attempts and _is_transient(exc):
+                    delay = config.agent.retry_backoff_s * (2 ** (attempt - 1))
+                    logger.warning("Agentic MCP '%s' failed transiently (attempt %d/%d) — "
+                                   "retrying in %.1fs: %s", name, attempt, attempts, delay, exc)
+                    time.sleep(delay)
+                    continue
+                if isinstance(exc, BrokerError):
+                    raise
+                if not isinstance(exc, Exception):  # KeyboardInterrupt/SystemExit — never swallow
+                    raise
+                raise BrokerError(f"Agentic MCP call '{name}' failed: {exc}") from exc
+        raise BrokerError(f"Agentic MCP call '{name}' exhausted {attempts} attempts.")  # pragma: no cover
 
     # -- reads -----------------------------------------------------------
     def get_accounts(self) -> Any:

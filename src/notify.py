@@ -220,6 +220,7 @@ def notify_agent(summary: dict) -> bool:
     """
     placed = summary.get("placed") or []
     blocked = summary.get("blocked") or []
+    failed = summary.get("failed") or []
     reasons = summary.get("block_reasons") or {}
     acct = summary.get("account") or {}
     dry = summary.get("dry_run")
@@ -243,7 +244,9 @@ def notify_agent(summary: dict) -> bool:
     if "paused" in (summary.get("skipped") or []):
         return False  # paused is an intentional owner action — no alert needed
 
-    if not placed and not blocked:
+    # `failed` counts as noteworthy: an order the brain wanted was rejected by Robinhood. Without
+    # it, a run where every placement failed had no placed/blocked entries and went out silently.
+    if not placed and not blocked and not failed:
         return False  # nothing to report
 
     tag = " _(dry-run)_" if dry else ""
@@ -253,6 +256,14 @@ def notify_agent(summary: dict) -> bool:
         reason = reasons.get(b)
         ticker = b.split(":", 1)[-1]
         lines.append(f"⛔ {ticker} blocked — {reason}" if reason else f"⛔ {ticker} blocked")
+
+    # Robinhood rejected the order (account gate, transient broker error, …). Distinct from a
+    # `blocked` guardrail decision: ASTRA wanted this trade and could not get it placed.
+    for f in failed:
+        side, _, ticker = f.partition(":")
+        lines.append(f"❌ {ticker or f} {side} FAILED to place")
+    if failed and not placed:
+        lines.append("_no orders placed this run — check the workflow log_")
 
     # Muted line for would-be trades that didn't happen (budget ran out, nothing to sell, …);
     # idempotent already-handled skips are omitted as routine.

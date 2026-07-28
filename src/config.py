@@ -315,6 +315,12 @@ class AgentConfig:
     # interactive re-auth). We refresh when the access token is within the buffer of expiry.
     rh_token_endpoint: str = _cfg("AGENT_RH_TOKEN_ENDPOINT", default="https://api.robinhood.com/oauth2/token/")
     token_refresh_buffer_s: int = _cfg("AGENT_TOKEN_REFRESH_BUFFER_S", cast=int, default=172800)  # refresh if < 2 days of access-token life remain
+    # Retry for transient Robinhood-side failures on READ calls only (see agent_broker._RETRYABLE_TOOLS).
+    # The run fires in a single ~13:02 UTC window, so one upstream 5xx used to cost the whole trading
+    # day (observed 2026-07-28: a 500 on get_portfolio aborted the run; the same call succeeded minutes
+    # later). Attempts are cheap — 3 attempts at 2s exponential backoff adds ≤6s to a ~60s job.
+    retry_attempts: int = _cfg("AGENT_RETRY_ATTEMPTS", cast=int, default=3)
+    retry_backoff_s: float = _cfg("AGENT_RETRY_BACKOFF_S", cast=float, default=2.0)
 
 
 # ── Exploration (weekly discovery run) ─────────────────────────────────────────

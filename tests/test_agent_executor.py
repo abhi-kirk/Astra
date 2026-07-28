@@ -501,3 +501,39 @@ def test_placed_rows_still_consume_daily_cap(wired, monkeypatch):
     summary = ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
     assert fb.places == []
     assert summary["skipped"] == ["buy:RKLB:unfunded"]
+
+
+# ---------------------------------------------------------------------------
+# A run where nothing got placed must never read as success
+# ---------------------------------------------------------------------------
+
+def test_all_placements_failed_is_visible(wired, monkeypatch):
+    """Every place_order rejected → `failed` populated and `placed` empty. Previously this
+    combination sent no Telegram alert and exited 0, so a fully-failed run looked green."""
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
+    from src.agent_broker import BrokerError
+
+    class AllFailBroker(FakeBroker):
+        def place_order(self, **p):
+            raise BrokerError("API error 500: order service unavailable")
+
+    summary = ex.run(broker=AllFailBroker(), run_date="2026-07-06T13:00:00", dry_run=False)
+    assert summary["failed"] and not summary["placed"]
+
+
+def test_notify_agent_reports_failed_placements(monkeypatch):
+    from src import notify
+    sent: list[str] = []
+    monkeypatch.setattr(notify, "send", lambda text: sent.append(text) or True)
+    ok = notify.notify_agent({"dry_run": False, "placed": [], "blocked": [],
+                              "failed": ["buy:NVDA", "sell:RKLB"]})
+    assert ok is True
+    assert "NVDA" in sent[0] and "RKLB" in sent[0] and "FAILED" in sent[0]
+    assert "no orders placed" in sent[0].lower()
+
+
+def test_notify_agent_still_quiet_on_empty_run(monkeypatch):
+    """The no-op guard must survive the new `failed` branch — routine quiet runs stay quiet."""
+    from src import notify
+    monkeypatch.setattr(notify, "send", lambda text: (_ for _ in ()).throw(AssertionError("sent")))
+    assert notify.notify_agent({"placed": [], "blocked": [], "failed": []}) is False

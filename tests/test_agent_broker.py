@@ -8,8 +8,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from src import config
 from src.agent_broker import (
+    _RETRYABLE_TOOLS,
+    AgenticBroker,
+    BrokerError,
     EncryptedFileTokenStorage,
+    _is_transient,
     _parse_result,
     _unwrap,
     extract_order,
@@ -292,3 +297,119 @@ class TestOAuthRedirectCapture:
 
         t.join(5)
         assert result["out"] == ("abc", "xyz")
+
+
+# ---------------------------------------------------------------------------
+# Transient-failure retry on READ calls (regression: run 30361614390, 2026-07-28)
+# ---------------------------------------------------------------------------
+# That run died on a Robinhood-side 500 during get_portfolio and lost the whole trading day;
+# the identical call succeeded minutes later. Reads now retry; writes must never retry.
+
+# Verbatim text from the failed run — the RH error arrives nested inside the anyio TaskGroup
+# ExceptionGroup, which is exactly why classification has to recurse.
+_RH_500 = ('market value fetch: API error 500: {"code":13,"message":"failed to get market value '
+           'where assetClassSpec=cash_equity_forex_option,rhsAccountNumber=XXX because\n'
+           '> failed to get interpolated current holdings where rhsAccountNumber=XXX"}')
+
+
+class TestIsTransient:
+    def test_real_rh_500_is_transient(self):
+        assert _is_transient(BrokerError(_RH_500)) is True
+
+    def test_rh_500_nested_in_taskgroup_is_transient(self):
+        """The shape actually seen in CI: ExceptionGroup hides the cause one level down."""
+        group = ExceptionGroup("unhandled errors in a TaskGroup", [BrokerError(_RH_500)])
+        outer = BrokerError("Agentic MCP call 'get_portfolio' failed: unhandled errors in a TaskGroup")
+        assert _is_transient(group) is True
+        assert _is_transient(outer) is False  # outer text alone carries no signal...
+        try:  # ...but with the cause chain attached it does
+            try:
+                raise group
+            except ExceptionGroup as e:
+                raise BrokerError("Agentic MCP call 'get_portfolio' failed") from e
+        except BrokerError as chained:
+            assert _is_transient(chained) is True
+
+    def test_auth_failure_is_not_transient(self):
+        """A dead refresh chain needs a re-bootstrap — retrying only delays the alert."""
+        exc = ExceptionGroup("unhandled errors in a TaskGroup", [
+            RuntimeError("OAuthFlowError: No redirect handler provided for authorization code grant")])
+        assert _is_transient(exc) is False
+
+    def test_business_error_is_not_transient(self):
+        assert _is_transient(BrokerError("API error 400: investor profile required")) is False
+
+    def test_unknown_error_is_not_transient(self):
+        """Conservative default — unrecognized errors must still abort on attempt one."""
+        assert _is_transient(BrokerError("something entirely new")) is False
+
+    def test_oauth_wins_over_timeout(self):
+        assert _is_transient(BrokerError("OAuth token request timed out")) is False
+
+
+class TestCallRetry:
+    """Exercises AgenticBroker.call — previously untested (no test built a broker at all)."""
+
+    @pytest.fixture
+    def broker(self, monkeypatch):
+        b = AgenticBroker(url="https://example.invalid/mcp", account_number="742995442")
+        b._token_ensured = True                       # skip the Supabase/OAuth refresh path
+        monkeypatch.setattr("src.agent_broker.time.sleep", lambda s: None)  # keep the suite fast
+        monkeypatch.setattr(config.agent, "retry_attempts", 3)
+        monkeypatch.setattr(config.agent, "retry_backoff_s", 0.0)
+        return b
+
+    def _patch_calls(self, monkeypatch, outcomes):
+        """Drive asyncio.run's target: each entry is an exception to raise or a value to return."""
+        calls: list[str] = []
+
+        def fake_run(coro):
+            coro.close()  # we never await the real _acall; avoid an un-awaited-coroutine warning
+            calls.append("call")
+            item = outcomes[min(len(calls) - 1, len(outcomes) - 1)]
+            if isinstance(item, BaseException):
+                raise item
+            return item
+
+        monkeypatch.setattr("src.agent_broker.asyncio.run", fake_run)
+        return calls
+
+    def test_read_retries_then_succeeds(self, broker, monkeypatch):
+        calls = self._patch_calls(monkeypatch, [BrokerError(_RH_500), {"total_value": "1141.53"}])
+        assert broker.call("get_portfolio", {}) == {"total_value": "1141.53"}
+        assert len(calls) == 2  # failed once, succeeded on the retry
+
+    def test_read_gives_up_after_configured_attempts(self, broker, monkeypatch):
+        calls = self._patch_calls(monkeypatch, [BrokerError(_RH_500)])
+        with pytest.raises(BrokerError, match="API error 500"):
+            broker.call("get_portfolio", {})
+        assert len(calls) == 3  # retry_attempts, not unbounded
+
+    def test_place_order_is_never_retried(self, broker, monkeypatch):
+        """THE safety invariant: a 500 on a write is ambiguous (the order may have reached the
+        matching engine), so re-sending could double-spend real money."""
+        calls = self._patch_calls(monkeypatch, [BrokerError(_RH_500)])
+        with pytest.raises(BrokerError):
+            broker.call("place_equity_order", {"symbol": "NVDA", "ref_id": "abc"})
+        assert len(calls) == 1
+
+    def test_cancel_order_is_never_retried(self, broker, monkeypatch):
+        calls = self._patch_calls(monkeypatch, [BrokerError(_RH_500)])
+        with pytest.raises(BrokerError):
+            broker.call("cancel_equity_order", {"order_id": "x"})
+        assert len(calls) == 1
+
+    def test_write_tools_absent_from_allowlist(self):
+        assert "place_equity_order" not in _RETRYABLE_TOOLS
+        assert "cancel_equity_order" not in _RETRYABLE_TOOLS
+
+    def test_auth_failure_fails_fast(self, broker, monkeypatch):
+        calls = self._patch_calls(monkeypatch, [BrokerError("OAuthFlowError: no redirect handler")])
+        with pytest.raises(BrokerError):
+            broker.call("get_portfolio", {})
+        assert len(calls) == 1  # no retry — needs a human re-bootstrap
+
+    def test_non_broker_exception_is_wrapped(self, broker, monkeypatch):
+        self._patch_calls(monkeypatch, [ValueError("odd transport failure")])
+        with pytest.raises(BrokerError, match="get_portfolio"):
+            broker.call("get_portfolio", {})

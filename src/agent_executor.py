@@ -449,6 +449,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     forced = True if args.dry_run else (False if args.live else None)
     result = run(dry_run=forced)
-    if result.get("aborted"):
-        # Surface the failure to CI (non-zero exit) so a broken token doesn't read as success.
+    # Surface real failures to CI (non-zero exit) so a broken token doesn't read as success.
+    # Also fail when ASTRA wanted to trade and *nothing* got placed — that run is not a success
+    # even though the loop completed. A partial failure still exits 0 (some orders did land) and
+    # is surfaced through the Telegram alert instead.
+    if result.get("aborted") or (result.get("failed") and not result.get("placed")):
         raise SystemExit(1)
