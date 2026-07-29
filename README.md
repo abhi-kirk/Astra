@@ -93,7 +93,9 @@ The AI layer never overrides the mechanical signal unilaterally. The determinist
 
 ### Privacy
 
-The dashboard serves two tiers. **Public** visitors see tickers, signals, and scrubbed reasoning. **Authenticated** (just me) unlocks the full advisor note, cost basis, P&L, suggested sizing, paper-trade performance, and the Autotrader's live trades, P&L, and controls. Row-level security is enforced server-side, so private data never reaches an unauthenticated browser.
+The dashboard serves two tiers. **Public** visitors see tickers, signals, and scrubbed reasoning. **Authenticated** (just me) unlocks the full advisor note, cost basis, P&L, suggested sizing, paper-trade performance, the Autotrader's live trades, P&L, and controls, and the **Tuning** surface — the dials that govern what ASTRA buys, how big, and when it sells, each with a plain-language explanation and a safe range. Row-level security is enforced server-side, so private data never reaches an unauthenticated browser.
+
+Changing a dial is deliberately harder than clicking a toggle: you review a diff, write down *why*, and press-and-hold to commit, with a typed confirmation on anything touching real money. The reason and a per-key diff are recorded, so a stretch of performance can later be read against the settings that produced it. Hard risk limits (position cap, theme cap, averaging-down, drawdown halt) are shown but only changeable in code, so they stay in version history.
 
 ---
 

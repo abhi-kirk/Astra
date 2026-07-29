@@ -442,7 +442,11 @@ if __name__ == "__main__":
     import argparse
 
     from src.logger import setup as _setup
+    from src.settings import load_and_apply as _apply_settings
     _setup()
+    # Dashboard-saved tunables layer over env/code before any guardrail is evaluated.
+    # On/off switches AND together, so this can only ever disable trading, never enable it.
+    _apply_settings()
     parser = argparse.ArgumentParser(description="ASTRA Autotrader — autonomous execution")
     parser.add_argument("--dry-run", action="store_true", help="review only, never place (forces dry-run)")
     parser.add_argument("--live", action="store_true", help="force live even if AGENT_TRADING_ENABLED is unset")

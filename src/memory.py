@@ -774,6 +774,88 @@ def get_latest_plays() -> dict | None:
     return data[0]["content"] if data else None
 
 
+def get_latest_settings() -> dict | None:
+    """The live settings-override blob ({"values": {...}}). Same single-row shape as
+    convictions/plays. Missing table or empty row → None (the run uses env/code defaults)."""
+    data = db_rows(
+        get_client().table("settings").select("content")
+        .order("updated_at", desc=True).limit(1).execute().data
+    )
+    return data[0]["content"] if data else None
+
+
+def save_settings_snapshot(content: dict) -> None:
+    """Write the override map and append a history snapshot — the same upsert+historize
+    pattern as convictions and plays. `content` is {"values": {...}}.
+
+    Merges rather than replaces: `save_settings_effective` writes a sibling key of the same
+    row, so a blind overwrite here would drop the snapshot the dashboard displays. The
+    dashboard's own save path merges the same way.
+    """
+    db = get_client()
+    existing = db_rows(db.table("settings").select("id, content").limit(1).execute().data)
+    if existing:
+        merged = {**(existing[0].get("content") or {}), **content}
+        db.table("settings").update({
+            "content": merged,
+            "updated_at": datetime.now().isoformat(),
+        }).eq("id", existing[0]["id"]).execute()
+    else:
+        merged = content
+        db.table("settings").insert({
+            "content": merged,
+            "updated_at": datetime.now().isoformat(),
+        }).execute()
+    save_settings_history(merged)
+
+
+def save_settings_effective(snapshot: dict, source: str = "github-actions") -> None:
+    """Record what the tunables ACTUALLY resolved to on this run, alongside the override map.
+
+    The dashboard cannot compute this itself: it can read the saved overrides and the code
+    defaults, but not the environment layer, so an env-supplied value (AGENT_TRADING_ENABLED
+    in CI, say) would otherwise be displayed wrong. Writing the resolved snapshot back means
+    the UI shows the truth the run used.
+
+    `source` records which run produced it. Only production runs call this (see
+    settings._record_effective) — a dev machine has a different environment, and this row is
+    shared state the dashboard presents as the truth about production.
+
+    Stored under a separate key of the same single row, so the override map and this snapshot
+    never clobber each other: each writer merges into the existing content.
+    """
+    db = get_client()
+    existing = db_rows(db.table("settings").select("id, content").limit(1).execute().data)
+    payload = {
+        "effective": snapshot,
+        "effective_at": datetime.now().isoformat(),
+        "effective_source": source,
+    }
+    if existing:
+        content = dict(existing[0].get("content") or {})
+        content.update(payload)
+        db.table("settings").update({"content": content}).eq("id", existing[0]["id"]).execute()
+    else:
+        db.table("settings").insert({"content": {"values": {}, **payload}}).execute()
+
+
+def save_settings_history(
+    content: dict, reason: str | None = None, changed: list | None = None
+) -> None:
+    """Append a settings snapshot for audit/history.
+
+    `reason` is the owner's rationale (the dashboard requires one before committing) and
+    `changed` the structured per-key diff — together they make history answer "why did this
+    dial move" without diffing blobs. Both are optional: a programmatic save has neither.
+    """
+    get_client().table("settings_history").insert({
+        "content": content,
+        "reason": reason,
+        "changed": changed,
+        "saved_at": datetime.now().isoformat(),
+    }).execute()
+
+
 def get_pending_trade_feedback() -> Rows:
     return db_rows(
         get_client().table("user_trades_log")

@@ -3,7 +3,7 @@
 The decision engine. Given a position + market data + convictions, it emits a
 `Signal` (buy / sell / trim / watch / hold / blocked) from **graded factor scores →
 conviction-weighted composite → regime-aware decisions**. Every tunable lives in
-`src/config.py` (grouped in `params.py`); there are no literals in the logic.
+`src/config.py` (surfaced through `params.py`); there are no literals in the logic.
 
 **Philosophy: conviction is the anchor.** ASTRA systematizes Abhi's convictions rather
 than replacing his judgment. A name must be in `convictions` to be actionable, and its
@@ -108,11 +108,24 @@ executor / the dashboard consume, including `theme`, `score_buy`, `trim_fraction
 `screen_position` for `agent_guardrails` / `agent_executor` / tests.
 
 **Autotrader mirror:** full exits (`thesis_invalidation`, `trailing_stop`) and buys mirror
-into the agentic account. Parabolic **trims are not mirrored** — a trim keeps the paper lot
-open, so it never enters the executor's close-based mirror.
+into the agentic account. Parabolic **trims mirror too**, via a separate path: a trim keeps
+the paper lot open, so it never enters the executor's close-based mirror — it flows through
+the trim-event source instead (`memory.get_paper_trims_on` → a partial sell of `trim_fraction`
+of the agentic holding, keeping the runner).
 
 ## Tuning
-Everything is in `src/config.py` in the `BrainConfig` dataclass (`config.brain.*`), with env
-keys keeping the `BRAIN_*` prefix and env-overridable. Notable dials: `BRAIN_F_GLOBAL` (risk),
-`BRAIN_BUY_THRESHOLD`, `BRAIN_TRAIL_ATR_MULT` (trailing tightness), `BRAIN_WEIGHT_*` (pillar
-emphasis), `BRAIN_TRIM_*` (parabolic sensitivity).
+Values live in `src/config.py` (`BrainConfig`, `config.brain.*`, env keys keeping the
+`BRAIN_*` prefix). What each one *means* — its tier, plain-language description and safe
+range — lives in `src/settings_schema.py`. Notable dials: `BRAIN_F_GLOBAL` (risk),
+`BRAIN_CP_BUY_THRESHOLD` (the conviction-primary buy bar), `BRAIN_TRAIL_ATR_MULT` (trailing
+tightness), `BRAIN_WEIGHT_*` (pillar emphasis), `BRAIN_TRIM_*` (parabolic sensitivity).
+
+Three layers resolve a value, applied once at run start by `src/settings.py`:
+
+    code default  →  environment variable  →  Supabase `settings` override (dashboard)
+
+Numbers are clamped to the range declared in the registry; booleans **AND** together, so a
+switch the environment turns off can never be turned on from the dashboard. Because of that
+layering, `params.py` resolves every name against the live config at access time (PEP 562
+`__getattr__`) rather than binding constants at import — binding them meant an override
+applied after the first brain import was silently ignored.

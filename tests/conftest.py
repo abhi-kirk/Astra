@@ -1,4 +1,27 @@
+import dataclasses
+
 import pytest
+
+from src import config
+
+
+@pytest.fixture(autouse=True)
+def _restore_config():
+    """Snapshot every config singleton and restore it after each test.
+
+    The settings override layer mutates these dataclasses in place by design, so without
+    this a test that applies an override would silently change the config every later test
+    runs against. Cheap (a few dicts) and makes ordering irrelevant.
+    """
+    singletons = [
+        value for value in vars(config).values()
+        if dataclasses.is_dataclass(value) and not isinstance(value, type)
+    ]
+    saved = [(obj, dict(vars(obj))) for obj in singletons]
+    yield
+    for obj, fields in saved:
+        for name, value in fields.items():
+            setattr(obj, name, value)
 
 
 @pytest.fixture

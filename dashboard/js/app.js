@@ -2011,8 +2011,14 @@ function showPbTooltip(icon) {
        <div class="pb-tip-range"><span>RANGE</span> ${meta.range} <span class="pb-tip-def">· default ${meta.def}</span></div>`
     : `<div class="pb-tip-title">${key}</div>
        <div class="pb-tip-desc">Custom parameter — no built-in description. The backend clamps it to its own safe bounds at run time.</div>`;
+  tip.classList.remove('tuning-tip');   // shared element — drop the Tuning accent
   tip.classList.remove('hidden');
-  // Position above the icon, centered, flipping below if there isn't room.
+  positionPbTip(tip, icon);
+}
+
+// Position a floating tip above its icon, centred, flipping below if there isn't room.
+// Shared by the Playbook param tips and the Tuning drawer.
+function positionPbTip(tip, icon) {
   const r = icon.getBoundingClientRect();
   const tr = tip.getBoundingClientRect();
   let left = r.left + r.width / 2 - tr.width / 2;
@@ -2781,11 +2787,13 @@ async function init() {
   initConvictionsDrawer();
   initPlaybookDrawer();
   initJournalDrawer();
+  initTuningDrawer();
 
   // Auth-gated header buttons
   if (isAuthenticated) {
     document.getElementById('convictions-btn').classList.remove('hidden');
     document.getElementById('playbook-btn').classList.remove('hidden');
+    document.getElementById('tuning-btn').classList.remove('hidden');
     loadJournalBadge(sb);  // loads count and shows journal button
   }
 
@@ -3096,6 +3104,16 @@ async function init() {
       }
     }
 
+    // ── Tuning strip: the headline dials, alongside the performance panels (owner-only) ──
+    if (isAuthenticated) {
+      try {
+        await loadTuning(sb);
+        renderTuningStrip();
+      } catch (err) {
+        console.error('[Tuning] load error:', err.message || err);
+      }
+    }
+
     // ── Playbook contextual-layer proposals (owner-only) ──
     if (isAuthenticated) {
       try {
@@ -3141,3 +3159,724 @@ async function init() {
 }
 
 init();
+
+/* ============================================================
+   TUNING — the dials that govern what ASTRA buys, how big, and when it sells.
+   Owner-only. Three layers resolve a value: code default → environment → this drawer.
+
+   Two surfaces:
+     • a live strip on the page, so the headline dials are visible while judging performance
+     • a searchable drawer for changing them
+
+   Unlike the convictions and playbook drawers, this one does NOT autosave. These values move
+   real money, so edits stage into a draft and commit through an explicit review-then-save.
+   ============================================================ */
+
+let _tuneSchema  = null;   // settings_schema.json — labels, help, ranges (code defaults)
+let _tuneSaved   = {};     // the override map currently persisted
+let _tuneEffective = null; // what the last PRODUCTION run resolved to (includes the env layer)
+let _tuneEffectiveAt = null;
+let _tuneEffectiveSource = null;
+let _tuneDraft   = {};     // staged, uncommitted edits
+let _tuneRowId   = null;
+let _tuneAdvanced = false;
+let _tuneQuery   = '';
+let _tuneConfirming = false;  // stage 2 of the commit flow
+let _tuneReason  = '';        // required rationale, recorded with every change
+let _tuneTyped   = '';        // typed confirmation for high-impact changes
+let _tuneHistory = [];        // recent committed changes, with their reasons
+let _tuneOpenGroups = null;   // Set of expanded group names — survives re-render
+
+// The handful surfaced on the page itself, in the order they answer "what is ASTRA doing?"
+const TUNING_HEADLINE = [
+  'agent.trading_enabled',
+  'brain.cp_buy_threshold',
+  'brain.f_global',
+  'brain.size_timing_max',
+  'agent.reserve_floor_pct',
+  'agent.max_deploy_per_run_pct',
+  'brain.trail_atr_mult',
+  'brain.contextual_enabled',
+];
+
+async function loadTuning(sb) {
+  if (!_tuneSchema) {
+    const res = await fetch('settings_schema.json', { cache: 'no-cache' });
+    if (!res.ok) throw new Error(`settings schema ${res.status}`);
+    _tuneSchema = await res.json();
+  }
+  const { data, error } = await sb.from('settings')
+    .select('id, content').order('updated_at', { ascending: false }).limit(1);
+  if (error) throw error;
+  const row = (data || [])[0];
+  _tuneRowId       = row?.id ?? null;
+  _tuneSaved       = row?.content?.values ?? {};
+  _tuneEffective   = row?.content?.effective ?? null;
+  _tuneEffectiveAt = row?.content?.effective_at ?? null;
+  _tuneEffectiveSource = row?.content?.effective_source ?? null;
+  _tuneDraft = {};
+  await loadTuningHistory();
+}
+
+function tuneKnob(key) {
+  return (_tuneSchema?.settings || []).find(s => s.key === key);
+}
+
+// Value precedence for display: staged edit → saved override → what the last run resolved
+// to (this is the only layer that knows about environment variables) → code default.
+function tuneValue(key) {
+  if (key in _tuneDraft) return _tuneDraft[key];
+  if (key in _tuneSaved) return _tuneSaved[key];
+  if (_tuneEffective && key in _tuneEffective) return _tuneEffective[key];
+  return tuneKnob(key)?.default;
+}
+// The value that would apply with NO dashboard override — i.e. what the environment layer
+// resolved to, falling back to the code default when no run has reported. This is the value
+// an override must be compared against, NOT the code default: production sets
+// AGENT_TRADING_ENABLED=true while the code default is false, so treating "equals the code
+// default" as "no override needed" would silently drop the off-switch and leave trading on.
+function tuneBaseValue(key) {
+  if (_tuneEffective && key in _tuneEffective) return _tuneEffective[key];
+  return tuneKnob(key)?.default;
+}
+function tuneSavedValue(key) {
+  if (key in _tuneSaved) return _tuneSaved[key];
+  return tuneBaseValue(key);
+}
+// Where the displayed value came from. 'unreported' matters: until a production run has
+// written its effective snapshot we genuinely do not know what the environment layer
+// resolved to, and showing the code default as though it were live would be a lie — the
+// Autotrader switch is off in a local .env but on in production.
+function tuneSource(key) {
+  if (key in _tuneSaved) return 'dashboard';
+  const k = tuneKnob(key);
+  if (!_tuneEffective || !(key in _tuneEffective)) return 'unreported';
+  if (k && !tuneValuesEqual(_tuneEffective[key], k.default)) return 'environment';
+  return 'default';
+}
+// Reasons are free text that gets interpolated into markup (including into a <textarea>,
+// where an unescaped closing tag would break the DOM out from under the commit flow).
+function tuneEsc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+function tuneValuesEqual(a, b) {
+  if (typeof a === 'number' && typeof b === 'number') return Math.abs(a - b) < 1e-9;
+  return a === b;
+}
+function tuneIsDirty(key) {
+  return key in _tuneDraft && !tuneValuesEqual(_tuneDraft[key], tuneSavedValue(key));
+}
+function tuneDirtyKeys() {
+  return Object.keys(_tuneDraft).filter(tuneIsDirty);
+}
+
+function tuneFormat(value, knob) {
+  if (typeof value === 'boolean') return value ? 'ON' : 'OFF';
+  if (typeof value !== 'number') return String(value);
+  switch (knob?.unit) {
+    case 'fraction': return `${(value * 100).toFixed(value * 100 % 1 ? 1 : 0)}%`;
+    case 'pct':      return `${value}%`;
+    case 'usd':      return `$${value.toLocaleString()}`;
+    case 'multiple': return `${value}×`;
+    case 'atr':      return `${value}×`;
+    case 'days':     return `${value}d`;
+    case 'count':    return String(value);
+    default:         return String(value);
+  }
+}
+
+// ── Live strip ────────────────────────────────────────────────
+function renderTuningStrip() {
+  const section = document.getElementById('tuning-strip');
+  if (!section || !_tuneSchema) return;
+  const changed = Object.keys(_tuneSaved).length;
+
+  const stamp = _tuneEffectiveAt
+    ? `values as used by the ${_tuneEffectiveSource || 'scheduled'} run on ${new Date(_tuneEffectiveAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+    : 'no run has reported its settings yet — live values unknown';
+
+  const chips = TUNING_HEADLINE.map(key => {
+    const knob = tuneKnob(key);
+    if (!knob) return '';
+    const source = tuneSource(key);
+    const value = tuneValue(key);
+    // Never assert a value production has not reported — say so instead of guessing.
+    if (source === 'unreported') {
+      return `<div class="tuning-chip unreported">
+          <div class="tuning-chip-label">${knob.label}</div>
+          <div class="tuning-chip-value tuning-chip-unknown">—</div>
+          <div class="tuning-chip-sub">awaiting a run</div>
+        </div>`;
+    }
+    const valueHtml = (typeof value === 'boolean')
+      ? `<div class="tuning-chip-value ${value ? 'tuning-chip-on' : 'tuning-chip-off'}">${value ? 'ON' : 'OFF'}</div>`
+      : `<div class="tuning-chip-value">${tuneFormat(value, knob)}</div>`;
+    return `<div class="tuning-chip ${source !== 'default' ? 'changed' : ''}">
+        <div class="tuning-chip-label">${knob.label}</div>
+        ${valueHtml}
+        <div class="tuning-chip-sub">${source}</div>
+      </div>`;
+  }).join('');
+
+  section.innerHTML = `
+    <div class="section-label">◐ TUNING
+      <span style="color:var(--text-dim);letter-spacing:0.5px;font-size:9px;margin-left:8px;">${stamp}</span>
+    </div>
+    <div class="card">
+      <div class="tuning-strip-grid">${chips}</div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:12px;">
+        <span class="tuning-intro" style="margin:0;flex:1;">
+          ${changed ? `${changed} setting${changed === 1 ? '' : 's'} overridden from this dashboard.` :
+                      'No dashboard overrides — ASTRA is running on its code and environment settings.'}
+        </span>
+        <button class="tuning-adv-toggle" id="tuning-strip-open">ADJUST →</button>
+      </div>
+    </div>`;
+  section.classList.remove('hidden');
+  document.getElementById('tuning-strip-open')?.addEventListener('click', openTuningDrawer);
+
+  const badge = document.getElementById('tuning-badge');
+  if (badge) {
+    badge.textContent = String(changed);
+    badge.classList.toggle('hidden', changed === 0);
+  }
+}
+
+// ── Drawer ────────────────────────────────────────────────────
+function openTuningDrawer() {
+  document.getElementById('tuning-backdrop').classList.remove('hidden');
+  document.getElementById('tuning-drawer').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  renderTuningDrawer();
+  setTimeout(() => document.getElementById('tuning-search')?.focus(), 60);
+}
+
+function closeTuningDrawer() {
+  if (tuneDirtyKeys().length &&
+      !confirm('You have unsaved changes. Close and discard them?')) return;
+  _tuneDraft = {};
+  _tuneReason = '';
+  _tuneTyped = '';
+  _tuneConfirming = false;
+  document.getElementById('tuning-backdrop').classList.add('hidden');
+  document.getElementById('tuning-drawer').classList.add('hidden');
+  document.body.style.overflow = '';
+  hidePbTooltip();
+}
+
+function tuneMatches(knob, q) {
+  if (!q) return true;
+  return `${knob.label} ${knob.help} ${knob.impact} ${knob.key} ${knob.group}`
+    .toLowerCase().includes(q);
+}
+
+function renderTuningDrawer() {
+  const body = document.getElementById('tuning-body');
+  if (!body || !_tuneSchema) return;
+  // Editing a value re-renders the whole list, so expanded groups and scroll position have
+  // to survive it — otherwise changing one dial collapses its section and jumps to the top.
+  const scrollTop = body.scrollTop;
+  body.innerHTML = '';
+
+  const q = _tuneQuery.trim().toLowerCase();
+  const visible = _tuneSchema.settings.filter(s =>
+    s.tier !== 3 && (_tuneAdvanced || s.tier === 1) && tuneMatches(s, q));
+
+  const intro = document.createElement('div');
+  intro.className = 'tuning-intro';
+  intro.innerHTML =
+    'Three layers decide a value: the built-in default, then an environment variable, then this drawer — ' +
+    'last one wins. Every number is clamped to its safe range when the run starts. ' +
+    'On/off switches can only ever be turned <b>off</b> here: enabling real trading still needs the environment secret. ' +
+    '🔒 rows are hard risk limits — visible, but only changeable in code.';
+  body.appendChild(intro);
+
+  if (!visible.length) {
+    const empty = document.createElement('div');
+    empty.className = 'tuning-empty';
+    empty.textContent = q
+      ? `Nothing matches “${_tuneQuery}”.${_tuneAdvanced ? '' : ' Try ADVANCED for the scoring parameters.'}`
+      : 'No settings to show.';
+    body.appendChild(empty);
+    return;
+  }
+
+  const groups = [];
+  for (const name of _tuneSchema.groups) {
+    const items = visible.filter(s => s.group === name);
+    if (items.length) groups.push([name, items]);
+  }
+
+  // First open: expand the first group. After that, honour whatever the user has toggled.
+  if (_tuneOpenGroups === null) _tuneOpenGroups = new Set(groups.length ? [groups[0][0]] : []);
+
+  groups.forEach(([name, items]) => {
+    const changedCount = items.filter(s => {
+      const src = tuneSource(s.key);
+      return src === 'dashboard' || src === 'environment';
+    }).length;
+    const wrap = document.createElement('div');
+    // A search narrows to matches, so expand everything while a query is active.
+    wrap.className = 'tuning-group' + (q || _tuneOpenGroups.has(name) ? ' open' : '');
+    wrap.innerHTML = `
+      <div class="tuning-group-head">
+        <span class="tuning-group-chevron">▶</span>
+        <span class="tuning-group-name">${name}</span>
+        ${changedCount ? `<span class="tuning-group-changed">${changedCount} CHANGED</span>` : ''}
+        <span class="tuning-group-count">${items.length}</span>
+      </div>
+      <div class="tuning-group-body"></div>`;
+    wrap.querySelector('.tuning-group-head').addEventListener('click', () => {
+      const open = wrap.classList.toggle('open');
+      open ? _tuneOpenGroups.add(name) : _tuneOpenGroups.delete(name);
+    });
+    const gbody = wrap.querySelector('.tuning-group-body');
+    items.forEach(knob => gbody.appendChild(buildTuningRow(knob)));
+    body.appendChild(wrap);
+  });
+
+  if (!q) renderTuningHistory(body);
+  renderTuningFooter();
+  body.scrollTop = scrollTop;
+}
+
+function buildTuningRow(knob) {
+  const row = document.createElement('div');
+  const value = tuneValue(knob.key);
+  const source = tuneSource(knob.key);
+  row.className = 'tuning-row' +
+    (tuneIsDirty(knob.key) ? ' dirty' : (source !== 'default' ? ' changed' : ''));
+
+  const head = document.createElement('div');
+  head.className = 'tuning-row-head';
+  head.innerHTML = `
+    <span class="tuning-label">
+      ${knob.label}
+      ${knob.locked ? '<span class="tuning-lock" title="Hard risk limit — change it in code">🔒</span>' : ''}
+      <button class="tuning-info" aria-label="What this does" tabindex="0">ⓘ</button>
+    </span>
+    <span class="tuning-controls"></span>`;
+  const controls = head.querySelector('.tuning-controls');
+
+  const info = head.querySelector('.tuning-info');
+  info.dataset.title = knob.label;
+  info.dataset.help = knob.help;
+  info.dataset.impact = knob.impact;
+  info.dataset.range = (knob.min !== null && knob.min !== undefined)
+    ? `${knob.min} – ${knob.max}` : '';
+  info.dataset.def = tuneFormat(knob.default, knob);
+  info.addEventListener('mouseenter', () => showTuningTooltip(info));
+  info.addEventListener('focus', () => showTuningTooltip(info));
+  info.addEventListener('mouseleave', hidePbTooltip);
+  info.addEventListener('blur', hidePbTooltip);
+
+  const disabled = !knob.editable;
+  const onChange = v => {
+    _tuneDraft[knob.key] = v;
+    if (tuneValuesEqual(v, tuneSavedValue(knob.key))) delete _tuneDraft[knob.key];
+    renderTuningDrawer();
+  };
+
+  if (knob.type === 'bool') {
+    const label = document.createElement('label');
+    label.className = 'pb-enable-toggle';
+    label.title = disabled ? 'Locked' : 'Toggle';
+    label.innerHTML = `<input type="checkbox" ${value ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+                       <span class="pb-enable-slider"></span>`;
+    label.querySelector('input').addEventListener('change', e => onChange(e.target.checked));
+    controls.appendChild(label);
+  } else if (knob.type === 'str') {
+    const input = document.createElement('input');
+    input.className = 'tuning-text';
+    input.value = value ?? '';
+    input.disabled = disabled;
+    input.addEventListener('change', e => onChange(e.target.value));
+    controls.appendChild(input);
+  } else {
+    const input = document.createElement('input');
+    input.className = 'tuning-num';
+    input.type = 'number';
+    input.value = value;
+    input.step = knob.step ?? 'any';
+    if (knob.min !== null && knob.min !== undefined) input.min = knob.min;
+    if (knob.max !== null && knob.max !== undefined) input.max = knob.max;
+    input.disabled = disabled;
+    input.addEventListener('change', e => {
+      const v = parseFloat(e.target.value);
+      if (!Number.isNaN(v)) onChange(knob.type === 'int' ? Math.round(v) : v);
+    });
+    controls.appendChild(input);
+  }
+
+  if (tuneIsDirty(knob.key) || (knob.key in _tuneSaved)) {
+    const revert = document.createElement('button');
+    revert.className = 'tuning-revert';
+    revert.textContent = '⟲';
+    revert.title = tuneIsDirty(knob.key)
+      ? 'Undo this edit'
+      : 'Remove this override — back to the value the run would use on its own';
+    revert.addEventListener('click', () => {
+      // Reverting means "stop overriding", so the target is the base value, not the code
+      // default — those differ wherever the environment sets something.
+      if (tuneIsDirty(knob.key)) delete _tuneDraft[knob.key];
+      else _tuneDraft[knob.key] = tuneBaseValue(knob.key);
+      renderTuningDrawer();
+    });
+    controls.appendChild(revert);
+  }
+
+  row.appendChild(head);
+
+  // Slider for bounded numbers — a dial you can feel, with the number for precision.
+  if (!disabled && knob.type !== 'bool' && knob.type !== 'str' &&
+      knob.min !== null && knob.min !== undefined && knob.max !== null) {
+    const sr = document.createElement('div');
+    sr.className = 'tuning-slider-row';
+    sr.innerHTML = `<span class="tuning-bound">${knob.min}</span>
+                    <input type="range" class="tuning-slider" min="${knob.min}" max="${knob.max}"
+                           step="${knob.step ?? 'any'}" value="${value}">
+                    <span class="tuning-bound max">${knob.max}</span>`;
+    const slider = sr.querySelector('.tuning-slider');
+    slider.addEventListener('input', e => {
+      const v = parseFloat(e.target.value);
+      head.querySelector('.tuning-num').value = v;
+    });
+    slider.addEventListener('change', e => {
+      const v = parseFloat(e.target.value);
+      onChange(knob.type === 'int' ? Math.round(v) : v);
+    });
+    row.appendChild(sr);
+  }
+
+  const meta = document.createElement('div');
+  meta.className = 'tuning-meta';
+  const parts = [
+    source === 'unreported'
+      ? `<span class="tuning-src tuning-src-unreported" title="No production run has reported this value yet — the figure shown is the code default, which the environment may override">not yet reported by a run</span>`
+      : `<span class="tuning-src tuning-src-${source}">${source}</span>`,
+  ];
+  if (!tuneValuesEqual(value, knob.default)) {
+    parts.push(`default ${tuneFormat(knob.default, knob)}`);
+  }
+  if (tuneIsDirty(knob.key)) {
+    parts.push(`<span style="color:var(--accent-cyan)">unsaved: ${tuneFormat(tuneSavedValue(knob.key), knob)} → ${tuneFormat(value, knob)}</span>`);
+  }
+  meta.innerHTML = parts.join('<span style="color:var(--text-dim)">·</span>');
+  row.appendChild(meta);
+
+  return row;
+}
+
+function showTuningTooltip(icon) {
+  const tip = ensurePbTooltip();
+  const d = icon.dataset;
+  tip.innerHTML =
+    `<div class="pb-tip-title">${d.title}</div>
+     <div class="pb-tip-desc">${d.help}</div>
+     <div class="pb-tip-desc" style="margin-top:8px;color:var(--text-muted);"><b>Effect:</b> ${d.impact}</div>` +
+    (d.range ? `<div class="pb-tip-range"><span>RANGE</span> ${d.range} <span class="pb-tip-def">· default ${d.def}</span></div>` : '');
+  tip.classList.add('tuning-tip');
+  tip.classList.remove('hidden');
+  positionPbTip(tip, icon);
+}
+
+// ── Review → confirm → commit ─────────────────────────────────
+// Three deliberate steps before a dial moves. These values steer real money, so committing
+// is not a single click: you review a diff, write down why, and press-and-hold to commit.
+// Changes with the widest blast radius (any on/off switch, anything in the Autotrader group)
+// additionally require typing COMMIT.
+
+const TUNING_HOLD_MS = 1400;
+const TUNING_TYPED_WORD = 'COMMIT';
+
+function tuneIsCritical(key) {
+  const knob = tuneKnob(key);
+  return !!knob && (knob.type === 'bool' || knob.group === 'Autotrader (real money)');
+}
+
+function tuneDiffRows(keys) {
+  return keys.map(key => {
+    const knob = tuneKnob(key);
+    const crit = tuneIsCritical(key);
+    return `<div class="tuning-diff-row">
+        <span class="tuning-diff-name ${crit ? 'tuning-diff-critical' : ''}">${knob.label}</span>
+        <span>${tuneFormat(tuneSavedValue(key), knob)}</span>
+        <span class="tuning-diff-arrow">→</span>
+        <span class="tuning-diff-to">${tuneFormat(_tuneDraft[key], knob)}</span>
+      </div>`;
+  }).join('');
+}
+
+function renderTuningFooter() {
+  const footer = document.getElementById('tuning-footer');
+  if (!footer) return;
+  const dirty = tuneDirtyKeys();
+  if (!dirty.length) {
+    footer.classList.add('hidden');
+    footer.innerHTML = '';
+    _tuneConfirming = false;
+    return;
+  }
+  footer.classList.remove('hidden');
+  _tuneConfirming ? renderTuningConfirm(footer, dirty) : renderTuningReview(footer, dirty);
+}
+
+// Stage 1 — what you changed.
+function renderTuningReview(footer, dirty) {
+  footer.innerHTML = `
+    <div class="tuning-diff">${tuneDiffRows(dirty)}</div>
+    <div class="tuning-footer-actions">
+      <span class="tuning-footer-count">${dirty.length} unsaved change${dirty.length === 1 ? '' : 's'}</span>
+      <button class="tuning-discard" id="tuning-discard">DISCARD</button>
+      <button class="tuning-save" id="tuning-review">REVIEW &amp; COMMIT →</button>
+    </div>`;
+  footer.querySelector('#tuning-discard').addEventListener('click', () => {
+    _tuneDraft = {};
+    renderTuningDrawer();
+  });
+  footer.querySelector('#tuning-review').addEventListener('click', () => {
+    _tuneConfirming = true;
+    renderTuningFooter();
+    setTimeout(() => footer.querySelector('.tuning-reason')?.focus(), 50);
+  });
+}
+
+// Stage 2 — why, and a hold to commit.
+function renderTuningConfirm(footer, dirty) {
+  const critical = dirty.filter(tuneIsCritical);
+  footer.innerHTML = `
+    <div class="tuning-confirm-title">
+      Commit ${dirty.length} change${dirty.length === 1 ? '' : 's'} — applies on the next run
+      ${critical.length ? `<span class="tuning-critical-badge">${critical.length} HIGH IMPACT</span>` : ''}
+    </div>
+    <div class="tuning-diff">${tuneDiffRows(dirty)}</div>
+    <div class="tuning-reason-label">
+      Reason for this change <span class="tuning-reason-req">required</span>
+    </div>
+    <textarea class="tuning-reason" id="tuning-reason" rows="2" spellcheck="true"
+      placeholder="What made you change this? e.g. “buying too eagerly into weak setups — raising the bar for a few weeks to see if fewer, stronger entries do better”">${tuneEsc(_tuneReason)}</textarea>
+    ${critical.length ? `
+      <div class="tuning-reason-label">
+        Type <b style="color:var(--accent-red)">${TUNING_TYPED_WORD}</b> to confirm the high-impact change
+      </div>
+      <input class="tuning-typed" id="tuning-typed" spellcheck="false" autocomplete="off"
+             placeholder="${TUNING_TYPED_WORD}" value="${tuneEsc(_tuneTyped)}">` : ''}
+    <div class="tuning-footer-actions">
+      <button class="tuning-discard" id="tuning-back">← BACK</button>
+      <button class="tuning-hold" id="tuning-hold">
+        <span class="tuning-hold-fill"></span>
+        <span class="tuning-hold-label">HOLD TO COMMIT</span>
+      </button>
+    </div>`;
+
+  const reason = footer.querySelector('#tuning-reason');
+  const typed = footer.querySelector('#tuning-typed');
+  const hold = footer.querySelector('#tuning-hold');
+
+  const ready = () => (_tuneReason || '').trim().length >= 8 &&
+    (!critical.length || (_tuneTyped || '').trim().toUpperCase() === TUNING_TYPED_WORD);
+  const sync = () => { hold.disabled = !ready(); };
+
+  reason.addEventListener('input', e => { _tuneReason = e.target.value; sync(); });
+  typed?.addEventListener('input', e => { _tuneTyped = e.target.value; sync(); });
+  footer.querySelector('#tuning-back').addEventListener('click', () => {
+    _tuneConfirming = false;
+    renderTuningFooter();
+  });
+  sync();
+  attachHoldToCommit(hold, () => saveTuning(_tuneReason.trim(), dirty));
+}
+
+// Press-and-hold with a progress fill. Releasing early cancels — the friction is the point.
+// Keyboard-accessible: hold Enter or Space.
+function attachHoldToCommit(btn, onComplete) {
+  const fill = btn.querySelector('.tuning-hold-fill');
+  const label = btn.querySelector('.tuning-hold-label');
+  let raf = null, timer = null, start = 0, done = false;
+
+  const stop = () => {
+    if (raf) cancelAnimationFrame(raf);
+    if (timer) clearTimeout(timer);
+    raf = timer = null;
+    if (done) return;
+    fill.style.width = '0%';
+    btn.classList.remove('armed');
+    label.textContent = 'HOLD TO COMMIT';
+  };
+  // The commit fires off a plain timer so it never depends on animation frames, which the
+  // browser freezes in a backgrounded tab. requestAnimationFrame only paints the fill.
+  const paint = () => {
+    const pct = Math.min(100, ((performance.now() - start) / TUNING_HOLD_MS) * 100);
+    fill.style.width = `${pct}%`;
+    if (pct < 100) raf = requestAnimationFrame(paint);
+  };
+  const complete = () => {
+    if (done) return;
+    done = true;
+    if (raf) cancelAnimationFrame(raf);
+    fill.style.width = '100%';
+    label.textContent = 'COMMITTING…';
+    onComplete();
+  };
+  const begin = e => {
+    if (btn.disabled || done) return;
+    e.preventDefault();
+    start = performance.now();
+    btn.classList.add('armed');
+    label.textContent = 'KEEP HOLDING…';
+    timer = setTimeout(complete, TUNING_HOLD_MS);
+    raf = requestAnimationFrame(paint);
+  };
+
+  btn.addEventListener('pointerdown', begin);
+  btn.addEventListener('pointerup', stop);
+  btn.addEventListener('pointerleave', stop);
+  btn.addEventListener('pointercancel', stop);
+  btn.addEventListener('keydown', e => {
+    if ((e.key === 'Enter' || e.key === ' ') && !e.repeat) begin(e);
+  });
+  btn.addEventListener('keyup', stop);
+  btn.addEventListener('blur', stop);
+}
+
+function setTuningSaveStatus(state, msg) {
+  const el = document.getElementById('tuning-save-status');
+  if (!el) return;
+  el.className = 'conv-save-status ' + (state || '');
+  el.textContent = msg || '';
+}
+
+async function saveTuning(reason, dirty) {
+  dirty = dirty || tuneDirtyKeys();
+  if (!dirty.length || !_sb || !reason) return;
+  setTuningSaveStatus('saving', '● Committing…');
+
+  // The structured diff recorded alongside the reason, so history is queryable without
+  // diffing successive blobs.
+  const changed = dirty.map(key => ({
+    key, label: tuneKnob(key).label, from: tuneSavedValue(key), to: _tuneDraft[key],
+  }));
+
+  // Merge the staged edits into the saved map. An override is dropped only when it matches
+  // what would apply WITHOUT it (the environment layer, or the code default when unreported)
+  // — dropping on "equals the code default" instead would delete a deliberate off-switch on
+  // any setting the environment turns on, silently reinstating it on the next run.
+  const values = { ...(_tuneSaved || {}) };
+  for (const key of dirty) {
+    if (tuneValuesEqual(_tuneDraft[key], tuneBaseValue(key))) delete values[key];
+    else values[key] = _tuneDraft[key];
+  }
+
+  try {
+    // Read-modify-write: the backend writes the `effective` key of this same row each run,
+    // so the whole content object must be preserved, not replaced.
+    const { data: cur } = await _sb.from('settings')
+      .select('id, content').order('updated_at', { ascending: false }).limit(1);
+    const existing = (cur || [])[0];
+    const content = { ...(existing?.content || {}), values };
+
+    if (existing) {
+      const { error } = await _sb.from('settings')
+        .update({ content, updated_at: new Date().toISOString(), updated_by: 'dashboard' })
+        .eq('id', existing.id);
+      if (error) throw error;
+      _tuneRowId = existing.id;
+    } else {
+      const { data: ins, error } = await _sb.from('settings')
+        .insert({ content, updated_at: new Date().toISOString(), updated_by: 'dashboard' })
+        .select('id').single();
+      if (error) throw error;
+      _tuneRowId = ins?.id ?? null;
+    }
+
+    // The reason + structured diff are the point of the history table — they answer "why did
+    // this dial move" long after the fact, alongside the performance it produced.
+    const { error: histErr } = await _sb.from('settings_history')
+      .insert({ content, reason, changed, saved_at: new Date().toISOString() });
+    if (histErr) console.error('settings_history append failed:', histErr.message);
+
+    logUserAction('settings_edit', null, { reason, changed });
+
+    _tuneSaved = values;
+    _tuneDraft = {};
+    _tuneReason = '';
+    _tuneTyped = '';
+    _tuneConfirming = false;
+    setTuningSaveStatus('saved', '● Committed — applies on the next run');
+    setTimeout(() => setTuningSaveStatus('', ''), 4000);
+    await loadTuningHistory();
+    renderTuningDrawer();
+    renderTuningStrip();
+  } catch (err) {
+    setTuningSaveStatus('error', '● Commit failed');
+    console.error('Tuning save error:', err.message || err);
+    _tuneConfirming = false;
+    renderTuningFooter();
+  }
+}
+
+// ── Change history ────────────────────────────────────────────
+async function loadTuningHistory() {
+  if (!_sb) return;
+  try {
+    const { data, error } = await _sb.from('settings_history')
+      .select('saved_at, reason, changed').order('saved_at', { ascending: false }).limit(12);
+    if (error) throw error;
+    _tuneHistory = (data || []).filter(r => r.reason || (r.changed || []).length);
+  } catch (err) {
+    console.error('[Tuning] history load failed:', err.message || err);
+    _tuneHistory = [];
+  }
+}
+
+function renderTuningHistory(container) {
+  if (!_tuneHistory.length) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'tuning-history';
+  wrap.innerHTML = `<div class="conv-section-label">CHANGE HISTORY</div>` +
+    _tuneHistory.map(entry => {
+      const when = new Date(entry.saved_at).toLocaleString('en-US',
+        { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      const changes = (entry.changed || []).map(c => {
+        const knob = tuneKnob(c.key);
+        return `<div>${tuneEsc(c.label || c.key)}
+          <span style="color:var(--text-dim)">${tuneFormat(c.from, knob)} →</span>
+          <span class="tuning-hist-to">${tuneFormat(c.to, knob)}</span></div>`;
+      }).join('');
+      return `<div class="tuning-hist-entry">
+          <div class="tuning-hist-when">${when}</div>
+          ${entry.reason ? `<div class="tuning-hist-reason">“${tuneEsc(entry.reason)}”</div>` : ''}
+          <div class="tuning-hist-changes">${changes}</div>
+        </div>`;
+    }).join('');
+  container.appendChild(wrap);
+}
+
+function initTuningDrawer() {
+  document.getElementById('tuning-btn').addEventListener('click', openTuningDrawer);
+  document.getElementById('tuning-close').addEventListener('click', closeTuningDrawer);
+  document.getElementById('tuning-backdrop').addEventListener('click', closeTuningDrawer);
+  document.getElementById('tuning-body').addEventListener('scroll', hidePbTooltip);
+  document.getElementById('tuning-search').addEventListener('input', e => {
+    _tuneQuery = e.target.value;
+    renderTuningDrawer();
+  });
+  document.getElementById('tuning-adv-toggle').addEventListener('click', e => {
+    _tuneAdvanced = !_tuneAdvanced;
+    e.target.classList.toggle('active', _tuneAdvanced);
+    renderTuningDrawer();
+  });
+  document.addEventListener('keydown', e => {
+    const open = !document.getElementById('tuning-drawer').classList.contains('hidden');
+    if (e.key === 'Escape' && open) closeTuningDrawer();
+    // ⌘K / Ctrl-K jumps straight to searching the dials.
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k' &&
+        !document.getElementById('tuning-btn').classList.contains('hidden')) {
+      e.preventDefault();
+      if (open) document.getElementById('tuning-search').focus();
+      else openTuningDrawer();
+    }
+  });
+}

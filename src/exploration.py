@@ -336,5 +336,7 @@ def run() -> None:
 
 if __name__ == "__main__":
     from src.logger import setup as _setup_logging
+    from src.settings import load_and_apply as _apply_settings
     _setup_logging()
+    _apply_settings()   # dashboard-saved tunables layer over env/code. Fail-open.
     run()

@@ -5,7 +5,17 @@ Other modules import from this file — never read os.environ directly.
 Config is grouped into section dataclasses (one per concern), each instantiated as a
 lowercase module-level singleton. Access is dotted, e.g. `config.brain.buy_threshold`,
 `config.agent.trading_enabled`. Dataclasses are mutable so tests can monkeypatch a single
-field in place.
+field in place — and so the DB override layer can apply saved values at startup.
+
+Precedence (see src/settings.py): code default → environment → Supabase override.
+The DB layer wins for tunables so the dashboard is the place you change them; secrets are
+env-only and never overridable. On/off switches use AND semantics — off in ANY layer means
+off, so an environment variable always remains a working kill switch.
+
+What each field MEANS, who may change it, and its safe range lives in src/settings_schema.py.
+Fields classified there as plumbing (tier 3) are deliberately plain literals below rather
+than environment reads: nothing has ever set them, and every env knob is another thing to
+reason about. Promote one back to `_cfg(...)` if a deployment genuinely needs to vary it.
 
 In GitHub Actions: values come from exported secrets (no .env file needed).
 Locally: starlette.config reads the .env file at project root.
@@ -44,17 +54,17 @@ class ServicesConfig:
 # ── AI reasoning ───────────────────────────────────────────────────────────────
 @dataclass
 class ReasoningConfig:
-    model: str = _cfg("REASONING_MODEL", default="claude-opus-4-8")  # advisor narrative-reasoning model
+    model: str = "claude-opus-4-8"  # advisor narrative-reasoning model
     # Adaptive thinking counts toward max_tokens — keep headroom (still <16k, so non-streaming is safe).
-    max_tokens: int = _cfg("REASONING_MAX_TOKENS", cast=int, default=8000)
-    advisor_effort: str = _cfg("ADVISOR_EFFORT", default="high")  # output_config.effort: low|medium|high|max
-    tavily_max_searches: int = _cfg("TAVILY_MAX_SEARCHES", cast=int, default=5)  # web searches per advisor run
+    max_tokens: int = 8000
+    advisor_effort: str = "high"  # output_config.effort: low|medium|high|max
+    tavily_max_searches: int = 5  # web searches per advisor run
     # Alpha Vantage free tier: 25 calls/day, 5 calls/min. Claude uses tools selectively —
     # cap to avoid blowing the daily limit in one run.
-    alpha_vantage_max_calls: int = _cfg("ALPHA_VANTAGE_MAX_CALLS", cast=int, default=8)
+    alpha_vantage_max_calls: int = 8
     # FMP free tier: 250 calls/day. Analyst data (price targets, grades) only available for
     # large/mid caps on the free plan — small caps (RKLB, ASTS) gracefully return nothing.
-    fmp_max_calls: int = _cfg("FMP_MAX_CALLS", cast=int, default=10)
+    fmp_max_calls: int = 10
 
 
 # ── Client-side MCP tool loop ──────────────────────────────────────────────────
@@ -62,9 +72,9 @@ class ReasoningConfig:
 # MCP connector, so each tool call is individually bounded and observable.
 @dataclass
 class ToolLoopConfig:
-    advisor_tool_timeout: int = _cfg("ADVISOR_TOOL_TIMEOUT", cast=int, default=45)     # per MCP tool call, seconds
-    advisor_max_tool_rounds: int = _cfg("ADVISOR_MAX_TOOL_ROUNDS", cast=int, default=8)  # max model↔tool rounds before forcing a note
-    mcp_tool_failure_limit: int = _cfg("MCP_TOOL_FAILURE_LIMIT", cast=int, default=2)   # circuit-breaker: disable a server after N failures
+    advisor_tool_timeout: int = 45      # per MCP tool call, seconds
+    advisor_max_tool_rounds: int = 8    # max model↔tool rounds before forcing a note
+    mcp_tool_failure_limit: int = 2     # circuit-breaker: disable a server after N failures
 
 
 # ── Paper trading ──────────────────────────────────────────────────────────────
@@ -83,18 +93,18 @@ class PaperConfig:
 # ── Market data ────────────────────────────────────────────────────────────────
 @dataclass
 class MarketDataConfig:
-    workers: int = _cfg("MARKET_DATA_WORKERS", cast=int, default=8)          # yfinance fetch thread-pool size
-    period_days: int = _cfg("MARKET_DATA_PERIOD_DAYS", cast=int, default=365)  # trailing price-history window pulled per ticker
+    workers: int = 8          # yfinance fetch thread-pool size
+    period_days: int = 365    # trailing price-history window pulled per ticker
     # When true, get_market_data_bulk overlays the cached SEC EDGAR fundamentals table over
     # yfinance for the fields SEC provides (revenue growth, margins, ratios). LIVE — cache
     # validated against the full book (2026-07-22). A stale/missing cache degrades to yfinance.
     sec_fundamentals_enabled: bool = _cfg("SEC_FUNDAMENTALS_ENABLED", cast=bool, default=True)
     # Cache staleness bound — a fundamentals row older than this is treated as absent on read.
-    fundamentals_max_age_days: int = _cfg("FUNDAMENTALS_MAX_AGE_DAYS", cast=int, default=30)
+    fundamentals_max_age_days: int = 30
     # Reporting-period staleness bound — a row whose latest reported quarter is older than
     # this is not persisted (a filer with only years-old clean XBRL, e.g. a pre-revenue name
     # with sparse tagging, would otherwise overlay stale/garbage financials over yfinance).
-    fundamentals_max_period_age_days: int = _cfg("FUNDAMENTALS_MAX_PERIOD_AGE_DAYS", cast=int, default=200)
+    fundamentals_max_period_age_days: int = 200
 
 
 # ── Strategy: hard rules ───────────────────────────────────────────────────────
@@ -221,7 +231,7 @@ class BrainConfig:
     # rising (slope preferred; golden-cross structure as fallback when slope is unknown).
     regime_pullback_max_below_ma200_pct: float = _cfg("BRAIN_REGIME_PULLBACK_MAX_BELOW_MA200_PCT", cast=float, default=8.0)
     regime_slope_min_pct: float = _cfg("BRAIN_REGIME_SLOPE_MIN_PCT", cast=float, default=0.0)  # min 200-MA slope over the lookback to count as "rising"
-    ma_slope_lookback_days: int = _cfg("BRAIN_MA_SLOPE_LOOKBACK_DAYS", cast=int, default=21)   # bars back to measure the 200-MA slope
+    ma_slope_lookback_days: int = 21   # bars back to measure the 200-MA slope
 
     # ── Entry-timing pillar (pullback measured in ATR units) ───────────────────
     e_pullback_peak_low: float = _cfg("BRAIN_E_PULLBACK_PEAK_LOW", cast=float, default=1.0)    # ATRs: start of sweet spot
@@ -245,13 +255,13 @@ class BrainConfig:
     trim_fraction: float = _cfg("BRAIN_TRIM_FRACTION", cast=float, default=0.3333)       # trim ~⅓, keep runner
 
     # ── Data-layer technical windows ───────────────────────────────────────────
-    atr_period: int = _cfg("BRAIN_ATR_PERIOD", cast=int, default=14)
-    swing_high_lookback: int = _cfg("BRAIN_SWING_HIGH_LOOKBACK", cast=int, default=22)  # Chandelier/pullback high window
-    mom_lookback_days: int = _cfg("BRAIN_MOM_LOOKBACK_DAYS", cast=int, default=252)     # 12-month
-    mom_skip_days: int = _cfg("BRAIN_MOM_SKIP_DAYS", cast=int, default=21)              # skip most-recent month (12-1)
+    atr_period: int = 14
+    swing_high_lookback: int = 22   # Chandelier/pullback high window
+    mom_lookback_days: int = 252    # 12-month
+    mom_skip_days: int = 21         # skip most-recent month (12-1)
     # Length of the recent daily-return series retained in market_data (feeds beta decomposition
     # in the contextual layer). Must cover the beta estimation window below.
-    returns_recent_days: int = _cfg("BRAIN_RETURNS_RECENT_DAYS", cast=int, default=60)
+    returns_recent_days: int = 60
 
     # ── Contextual reasoning layer (docs/contextual_reasoning.md) ──────────────
     # A Playbook of strategy "plays" feeds the deterministic pipeline as bounded, logged,
@@ -261,13 +271,13 @@ class BrainConfig:
     contextual_enabled: bool = _cfg("BRAIN_CONTEXTUAL_ENABLED", cast=bool, default=True)
     # Beta decomposition: estimate beta over `beta_window` daily returns; decompose the recent
     # move over `beta_drop_window`. A drop is "macro" when beta ≥ min and residual ≤ max fraction.
-    beta_window_days: int = _cfg("BRAIN_BETA_WINDOW_DAYS", cast=int, default=45)
-    beta_drop_window_days: int = _cfg("BRAIN_BETA_DROP_WINDOW_DAYS", cast=int, default=10)
+    beta_window_days: int = 45
+    beta_drop_window_days: int = 10
     # r² reliability floor: below this, SPY explains too little of the name's moves to call a drop
     # "market-driven" at all — the beta decomposition is noise, so macro_dip must not lean on it.
     beta_min_r2: float = _cfg("BRAIN_BETA_MIN_R2", cast=float, default=0.35)
     # Selloff state: SPY N-day return below this (%) with breadth this wide (% of names down) = panic.
-    selloff_nday: int = _cfg("BRAIN_SELLOFF_NDAY", cast=int, default=5)
+    selloff_nday: int = 5
     selloff_panic_return_pct: float = _cfg("BRAIN_SELLOFF_PANIC_RETURN_PCT", cast=float, default=-4.0)
     selloff_breadth_min_pct: float = _cfg("BRAIN_SELLOFF_BREADTH_MIN_PCT", cast=float, default=55.0)
     # Hard clamps enforced in code on ANY proposal, regardless of what a play/LLM emits.
@@ -314,24 +324,24 @@ class AgentConfig:
     # headless run (it doesn't restore token_expiry_time on load and its 401 path does a full
     # interactive re-auth). We refresh when the access token is within the buffer of expiry.
     rh_token_endpoint: str = _cfg("AGENT_RH_TOKEN_ENDPOINT", default="https://api.robinhood.com/oauth2/token/")
-    token_refresh_buffer_s: int = _cfg("AGENT_TOKEN_REFRESH_BUFFER_S", cast=int, default=172800)  # refresh if < 2 days of access-token life remain
+    token_refresh_buffer_s: int = 172800  # refresh if < 2 days of access-token life remain
     # Retry for transient Robinhood-side failures on READ calls only (see agent_broker._RETRYABLE_TOOLS).
     # The run fires in a single ~13:02 UTC window, so one upstream 5xx used to cost the whole trading
     # day (observed 2026-07-28: a 500 on get_portfolio aborted the run; the same call succeeded minutes
     # later). Attempts are cheap — 3 attempts at 2s exponential backoff adds ≤6s to a ~60s job.
-    retry_attempts: int = _cfg("AGENT_RETRY_ATTEMPTS", cast=int, default=3)
-    retry_backoff_s: float = _cfg("AGENT_RETRY_BACKOFF_S", cast=float, default=2.0)
+    retry_attempts: int = 3
+    retry_backoff_s: float = 2.0
 
 
 # ── Exploration (weekly discovery run) ─────────────────────────────────────────
 @dataclass
 class ExplorationConfig:
-    model: str = _cfg("EXPLORATION_MODEL", default="claude-opus-4-8")  # weekly discovery model
-    max_tokens: int = _cfg("EXPLORATION_MAX_TOKENS", cast=int, default=8000)  # response token cap
-    effort: str = _cfg("EXPLORATION_EFFORT", default="medium")  # output_config.effort: low|medium|high|max
-    max_searches: int = _cfg("EXPLORATION_MAX_SEARCHES", cast=int, default=2)  # web searches per theme
-    max_av_calls: int = _cfg("EXPLORATION_MAX_AV_CALLS", cast=int, default=8)    # Alpha Vantage calls per run
-    max_fmp_calls: int = _cfg("EXPLORATION_MAX_FMP_CALLS", cast=int, default=15)  # FMP calls per run
+    model: str = "claude-opus-4-8"  # weekly discovery model
+    max_tokens: int = 8000          # response token cap
+    effort: str = "medium"          # output_config.effort: low|medium|high|max
+    max_searches: int = 2           # web searches per theme
+    max_av_calls: int = 8           # Alpha Vantage calls per run
+    max_fmp_calls: int = 15         # FMP calls per run
 
 
 # ── Contextual reasoning LLM layer (docs/contextual_reasoning.md) ──────────────
@@ -339,11 +349,11 @@ class ExplorationConfig:
 # proposals via a forced tool call. Reuses the reasoning model; its own effort/round budget.
 @dataclass
 class ContextualConfig:
-    model: str = _cfg("CONTEXTUAL_MODEL", default="claude-opus-4-8")
-    max_tokens: int = _cfg("CONTEXTUAL_MAX_TOKENS", cast=int, default=8000)
-    effort: str = _cfg("CONTEXTUAL_EFFORT", default="high")  # output_config.effort
-    max_rounds: int = _cfg("CONTEXTUAL_MAX_ROUNDS", cast=int, default=6)   # gather/reason tool rounds before the forced emit
-    max_searches: int = _cfg("CONTEXTUAL_MAX_SEARCHES", cast=int, default=4)  # web searches per run
+    model: str = "claude-opus-4-8"
+    max_tokens: int = 8000
+    effort: str = "high"    # output_config.effort
+    max_rounds: int = 6     # gather/reason tool rounds before the forced emit
+    max_searches: int = 4   # web searches per run
 
 
 # ── Claude API call timeouts ───────────────────────────────────────────────────
@@ -351,9 +361,9 @@ class ContextualConfig:
 # tool_loop.advisor_tool_timeout, so these should now rarely fire.
 @dataclass
 class TimeoutsConfig:
-    advisor: int = _cfg("ADVISOR_TIMEOUT", cast=int, default=300)          # seconds — 5 min backstop
-    exploration: int = _cfg("EXPLORATION_TIMEOUT", cast=int, default=300)  # seconds — 5 min backstop
-    contextual: int = _cfg("CONTEXTUAL_TIMEOUT", cast=int, default=300)    # seconds — 5 min backstop
+    advisor: int = 300      # seconds — 5 min backstop
+    exploration: int = 300  # seconds — 5 min backstop
+    contextual: int = 300   # seconds — 5 min backstop
 
 
 # ── Notifications (Telegram) ───────────────────────────────────────────────────

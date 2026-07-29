@@ -554,7 +554,10 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
 
 if __name__ == "__main__":
     from src.logger import setup as _setup_logging
+    from src.settings import load_and_apply as _apply_settings
     _setup_logging()
+    # Dashboard-saved tunables layer over env/code before any decision code runs. Fail-open.
+    _apply_settings()
 
     parser = argparse.ArgumentParser(description="ASTRA analysis run")
     parser.add_argument("--mode", choices=["simulation", "live"], default="simulation")

@@ -67,6 +67,11 @@
         <span class="playbook-btn-icon">♟</span>
         <span>PLAYBOOK</span>
       </button>
+      <button class="tuning-btn hidden" id="tuning-btn" title="Tuning — the dials that govern what ASTRA buys, how big, and when it sells">
+        <span class="tuning-btn-icon">◐</span>
+        <span>TUNING</span>
+        <span class="tuning-badge hidden" id="tuning-badge">0</span>
+      </button>
       <a class="header-link" href="https://github.com/abhi-kirk/Astra" target="_blank" rel="noopener" title="Source + full write-up on GitHub">
         <span class="header-link-icon">↗</span>
         <span>GITHUB</span>
@@ -106,6 +111,25 @@
     <div class="conv-body" id="playbook-body">
       <div class="conv-loading">Loading playbook…</div>
     </div>
+  </div>
+
+  <!-- TUNING DRAWER -->
+  <div id="tuning-backdrop" class="hidden"></div>
+  <div id="tuning-drawer" class="hidden" role="dialog" aria-label="Tuning">
+    <div class="conv-header">
+      <span class="conv-title">TUNING</span>
+      <span class="conv-save-status" id="tuning-save-status"></span>
+      <button class="conv-close" id="tuning-close" aria-label="Close">✕</button>
+    </div>
+    <div class="tuning-search-bar">
+      <input id="tuning-search" class="tuning-search" placeholder="Search settings — try “sell”, “how big”, “cash”" spellcheck="false" autocomplete="off">
+      <span class="tuning-kbd" title="Press ⌘K anywhere to jump here">⌘K</span>
+      <button class="tuning-adv-toggle" id="tuning-adv-toggle" title="Also show the scoring parameters — the ramps behind each score">ADVANCED</button>
+    </div>
+    <div class="conv-body" id="tuning-body">
+      <div class="conv-loading">Loading settings…</div>
+    </div>
+    <div class="tuning-footer hidden" id="tuning-footer"></div>
   </div>
 
   <!-- CONVICTIONS DRAWER -->
@@ -230,6 +254,8 @@
       </section>
 
       <!-- PLAYBOOK CONTEXTUAL PROPOSALS (owner-only, injected by JS) -->
+      <section id="tuning-strip" class="hidden"></section>
+
       <section id="playbook-panel" class="hidden"></section>
 
       <!-- PAPER PORTFOLIO (auth-gated, injected by JS) -->

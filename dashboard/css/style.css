@@ -2183,3 +2183,348 @@ header, main, #modal-overlay { position: relative; z-index: 1; }
   transition: color 0.15s, border-color 0.15s;
 }
 .pb-add-param-btn:hover { color: var(--accent-purple); border-color: rgba(167,139,250,0.4); }
+
+/* ============================================================
+   TUNING — header button, live strip, settings drawer
+   The dials that govern what ASTRA buys, how big, and when it sells.
+   Owner-only. Amber accent: this surface moves real money.
+   ============================================================ */
+
+.tuning-btn {
+  background: none; border: 1px solid var(--border);
+  border-radius: 100px; padding: 5px 12px;
+  color: var(--text-muted); cursor: pointer;
+  font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: 1px; display: flex; align-items: center; gap: 6px;
+  transition: border-color 0.2s, color 0.2s, background 0.2s;
+}
+.tuning-btn:hover {
+  border-color: rgba(251,191,36,0.5); color: var(--accent-yellow);
+  background: rgba(251,191,36,0.05);
+}
+.tuning-btn-icon { font-size: 12px; }
+.tuning-badge {
+  background: rgba(251,191,36,0.16); color: var(--accent-yellow);
+  border-radius: 100px; padding: 1px 6px; font-size: 9px; font-weight: 700;
+}
+.tuning-badge.hidden { display: none; }
+
+/* ── Live strip: headline dials, visible while judging performance ── */
+.tuning-strip-grid {
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+.tuning-chip {
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--bg-deep); padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 4px;
+  transition: border-color 0.2s;
+}
+.tuning-chip.changed { border-color: rgba(251,191,36,0.45); }
+.tuning-chip-label {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 1px;
+  text-transform: uppercase; color: var(--text-muted);
+  display: flex; align-items: center; gap: 5px;
+}
+.tuning-chip-value {
+  font-family: var(--font-mono); font-size: 17px; font-weight: 700;
+  color: var(--text-primary); line-height: 1.1;
+}
+.tuning-chip.changed .tuning-chip-value { color: var(--accent-yellow); }
+.tuning-chip-sub {
+  font-family: var(--font-mono); font-size: 9px; color: var(--text-dim);
+  letter-spacing: 0.5px;
+}
+.tuning-chip-off { color: var(--text-dim) !important; }
+.tuning-chip-on  { color: var(--accent-green) !important; }
+
+/* ── Drawer ── */
+#tuning-backdrop {
+  position: fixed; inset: 0; z-index: 150;
+  background: rgba(5,10,20,0.72); backdrop-filter: blur(3px);
+  animation: fade-in 0.2s ease;
+}
+#tuning-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0;
+  width: 560px; max-width: 100vw; z-index: 151;
+  background: var(--bg-modal); border-left: 1px solid var(--border-bright);
+  display: flex; flex-direction: column;
+  box-shadow: -24px 0 80px rgba(0,0,0,0.6);
+  animation: drawer-in 0.28s cubic-bezier(0.22,1,0.36,1);
+  overflow: hidden;
+}
+#tuning-drawer.hidden { display: none; }
+#tuning-backdrop.hidden { display: none; }
+#tuning-drawer .conv-title { color: var(--accent-yellow); }
+
+/* Search bar */
+.tuning-search-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 18px; border-bottom: 1px solid var(--border);
+  background: rgba(251,191,36,0.03);
+}
+.tuning-kbd {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.5px;
+  color: var(--text-dim); border: 1px solid var(--border);
+  border-radius: 4px; padding: 3px 6px; white-space: nowrap;
+}
+.tuning-search {
+  flex: 1; background: var(--bg-deep);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text-primary); font-family: var(--font-mono); font-size: 11px;
+  padding: 7px 10px; outline: none; transition: border-color 0.2s;
+}
+.tuning-search:focus { border-color: rgba(251,191,36,0.5); }
+.tuning-search::placeholder { color: var(--text-dim); }
+.tuning-adv-toggle {
+  background: none; border: 1px solid var(--border); border-radius: 100px;
+  color: var(--text-muted); cursor: pointer; white-space: nowrap;
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 1px;
+  padding: 5px 10px; transition: border-color 0.2s, color 0.2s;
+}
+.tuning-adv-toggle:hover { color: var(--accent-yellow); }
+.tuning-adv-toggle.active {
+  color: var(--accent-yellow); border-color: rgba(251,191,36,0.5);
+  background: rgba(251,191,36,0.08);
+}
+
+/* Intro + group sections */
+.tuning-intro {
+  font-family: var(--font-mono); font-size: 10px; line-height: 1.7;
+  color: var(--text-muted); letter-spacing: 0.3px; margin-bottom: 14px;
+}
+.tuning-group { margin-bottom: 16px; }
+.tuning-group-head {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  padding: 8px 0; border-bottom: 1px solid var(--border);
+}
+.tuning-group-chevron {
+  color: var(--text-dim); font-size: 9px; transition: transform 0.2s;
+}
+.tuning-group.open .tuning-group-chevron { transform: rotate(90deg); }
+.tuning-group-name {
+  font-family: var(--font-mono); font-size: 11px; font-weight: 700;
+  letter-spacing: 1px; text-transform: uppercase; color: var(--text-secondary);
+}
+.tuning-group-count {
+  margin-left: auto; font-family: var(--font-mono); font-size: 9px;
+  color: var(--text-dim); letter-spacing: 1px;
+}
+.tuning-group-changed {
+  font-family: var(--font-mono); font-size: 8px; letter-spacing: 1px;
+  color: var(--accent-yellow); border: 1px solid rgba(251,191,36,0.45);
+  border-radius: 4px; padding: 1px 5px;
+}
+.tuning-group-body { display: none; padding-top: 6px; }
+.tuning-group.open .tuning-group-body { display: block; }
+
+/* One setting row */
+.tuning-row {
+  padding: 11px 12px; border-radius: var(--radius-sm);
+  border: 1px solid transparent; border-left: 2px solid transparent;
+  transition: background 0.15s, border-color 0.15s;
+}
+.tuning-row:hover { background: rgba(255,255,255,0.02); }
+.tuning-row.changed {
+  border-left-color: var(--accent-yellow);
+  background: rgba(251,191,36,0.04);
+}
+.tuning-row.dirty {
+  border-left-color: var(--accent-cyan);
+  background: rgba(56,189,248,0.06);
+}
+.tuning-row-head { display: flex; align-items: center; gap: 8px; }
+.tuning-label {
+  font-family: var(--font-sans); font-size: 13px; font-weight: 500;
+  color: var(--text-primary); display: flex; align-items: center; gap: 6px;
+}
+.tuning-info {
+  background: none; border: none; padding: 0; cursor: help;
+  color: var(--text-dim); font-size: 12px; line-height: 1;
+  display: inline-flex; transition: color 0.15s;
+}
+.tuning-info:hover, .tuning-info:focus-visible { color: var(--accent-yellow); outline: none; }
+.tuning-lock { color: var(--text-dim); font-size: 10px; }
+.tuning-controls { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.tuning-revert {
+  background: none; border: none; cursor: pointer; padding: 0 2px;
+  color: var(--text-dim); font-size: 12px; line-height: 1;
+  transition: color 0.15s;
+}
+.tuning-revert:hover { color: var(--accent-yellow); }
+.tuning-num {
+  background: var(--bg-deep); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text-primary); font-family: var(--font-mono); font-size: 12px;
+  padding: 5px 8px; width: 82px; text-align: right; outline: none;
+  transition: border-color 0.2s;
+}
+.tuning-num:focus { border-color: rgba(251,191,36,0.5); }
+.tuning-num:disabled { color: var(--text-muted); cursor: not-allowed; opacity: 0.7; }
+.tuning-text {
+  background: var(--bg-deep); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text-primary); font-family: var(--font-mono); font-size: 12px;
+  padding: 5px 8px; width: 150px; outline: none; transition: border-color 0.2s;
+}
+.tuning-text:focus { border-color: rgba(251,191,36,0.5); }
+.tuning-text:disabled { color: var(--text-muted); cursor: not-allowed; opacity: 0.7; }
+
+/* Slider */
+.tuning-slider-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.tuning-slider {
+  flex: 1; -webkit-appearance: none; appearance: none;
+  height: 3px; border-radius: 3px; background: var(--border); outline: none;
+}
+.tuning-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 13px; height: 13px; border-radius: 50%;
+  background: var(--accent-yellow); cursor: pointer;
+  box-shadow: 0 0 0 3px rgba(251,191,36,0.15);
+}
+.tuning-slider::-moz-range-thumb {
+  width: 13px; height: 13px; border-radius: 50%; border: none;
+  background: var(--accent-yellow); cursor: pointer;
+}
+.tuning-slider:disabled { opacity: 0.4; }
+.tuning-slider:disabled::-webkit-slider-thumb { background: var(--text-dim); cursor: not-allowed; }
+.tuning-bound {
+  font-family: var(--font-mono); font-size: 9px; color: var(--text-dim);
+  min-width: 34px;
+}
+.tuning-bound.max { text-align: right; }
+
+/* Default / source annotation */
+.tuning-meta {
+  margin-top: 6px; font-family: var(--font-mono); font-size: 9px;
+  letter-spacing: 0.5px; color: var(--text-dim);
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.tuning-src {
+  font-size: 8px; letter-spacing: 1px; padding: 1px 5px; border-radius: 4px;
+  text-transform: uppercase;
+}
+.tuning-src-dashboard  { color: var(--accent-yellow); border: 1px solid rgba(251,191,36,0.45); }
+.tuning-src-environment { color: var(--accent-cyan);  border: 1px solid rgba(56,189,248,0.45); }
+.tuning-src-default    { color: var(--text-dim);      border: 1px solid var(--text-dim); }
+.tuning-src-unreported { color: var(--accent-orange); border: 1px dashed rgba(249,115,22,0.5); cursor: help; }
+.tuning-chip.unreported { border-style: dashed; }
+.tuning-chip-unknown { color: var(--text-dim) !important; }
+.tuning-empty {
+  font-family: var(--font-mono); font-size: 11px; color: var(--text-dim);
+  padding: 24px 0; text-align: center;
+}
+
+/* Dirty-state footer: explicit review-then-save, not autosave */
+.tuning-footer {
+  border-top: 1px solid var(--border-bright);
+  background: rgba(56,189,248,0.06);
+  padding: 12px 18px; display: flex; flex-direction: column; gap: 10px;
+  animation: fade-in 0.18s ease;
+}
+.tuning-footer.hidden { display: none; }
+.tuning-diff {
+  font-family: var(--font-mono); font-size: 10px; line-height: 1.7;
+  color: var(--text-secondary); max-height: 132px; overflow-y: auto;
+}
+.tuning-diff-row { display: flex; gap: 8px; align-items: baseline; }
+.tuning-diff-name { color: var(--text-muted); }
+.tuning-diff-arrow { color: var(--text-dim); }
+.tuning-diff-to { color: var(--accent-cyan); font-weight: 700; }
+.tuning-footer-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+.tuning-footer-count {
+  margin-right: auto; font-family: var(--font-mono); font-size: 9px;
+  letter-spacing: 1px; color: var(--text-muted); text-transform: uppercase;
+}
+
+/* ── Stage 2: commit confirmation ── */
+.tuning-confirm-title {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 1px;
+  text-transform: uppercase; color: var(--accent-yellow);
+  display: flex; align-items: center; gap: 8px;
+}
+.tuning-critical-badge {
+  font-family: var(--font-mono); font-size: 8px; letter-spacing: 1px;
+  color: var(--accent-red); border: 1px solid rgba(248,113,113,0.5);
+  border-radius: 4px; padding: 1px 5px;
+}
+.tuning-diff-critical { color: var(--accent-red); }
+.tuning-reason-label {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 1px;
+  text-transform: uppercase; color: var(--text-muted);
+  display: flex; align-items: baseline; gap: 6px;
+}
+.tuning-reason-req { color: var(--accent-yellow); font-size: 8px; }
+.tuning-reason {
+  width: 100%; background: var(--bg-deep);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text-primary); font-family: var(--font-sans); font-size: 12px;
+  line-height: 1.6; padding: 9px 11px; resize: vertical; min-height: 54px;
+  outline: none; transition: border-color 0.2s;
+}
+.tuning-reason:focus { border-color: rgba(251,191,36,0.55); }
+.tuning-reason::placeholder { color: var(--text-dim); }
+.tuning-typed {
+  background: var(--bg-deep); border: 1px solid rgba(248,113,113,0.4);
+  border-radius: var(--radius-sm); color: var(--text-primary);
+  font-family: var(--font-mono); font-size: 12px; letter-spacing: 2px;
+  padding: 6px 10px; width: 150px; outline: none;
+}
+.tuning-typed:focus { border-color: var(--accent-red); }
+
+/* Press-and-hold commit — deliberate friction on a control that moves real money. */
+.tuning-hold {
+  position: relative; overflow: hidden;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 1px;
+  border-radius: 100px; padding: 8px 20px; cursor: pointer;
+  border: 1px solid rgba(251,191,36,0.55); background: rgba(251,191,36,0.08);
+  color: var(--accent-yellow); user-select: none; touch-action: none;
+  transition: opacity 0.2s, border-color 0.2s;
+}
+.tuning-hold:disabled { opacity: 0.35; cursor: not-allowed; }
+.tuning-hold-fill {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 0%;
+  background: rgba(251,191,36,0.30); pointer-events: none;
+  transition: width 0.05s linear;
+}
+.tuning-hold-label { position: relative; z-index: 1; }
+.tuning-hold.armed { border-color: var(--accent-yellow); }
+
+/* ── Change history ── */
+.tuning-history { margin-top: 22px; }
+.tuning-hist-entry {
+  border-left: 2px solid var(--border); padding: 8px 0 8px 12px; margin-bottom: 10px;
+}
+.tuning-hist-when {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 1px;
+  color: var(--text-dim); text-transform: uppercase;
+}
+.tuning-hist-reason {
+  font-family: var(--font-sans); font-size: 12px; line-height: 1.55;
+  color: var(--text-secondary); margin: 3px 0 5px;
+}
+.tuning-hist-changes {
+  font-family: var(--font-mono); font-size: 10px; line-height: 1.7; color: var(--text-muted);
+}
+.tuning-hist-to { color: var(--accent-yellow); }
+.tuning-save, .tuning-discard {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 1px;
+  border-radius: 100px; padding: 7px 16px; cursor: pointer;
+  border: 1px solid var(--border); background: none; color: var(--text-muted);
+  transition: border-color 0.2s, color 0.2s, background 0.2s;
+}
+.tuning-discard:hover { color: var(--accent-red); border-color: rgba(248,113,113,0.5); }
+.tuning-save {
+  color: var(--accent-cyan); border-color: rgba(56,189,248,0.5);
+  background: rgba(56,189,248,0.08);
+}
+.tuning-save:hover { background: rgba(56,189,248,0.18); }
+.tuning-save:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Tuning tips share the Playbook's floating-tip chrome but keep this surface's amber accent. */
+#pb-tip.tuning-tip .pb-tip-title { color: var(--accent-yellow); }
+
+@media (max-width: 640px) {
+  #tuning-drawer { width: 100vw; }
+  .tuning-controls { gap: 6px; }
+  .tuning-num { width: 70px; }
+  .tuning-text { width: 110px; }
+}
