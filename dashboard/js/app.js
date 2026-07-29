@@ -153,6 +153,181 @@ document.addEventListener('click', e => {
   }
 });
 
+// ── Hero signal board ─────────────────────────────────────────
+// The hero digest has to read the same whether a run produces 3 signals or 60,
+// so it is a grid, not prose: every signal renders into an identical cell and
+// each lane is capped at SIG_BOARD_ROWS rows (more on narrow, few-column
+// layouts, where the vertical room exists). Overflow folds into a "+N"
+// disclosure with its own bounded scroll area, so the panel's height is O(1)
+// in the signal count instead of tracking it.
+const SIG_BOARD_ROWS = 2;
+
+// Last render's inputs — a breakpoint change alters the column count, so the
+// board re-slices itself on resize rather than re-wrapping raggedly.
+let sigBoardState = null;
+
+// A buy is only fresh/actionable as a NEW ENTRY or a cooldown-elapsed ADD; IN COOLDOWN /
+// AT ADD CAP names still clear the buy bar but are throttled by pyramiding (mirrors
+// notify._actionable_buy + the advisor-note rule) — an uptrending conviction name re-fires
+// every run, so those aren't a fresh buy today.
+function buyThrottled(sig) {
+  const st = sig.buy_state;
+  return !!st && !(st.startsWith('NEW ENTRY') || st.startsWith('ADD '));
+}
+
+// "ADD n of N" as a fixed-width meter: the adds already open read dim, the one
+// today's signal would place reads bright, the rest are headroom. Fixed width is
+// the point — a text pill ("ADD 1 of 3") is 5× the ticker it annotates and
+// destroys the column grid. The full wording stays in the cell tooltip.
+function pyramidMeterHtml(state) {
+  const m = /^ADD (\d+) of (\d+)/.exec(state || '');
+  if (!m) return '';
+  const n = +m[1], total = +m[2];
+  let segs = '';
+  for (let i = 1; i <= total; i++) segs += `<i class="${i < n ? 'done' : i === n ? 'now' : ''}"></i>`;
+  return `<span class="sig-meter">${segs}</span>`;
+}
+
+// The one-glyph read of a throttled buy: cooldown shows the days left, at-cap
+// shows that the position is full.
+function throttleTagHtml(state) {
+  const cd = /^IN COOLDOWN \((\d+)d/.exec(state || '');
+  if (cd) return `<span class="sig-tag wait">${cd[1]}d</span>`;
+  if ((state || '').startsWith('AT ADD CAP')) return '<span class="sig-tag wait">FULL</span>';
+  return '';
+}
+
+function sellGainPct(sig) {
+  const m = sig.reasons?.length ? /Up (\d+)%/.exec(sig.reasons[0]) : null;
+  return m ? +m[1] : null;
+}
+
+function signalCellHtml(action, sig, muted = false) {
+  const t = sig.ticker;
+  let meta = '', title = t;
+  if (action === 'buy') {
+    const pct = sig.suggested_position_pct
+      ? `<span class="sig-num buy">${(sig.suggested_position_pct * 100).toFixed(0)}%</span>` : '';
+    const st = sig.buy_state || '';
+    const mark = st.startsWith('NEW ENTRY') ? '<span class="sig-tag new">NEW</span>'
+               : st.startsWith('ADD ')      ? pyramidMeterHtml(st)
+               : throttleTagHtml(st);
+    meta = pct + mark;
+    if (st) title = `${t} — ${st}`;
+  } else if (action === 'sell') {
+    const g = sellGainPct(sig);
+    if (g !== null) meta = `<span class="sig-num sell">+${g}%</span>`;
+    if (sig.reasons?.length) title = `${t} — ${sig.reasons[0]}`;
+  }
+  return `<button type="button" class="sig-cell ticker-link-plain${muted ? ' is-muted' : ''}"
+     data-ticker="${t}" title="${title.replace(/"/g, '&quot;')}">
+     <span class="sig-tkr">${t}</span>
+     ${meta ? `<span class="sig-meta">${meta}</span>` : ''}
+   </button>`;
+}
+
+// One lane = label + a capped grid + an optional folded remainder.
+function signalLaneHtml({ action, label, shown, folded, foldLabel }) {
+  if (!shown.length && !folded.length) {
+    return `<div class="sig-lane">
+        <span class="sig-lane-lab ${action}">${label}</span>
+        <span class="sig-empty">—</span>
+      </div>`;
+  }
+  // The "+N" toggle rides in the grid as the cell after the last ticker, so a
+  // lane stays exactly one row tall until it genuinely needs a second.
+  const id = `sig-fold-${action}`;
+  const toggle = folded.length
+    ? `<button type="button" class="sig-more" data-target="${id}">+${folded.length} ${foldLabel}<span class="sig-caret">▾</span></button>` : '';
+  const grid = shown.length
+    ? `<div class="sig-grid">${shown.map(s => signalCellHtml(action, s)).join('')}${toggle}</div>`
+    : `<div class="sig-grid"><span class="sig-empty sig-empty-inline">no fresh entries</span>${toggle}</div>`;
+  const fold = folded.length
+    ? `<div class="sig-fold hidden" id="${id}">
+         <div class="sig-grid">${folded.map(s => signalCellHtml(action, s, true)).join('')}</div>
+       </div>`
+    : '';
+  return `<div class="sig-lane">
+      <span class="sig-lane-lab ${action}">${label}</span>
+      <div class="sig-lane-body">${grid}${fold}</div>
+    </div>`;
+}
+
+function renderSignalBoard(el, byAction) {
+  sigBoardState = { el, byAction };
+
+  const buys  = (byAction.buy   || []).slice();
+  const sells = (byAction.sell  || []).slice();
+  const watch = (byAction.watch || []).slice();
+
+  // Rank inside each lane so truncation drops the least important name, not an
+  // arbitrary one: biggest suggested size first, biggest unrealized gain first.
+  buys.sort((a, b) => (b.suggested_position_pct || 0) - (a.suggested_position_pct || 0));
+  sells.sort((a, b) => (sellGainPct(b) ?? -1) - (sellGainPct(a) ?? -1));
+
+  const buysActive    = buys.filter(s => !buyThrottled(s));
+  const buysThrottled = buys.filter(s =>  buyThrottled(s));
+
+  // Columns are auto-filled from the available width, so the track count is
+  // measured off a real lane rather than assumed: render every signal first,
+  // read the resulting grid, then re-render with the lanes sliced to fit.
+  el.innerHTML = `
+    <div class="sig-head">
+      <span class="sig-head-lab">Today's signals</span>
+      <span class="sig-head-counts">
+        <span class="shc buy">${buys.length}</span><span class="shc-sep">·</span><span class="shc sell">${sells.length}</span><span class="shc-sep">·</span><span class="shc watch">${watch.length}</span>
+      </span>
+    </div>
+    <div class="sig-board"></div>`;
+  const board = el.querySelector('.sig-board');
+
+  const widest = [buys, sells, watch].sort((a, b) => b.length - a.length)[0];
+  board.innerHTML = signalLaneHtml({ action: 'buy', label: '', shown: widest, folded: [] });
+  const measured = board.querySelector('.sig-grid');
+  const cols = Math.max(2, getComputedStyle(measured).gridTemplateColumns.split(/\s+/).filter(Boolean).length);
+  // Narrow screens get more rows: a phone has the vertical room a wide strip
+  // doesn't, and two columns × two rows would hide most of the run.
+  const rows = cols >= 6 ? SIG_BOARD_ROWS : cols >= 4 ? 3 : 4;
+  const cap = cols * rows;
+
+  // Split a lane into what fits and what folds. The toggle occupies a cell, so
+  // it costs one slot whenever anything is folded.
+  function laneSplit(items, forcedFold = []) {
+    if (!forcedFold.length && items.length <= cap) return { shown: items, folded: [] };
+    const room = cap - 1;
+    return { shown: items.slice(0, room), folded: items.slice(room).concat(forcedFold) };
+  }
+
+  const buyLane = laneSplit(buysActive, buysThrottled);
+  const lanes = [
+    signalLaneHtml({
+      action: 'buy', label: '↑ BUY', ...buyLane,
+      // "on track" when the only folded names are cooldown/at-cap re-fires.
+      foldLabel: buyLane.folded.length > buysThrottled.length ? 'more' : 'on track',
+    }),
+    signalLaneHtml({ action: 'sell',  label: '↓ SELL',  ...laneSplit(sells), foldLabel: 'more' }),
+    signalLaneHtml({ action: 'watch', label: '◈ WATCH', ...laneSplit(watch), foldLabel: 'more' }),
+  ];
+  board.innerHTML = lanes.join('');
+
+  board.querySelectorAll('.sig-more').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const body = board.querySelector(`#${btn.dataset.target}`);
+      if (!body) return;
+      const closed = body.classList.toggle('hidden');
+      btn.classList.toggle('open', !closed);
+    });
+  });
+}
+
+// Re-slice on a breakpoint change so the lanes keep their column alignment.
+let sigBoardResizeT;
+window.addEventListener('resize', () => {
+  if (!sigBoardState) return;
+  clearTimeout(sigBoardResizeT);
+  sigBoardResizeT = setTimeout(() => renderSignalBoard(sigBoardState.el, sigBoardState.byAction), 150);
+});
+
 // ── Reason text cleanup ───────────────────────────────────────
 
 function cleanReason(r) {
@@ -2869,118 +3044,7 @@ async function init() {
     const byAction = {};
     signals.forEach(s => { (byAction[s.action] = byAction[s.action] || []).push(s); });
 
-    // A buy is only fresh/actionable as a NEW ENTRY or a cooldown-elapsed ADD; IN COOLDOWN /
-    // AT ADD CAP names still clear the buy bar but are throttled by pyramiding (mirrors
-    // notify._actionable_buy + the advisor-note rule) — an uptrending conviction name re-fires
-    // every run, so those aren't a fresh buy today.
-    function buyThrottled(sig) {
-      const st = sig.buy_state;
-      return !!st && !(st.startsWith('NEW ENTRY') || st.startsWith('ADD '));
-    }
-
-    function signalBadge(action, sig) {
-      if (action === 'buy') {
-        let html = '';
-        if (sig.suggested_position_pct) {
-          const pct = (sig.suggested_position_pct * 100).toFixed(0);
-          html += `<span class="summary-signal-badge buy-size">${pct}%</span>`;
-        }
-        if (sig.buy_state) {
-          const cls = buyThrottled(sig) ? 'buy-state-throttled' : 'buy-state-active';
-          html += `<span class="summary-signal-badge buy-state ${cls}">${sig.buy_state}</span>`;
-        }
-        return html;
-      }
-      if (action === 'sell' && sig.reasons?.length) {
-        const m = sig.reasons[0].match(/Up (\d+)%/);
-        if (m) return `<span class="summary-signal-badge sell-gain">+${m[1]}%</span>`;
-      }
-      return '';
-    }
-
-    // Actionable-first digest: the hero surfaces what needs attention today and
-    // folds the rest away (the exhaustive per-ticker view lives in Fleet Status).
-    //   • BUY  — actionable entries (NEW ENTRY / ADD-eligible) shown; throttled
-    //            re-fires (cooldown / at-cap) collapse into "+N on track".
-    //   • SELL — all shown (every sell is actionable).
-    //   • WATCH— capped, remainder behind "+N more".
-    const WATCH_CAP = 6;
-    const buys  = byAction.buy   || [];
-    const sells = byAction.sell  || [];
-    const watch = byAction.watch || [];
-    const buysActive    = buys.filter(s => !buyThrottled(s));
-    const buysThrottled = buys.filter(s =>  buyThrottled(s));
-
-    function tickerUnit(action, s, throttled = false) {
-      return `<span class="summary-ticker-unit${throttled ? ' buy-throttled' : ''}"><span class="ticker-link-plain" data-ticker="${s.ticker}">${s.ticker}</span>${signalBadge(action, s)}</span>`;
-    }
-    function moreToggle(id, label) {
-      return `<button class="summary-more-toggle" type="button" data-target="${id}">${label}</button>`;
-    }
-    function moreBody(id, html) {
-      return `<span class="summary-more-body hidden" id="${id}">${html}</span>`;
-    }
-
-    // BUY row content
-    let buyInner;
-    if (!buys.length) {
-      buyInner = '<span class="summary-empty">—</span>';
-    } else {
-      const parts = [];
-      if (buysActive.length) parts.push(buysActive.map(s => tickerUnit('buy', s)).join(''));
-      else parts.push('<span class="summary-empty summary-empty-inline">no fresh entries</span>');
-      if (buysThrottled.length) {
-        parts.push(moreToggle('buy-throttled', `+${buysThrottled.length} on track`));
-        parts.push(moreBody('buy-throttled', buysThrottled.map(s => tickerUnit('buy', s, true)).join('')));
-      }
-      buyInner = parts.join('');
-    }
-
-    // WATCH row content (cap + remainder)
-    let watchInner;
-    if (!watch.length) {
-      watchInner = '<span class="summary-empty">—</span>';
-    } else {
-      const shown = watch.slice(0, WATCH_CAP);
-      const rest  = watch.slice(WATCH_CAP);
-      const parts = [shown.map(s => tickerUnit('watch', s)).join('')];
-      if (rest.length) {
-        parts.push(moreToggle('watch-more', `+${rest.length} more`));
-        parts.push(moreBody('watch-more', rest.map(s => tickerUnit('watch', s)).join('')));
-      }
-      watchInner = parts.join('');
-    }
-
-    const summaryRows = [
-      { action: 'buy',   label: '↑ BUY',   inner: buyInner },
-      { action: 'sell',  label: '↓ SELL',  inner: sells.length ? sells.map(s => tickerUnit('sell', s)).join('') : '<span class="summary-empty">—</span>' },
-      { action: 'watch', label: '◈ WATCH', inner: watchInner },
-    ];
-
-    summaryEl.innerHTML = `
-      <div class="summary-head">
-        <span class="summary-head-lab">Today's signals</span>
-        <span class="summary-head-counts">
-          <span class="shc buy">${buys.length}</span><span class="shc-sep">·</span><span class="shc sell">${sells.length}</span><span class="shc-sep">·</span><span class="shc watch">${watch.length}</span>
-        </span>
-      </div>
-      <div class="summary-structured">${
-        summaryRows.map(r => `
-          <div class="summary-row">
-            <span class="summary-action-label ${r.action}">${r.label}</span>
-            <span class="summary-tickers">${r.inner}</span>
-          </div>`).join('')
-      }</div>`;
-
-    // Wire the "+N" expanders (reveal the folded chips inline on the next line).
-    summaryEl.querySelectorAll('.summary-more-toggle').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const body = summaryEl.querySelector(`#${btn.dataset.target}`);
-        if (!body) return;
-        const open = body.classList.toggle('hidden');
-        btn.classList.toggle('open', !open);
-      });
-    });
+    renderSignalBoard(summaryEl, byAction);
 
     // ── Advisor note ──
     const noteEl = document.getElementById('advisor-note');

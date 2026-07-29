@@ -227,8 +227,14 @@ header, main, #modal-overlay { position: relative; z-index: 1; }
    ============================================================ */
 
 #hero-banner {
-  display: flex; align-items: flex-end; justify-content: space-between; gap: 40px;
-  padding: 32px 0 24px;
+  padding: 32px 0 20px;
+}
+
+/* The signal board gets the full content width in its own band: at desktop
+   widths every lane collapses to a single row, and the hero above it is left
+   as one column instead of a tall band with a void beside the headline. */
+#signal-strip {
+  padding: 0 0 20px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -255,10 +261,7 @@ header, main, #modal-overlay { position: relative; z-index: 1; }
   color: var(--text-secondary); margin: 0; line-height: 1.4;
 }
 
-.hero-right {
-  flex-shrink: 0; max-width: 340px;
-  font-size: 14px; color: var(--text-secondary); line-height: 1.7;
-}
+.hero-right { min-width: 0; }
 
 .signals-summary { /* kept for JS compat — hero-right is the visual container */ }
 
@@ -304,19 +307,6 @@ header, main, #modal-overlay { position: relative; z-index: 1; }
 }
 .ticker-link-plain:hover { color: var(--accent-cyan); }
 
-.summary-signal-badge {
-  font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.5px;
-  padding: 1px 5px; border-radius: 3px; vertical-align: middle;
-  margin-left: 2px; opacity: 0.75;
-}
-.summary-signal-badge.buy-size  { background: rgba(74,222,128,0.12); color: var(--accent-green); }
-.summary-signal-badge.sell-gain { background: rgba(248,113,113,0.12); color: var(--accent-red); }
-/* Pyramiding state on BUY signals: active adds read green, throttled (cooldown/at-cap)
-   read muted so a re-firing conviction name doesn't look like a fresh buy. */
-.summary-signal-badge.buy-state.buy-state-active    { background: rgba(74,222,128,0.12); color: var(--accent-green); }
-.summary-signal-badge.buy-state.buy-state-throttled { background: rgba(148,163,184,0.14); color: var(--text-muted); }
-.summary-ticker-unit.buy-throttled { opacity: 0.5; }
-
 /* Card flash highlight when jumped to */
 @keyframes card-highlight {
   0%   { box-shadow: 0 0 0 3px var(--accent-cyan), 0 0 60px rgba(0,212,255,0.7); outline: 2px solid var(--accent-cyan); }
@@ -341,52 +331,105 @@ header, main, #modal-overlay { position: relative; z-index: 1; }
 .advisor-collapsible { overflow: hidden; max-height: 0; transition: max-height 0.4s ease; }
 .advisor-collapsible.open { max-height: 3000px; }
 
-/* Structured signals summary */
-.summary-head {
+/* ── Hero signal board ────────────────────────────────────────
+   A lane per action; every signal is an identical grid cell, so tickers line up
+   in columns and the panel stays scannable at any signal count. Each lane shows
+   at most two rows (JS slices on --sig-cols); the rest folds into "+N" with its
+   own scroll area, so the board's height never tracks the number of signals. */
+.sig-head {
   display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
-  padding-bottom: 8px; margin-bottom: 8px;
+  padding-bottom: 8px;
   border-bottom: 1px solid var(--border);
 }
-.summary-head-lab {
+.sig-head-lab {
   font-family: var(--font-mono); font-size: 10px; letter-spacing: 2px;
   text-transform: uppercase; color: var(--text-muted);
 }
-.summary-head-counts { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.5px; }
-.summary-head-counts .shc { font-weight: 700; }
-.summary-head-counts .shc.buy   { color: var(--accent-green); }
-.summary-head-counts .shc.sell  { color: var(--accent-red); }
-.summary-head-counts .shc.watch { color: var(--accent-purple); }
-.summary-head-counts .shc-sep   { color: var(--text-dim); margin: 0 5px; }
+.sig-head-counts { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.5px; }
+.sig-head-counts .shc { font-weight: 700; }
+.sig-head-counts .shc.buy   { color: var(--accent-green); }
+.sig-head-counts .shc.sell  { color: var(--accent-red); }
+.sig-head-counts .shc.watch { color: var(--accent-purple); }
+.sig-head-counts .shc-sep   { color: var(--text-dim); margin: 0 5px; }
 
-.summary-structured { display: flex; flex-direction: column; gap: 8px; }
-.summary-row { display: flex; align-items: baseline; gap: 10px; font-size: 13px; line-height: 1.5; }
-.summary-action-label {
-  font-family: var(--font-mono); font-size: 11px; font-weight: 700;
-  letter-spacing: 1.5px; text-transform: uppercase;
-  width: 72px; flex-shrink: 0; text-align: left;
+/* Columns are fluid (auto-fill on a minimum cell width), so the board uses
+   whatever width it is given; JS measures the resulting track count and slices
+   each lane to two rows. */
+.sig-board { --sig-cell-min: 104px; display: flex; flex-direction: column; }
+
+.sig-lane {
+  display: grid; grid-template-columns: 62px minmax(0, 1fr);
+  gap: 10px; align-items: start;
+  padding: 10px 0;
 }
-.summary-action-label.buy    { color: var(--accent-green); }
-.summary-action-label.sell   { color: var(--accent-red); }
-.summary-action-label.watch  { color: var(--accent-purple); }
-.summary-tickers { color: var(--text-secondary); display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
-.summary-ticker-unit { white-space: nowrap; display: inline-flex; align-items: center; gap: 3px; }
-.summary-empty { color: var(--text-dim); font-family: var(--font-mono); }
-.summary-empty-inline { font-size: 12px; font-style: italic; }
+.sig-lane + .sig-lane { border-top: 1px solid rgba(255,255,255,0.045); }
+.sig-lane-lab {
+  font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+  letter-spacing: 1.5px; text-transform: uppercase;
+  padding-top: 3px; white-space: nowrap;
+}
+.sig-lane-lab.buy   { color: var(--accent-green); }
+.sig-lane-lab.sell  { color: var(--accent-red); }
+.sig-lane-lab.watch { color: var(--accent-purple); }
 
-/* "+N on track" / "+N more" inline expanders */
-.summary-more-toggle {
-  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.5px;
+.sig-lane-body { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.sig-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--sig-cell-min), 1fr));
+  gap: 6px 8px;
+}
+
+.sig-cell {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  min-width: 0; padding: 2px 4px; margin-left: -4px;
+  background: none; border: 0; border-radius: 4px;
+  cursor: pointer; text-align: left; font: inherit;
+  transition: background 0.15s;
+}
+.sig-cell:hover { background: rgba(0,212,255,0.07); }
+.sig-cell:hover .sig-tkr { color: var(--accent-cyan); }
+.sig-cell.is-muted { opacity: 0.55; }
+.sig-tkr {
+  font-family: var(--font-mono); font-size: 13px; font-weight: 500;
+  color: var(--text-primary); line-height: 1.2; letter-spacing: 0.3px;
+}
+.sig-meta { display: flex; align-items: center; gap: 5px; height: 11px; }
+.sig-num { font-family: var(--font-mono); font-size: 10px; font-weight: 600; }
+.sig-num.buy  { color: var(--accent-green); }
+.sig-num.sell { color: var(--accent-red); }
+
+/* Pyramiding as a meter, not a sentence: adds already open read dim, the add
+   this signal would place reads bright, the remainder is headroom. */
+.sig-meter { display: inline-flex; gap: 2px; align-items: center; }
+.sig-meter i { width: 6px; height: 3px; border-radius: 1px; background: rgba(148,163,184,0.22); }
+.sig-meter i.done { background: rgba(74,222,128,0.35); }
+.sig-meter i.now  { background: var(--accent-green); }
+
+.sig-tag {
+  font-family: var(--font-mono); font-size: 8px; letter-spacing: 0.8px;
+  padding: 1px 4px; border-radius: 2px; line-height: 1.3;
+}
+.sig-tag.new  { background: rgba(74,222,128,0.14); color: var(--accent-green); }
+.sig-tag.wait { background: rgba(148,163,184,0.12); color: var(--text-muted); }
+
+.sig-empty { color: var(--text-dim); font-family: var(--font-mono); font-size: 12px; padding-top: 2px; }
+.sig-empty-inline { font-style: italic; }
+
+.sig-more {
+  align-self: center; justify-self: start;
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.5px;
   color: var(--text-muted); background: transparent;
   border: 1px solid var(--border); border-radius: 999px;
   padding: 1px 9px; cursor: pointer;
   transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
-.summary-more-toggle:hover { color: var(--accent-cyan); border-color: rgba(0,212,255,0.35); background: rgba(0,212,255,0.05); }
-.summary-more-toggle.open { color: var(--text-secondary); border-color: var(--text-dim); }
-.summary-more-toggle.open::after { content: ' ×'; }
-/* Folded chips wrap to their own line when revealed */
-.summary-more-body { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; padding-top: 2px; }
-.summary-more-body.hidden { display: none; }
+.sig-more:hover { color: var(--accent-cyan); border-color: rgba(0,212,255,0.35); background: rgba(0,212,255,0.05); }
+.sig-more.open { color: var(--text-secondary); border-color: var(--text-dim); }
+.sig-caret { display: inline-block; margin-left: 5px; transition: transform 0.2s; }
+.sig-more.open .sig-caret { transform: rotate(180deg); }
+/* Expanding stays bounded — the overflow scrolls instead of growing the hero. */
+.sig-fold { max-height: 108px; overflow-y: auto; padding-top: 2px; }
+.sig-fold.hidden { display: none; }
 
 .advisor-no-note {
   color: var(--text-secondary);
@@ -1808,9 +1851,30 @@ header, main, #modal-overlay { position: relative; z-index: 1; }
   .modal-verdict { grid-template-columns: repeat(2, 1fr); }
   .modal-analysis, .modal-chart-row { grid-template-columns: 1fr; }
   .modal-metrics-grid { grid-template-columns: repeat(2, 1fr); }
-  #hero-banner { flex-direction: column; align-items: flex-start; gap: 24px; }
+  #hero-banner { grid-template-columns: minmax(0, 1fr); align-items: start; gap: 24px; }
   .hero-right { text-align: left; max-width: 100%; }
   .hero-headline { font-size: 26px; }
+}
+
+/* Signal-board density: narrower screens get a narrower cell so the columns
+   stay aligned instead of wrapping, and the lanes still cap at two rows. */
+@media (max-width: 900px) {
+  /* Tablet/phone widths are touch: hold the 44px minimum on both the cells and
+     the fold chip (they're the board's only tap targets). */
+  .sig-cell { min-height: 44px; justify-content: center; }
+  /* A 44px stadium pill reads as a stray button; on touch the fold becomes a
+     full-width bar, which is both a bigger target and a calmer shape. */
+  .sig-more {
+    min-height: 44px; width: 100%; padding: 0 12px;
+    border-radius: 6px; text-align: left;
+  }
+  .sig-grid { gap: 2px 8px; }
+}
+@media (max-width: 680px)  { .sig-board { --sig-cell-min: 84px; } }
+@media (max-width: 420px)  {
+  .sig-board { --sig-cell-min: 72px; }
+  .sig-lane { grid-template-columns: 54px minmax(0, 1fr); gap: 8px; }
+  .sig-lane-lab { font-size: 9px; letter-spacing: 1px; }
 }
 
 /* Header cluster: collapse the pill labels so the button row fits narrow screens.
@@ -1857,10 +1921,12 @@ header, main, #modal-overlay { position: relative; z-index: 1; }
    so mouse-driven desktop keeps its compact pills. */
 @media (pointer: coarse) {
   .lock-btn, .header-link, .convictions-btn, .playbook-btn, .journal-btn,
-  .summary-more-toggle, .advisor-rating-btn {
+  .sig-more, .advisor-rating-btn {
     min-height: 44px;
   }
-  .summary-more-toggle { padding: 6px 12px; }
+  .sig-more { padding: 6px 12px; }
+  /* Cells are the primary tap target in the board — give them a full row of height. */
+  .sig-cell { min-height: 40px; justify-content: center; }
 }
 
 /* ============================================================
