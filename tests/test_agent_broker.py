@@ -41,6 +41,26 @@ class TestParseResult:
         with pytest.raises(BrokerError):
             _parse_result(r)
 
+    # The mcp SDK renamed these protocol fields to snake_case in v2. We pin to v1, but the
+    # parser must read either spelling: a `getattr(..., "isError", False)` default would have
+    # reported "no error" for every failed real-money order after an unnoticed SDK bump.
+    def test_snake_case_structured_preferred(self):
+        r = SimpleNamespace(is_error=False, structured_content={"ok": 1}, content=[])
+        assert _parse_result(r) == {"ok": 1}
+
+    def test_snake_case_error_raises(self):
+        from src.agent_broker import BrokerError
+        r = SimpleNamespace(is_error=True, structured_content=None,
+                            content=[SimpleNamespace(text="insufficient funds")])
+        with pytest.raises(BrokerError, match="insufficient funds"):
+            _parse_result(r)
+
+    def test_unknown_shape_raises_rather_than_defaulting(self):
+        from src.agent_broker import BrokerError
+        r = SimpleNamespace(content=[SimpleNamespace(text="nope")])
+        with pytest.raises(BrokerError, match="Unrecognized MCP result shape"):
+            _parse_result(r)
+
 
 class TestUnwrap:
     def test_unwraps_data_guide_envelope(self):

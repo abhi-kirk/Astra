@@ -315,12 +315,28 @@ def _unwrap(payload: Any) -> Any:
     return payload
 
 
+def _field(obj: Any, *names: str) -> Any:
+    """Read the first attribute in `names` that exists on `obj`.
+
+    Deliberately raises when none are present instead of returning a default. The MCP SDK
+    renamed these protocol fields to snake_case in v2, and a `getattr(result, "isError", False)`
+    would have gone on quietly answering "no error" for every failed real-money order. An SDK
+    shape we don't recognize must abort the run, not degrade into a false success."""
+    for name in names:
+        if hasattr(obj, name):
+            return getattr(obj, name)
+    raise BrokerError(f"Unrecognized MCP result shape: none of {names} on {type(obj).__name__}")
+
+
 def _parse_result(result: Any) -> Any:
-    """Turn a CallToolResult into plain data. Prefers structuredContent; falls back to
-    JSON in the first text block. Unwraps RH's {data, guide} envelope. Raises on errors."""
-    if getattr(result, "isError", False):
+    """Turn a CallToolResult into plain data. Prefers the structured content; falls back to
+    JSON in the first text block. Unwraps RH's {data, guide} envelope. Raises on errors.
+
+    Field names are accepted in both spellings so a pinned-SDK bump can't silently change
+    the meaning of a result (mcp v1 camelCase, v2 snake_case)."""
+    if _field(result, "is_error", "isError"):
         raise BrokerError(_result_text(result) or "Agentic MCP returned an error")
-    structured = getattr(result, "structuredContent", None)
+    structured = _field(result, "structured_content", "structuredContent")
     if structured is not None:
         return _unwrap(structured)
     text = _result_text(result)

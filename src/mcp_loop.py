@@ -358,14 +358,30 @@ async def run_structured(
         return (payload, usage, tool_log)
 
 
+def _first_attr(obj: Any, *names: str) -> Any:
+    """First present attribute among `names`, else None.
+
+    Unlike the broker's `_field`, this tolerates an unknown shape rather than raising: the
+    advisor path only narrates, so a mangled tool result should cost us a note, not the run.
+    Logs loudly so an SDK rename is still visible."""
+    for name in names:
+        if hasattr(obj, name):
+            return getattr(obj, name)
+    logger.warning("Unrecognized MCP result shape: none of %s on %s", names, type(obj).__name__)
+    return None
+
+
 def _result_text(call_res: Any) -> tuple[str, bool]:
-    """Flatten an MCP CallToolResult to (text, is_error)."""
+    """Flatten an MCP CallToolResult to (text, is_error).
+
+    Both field spellings are accepted (mcp v1 camelCase, v2 snake_case) so an SDK bump can't
+    quietly turn every failed tool call into a successful-looking empty result."""
     parts = [getattr(item, "text", "") for item in (getattr(call_res, "content", None) or [])]
     out = "\n".join(p for p in parts if p).strip()
     if not out:
-        sc = getattr(call_res, "structuredContent", None)
+        sc = _first_attr(call_res, "structured_content", "structuredContent")
         out = str(sc) if sc else "(no content)"
-    return out, bool(getattr(call_res, "isError", False))
+    return out, bool(_first_attr(call_res, "is_error", "isError"))
 
 
 def _err_result(block_id: str, message: str) -> dict[str, Any]:
