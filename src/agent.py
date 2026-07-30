@@ -528,6 +528,18 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
     except Exception:
         logger.error("Outcome backfill failed — pipeline continues", exc_info=True)
 
+    # Self-evaluation: ASTRA grades its own track record on both tracks and alerts only when
+    # the verdict changes. Runs last so today's paper snapshot and the outcomes just backfilled
+    # above are both visible. Read-only — it writes scorecard_runs and touches nothing else.
+    # Both tracks are graded here rather than in agent_executor.py: that workflow is chained off
+    # this one, early-returns before its snapshot when the account read fails, and can sit paused
+    # or halted — a scorecard hosted there would go dark exactly when the record matters most.
+    from src.scorecard import run_scorecard
+    try:
+        run_scorecard()
+    except Exception:
+        logger.error("Scorecard evaluation failed — pipeline continues", exc_info=True)
+
     # Observability: capture run metrics + active infra/MCP health probes
     from src.observability import probe_endpoints
     obs.record(

@@ -280,3 +280,75 @@ def notify_agent(summary: dict) -> bool:
         lines.append(acct_line)
     lines.append(footer)
     return send(markdownify("\n".join(lines)))
+
+
+# ── Self-evaluation (src/scorecard.py) ────────────────────────────────────────
+_VERDICT_EMOJI = {
+    "SCALE": "📈", "TUNE": "🔧", "REVIEW": "🧠", "STEADY": "➖", "INSUFFICIENT_DATA": "⏳",
+}
+_VERDICT_HEADLINE = {
+    "SCALE": "the record supports more capital",
+    "TUNE": "good picks, weak execution",
+    "REVIEW": "the picks themselves are lagging",
+    "STEADY": "nothing stands out either way",
+    "INSUFFICIENT_DATA": "too early to tell",
+}
+_TRACK_LABEL = {"paper": "Advisor (paper)", "autotrader": "Autotrader (real money)"}
+
+
+def _pct(value: float | None, scale: float = 1.0, places: int = 1) -> str:
+    return "n/a" if value is None else f"{value * scale:+.{places}f}%"
+
+
+def notify_scorecard(result: dict, previous_verdict: str | None = None) -> bool:
+    """Alert when ASTRA's own verdict on its track record CHANGES — never on a repeat.
+
+    A daily "still not enough data" ping would be worthless and would train the alert to be
+    ignored, costing exactly the signal this exists to deliver. `scorecard.should_notify` owns
+    the decision; this function only formats, so a caller that reaches it has already decided
+    the transition is worth sending.
+
+    Every figure is reported with its uncertainty. A verdict here is an argument for moving real
+    money, and a bare point estimate at these sample sizes would overstate what is known.
+    """
+    verdict = result.get("verdict", "")
+    track = _TRACK_LABEL.get(result.get("track", ""), result.get("track", "?"))
+    emoji = _VERDICT_EMOJI.get(verdict, "•")
+    footer = f"[Open dashboard →]({DASHBOARD_URL})"
+
+    lines = [f"{emoji} **ASTRA Scorecard — {track}**"]
+    transition = f"{previous_verdict} → {verdict}" if previous_verdict else verdict
+    lines.append(f"_{transition} — {_VERDICT_HEADLINE.get(verdict, '')}_")
+
+    if verdict == "INSUFFICIENT_DATA":
+        missing = result.get("missing") or []
+        if missing:
+            lines.append("Still waiting on: " + ", ".join(missing))
+        if result.get("eta_days"):
+            lines.append(f"At the current rate, about {result['eta_days']} more days.")
+    else:
+        lines.append(
+            f"Execution: {_pct(result.get('exec_cum_excess_adj'), 100)} vs the S&P after "
+            f"allowing for uninvested cash "
+            f"({int(result.get('nav_days') or 0)} paired days, "
+            f"{_pct(result.get('exec_ci_low'), 100)} … {_pct(result.get('exec_ci_high'), 100)})"
+        )
+        hit = result.get("pick_hit_rate")
+        hit_txt = f"{hit * 100:.0f}% beat the S&P" if hit is not None else "hit rate n/a"
+        lines.append(
+            f"Picks: {hit_txt} over {int(result.get('pick_window_days') or 0)} days "
+            f"({int(result.get('distinct_tickers') or 0)} companies, "
+            f"avg {_pct(result.get('pick_clustered_excess'))} excess)"
+        )
+
+    for reason in (result.get("reasons") or []):
+        lines.append(f"• {reason}")
+
+    if verdict == "TUNE":
+        for fp in ((result.get("diagnostic") or {}).get("fingerprints") or []):
+            lines.append(f"🔍 _{fp.get('name')}_: {fp.get('detail')}")
+        # Load-bearing: this module's whole promise is that it observes and never self-tunes.
+        lines.append("_No settings were changed. This is a read-only observation._")
+
+    lines.append(footer)
+    return send(markdownify("\n".join(lines)))

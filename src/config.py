@@ -374,6 +374,47 @@ class TelegramConfig:
     chat_id: str = _cfg("TELEGRAM_CHAT_ID", default="")
 
 
+# ── Self-evaluation (src/scorecard.py) ─────────────────────────────────────────
+# ASTRA grading its own track record: is the record good enough to justify more capital, is
+# the timing/sizing side leaking alpha, or has too little time elapsed to say? Read-only —
+# nothing here feeds back into a decision. The readiness gate is deliberately strict: at these
+# sample sizes a confident verdict would be noise, so "not enough data yet" is the honest and
+# most common answer. See the tier-2 knobs in settings_schema.py for what each bar means.
+@dataclass
+class ScorecardConfig:
+    enabled: bool = _cfg("SCORECARD_ENABLED", cast=bool, default=True)
+    notify_enabled: bool = _cfg("SCORECARD_NOTIFY_ENABLED", cast=bool, default=True)
+    # Readiness gate — ALL four must clear before any decisive verdict is allowed.
+    # Row counts alone are not a gate: 329 outcome rows on 14 tickers over 3 run-dates is
+    # ~14 correlated bets, so ticker and calendar diversity are required alongside volume.
+    min_nav_days: int = _cfg("SCORECARD_MIN_NAV_DAYS", cast=int, default=90)
+    min_closed_trips: int = _cfg("SCORECARD_MIN_CLOSED_TRIPS", cast=int, default=20)
+    min_matured_decisions: int = _cfg("SCORECARD_MIN_MATURED_DECISIONS", cast=int, default=60)
+    min_distinct_tickers: int = _cfg("SCORECARD_MIN_DISTINCT_TICKERS", cast=int, default=10)
+    min_decision_weeks: int = _cfg("SCORECARD_MIN_DECISION_WEEKS", cast=int, default=8)
+    # Verdict thresholds. Point estimates only ever ACT together with a bootstrap confidence
+    # interval that excludes zero — neither is sufficient alone (at n=90 an IR of 0.5 is
+    # t≈0.30, p≈0.76, so thresholding on it by itself would fire at random).
+    ir_scale_threshold: float = _cfg("SCORECARD_IR_SCALE", cast=float, default=0.5)
+    ir_review_threshold: float = _cfg("SCORECARD_IR_REVIEW", cast=float, default=-0.5)
+    pick_excess_scale_pct: float = _cfg("SCORECARD_PICK_EXCESS_SCALE_PCT", cast=float, default=2.0)
+    pick_excess_review_pct: float = _cfg("SCORECARD_PICK_EXCESS_REVIEW_PCT", cast=float, default=-2.0)
+    confidence_level: float = _cfg("SCORECARD_CONFIDENCE", cast=float, default=0.90)
+    # Both books hold cash by design (the Autotrader keeps a ≥30% reserve floor), so a raw
+    # comparison against a fully-invested index is a market-direction detector, not a skill
+    # measure. On = compare against the same invested fraction in the benchmark.
+    beta_adjust_benchmark: bool = _cfg("SCORECARD_BETA_ADJUST", cast=bool, default=True)
+    pick_window_days: int = _cfg("SCORECARD_PICK_WINDOW_DAYS", cast=int, default=30)
+    # Plumbing.
+    pick_horizon_tolerance_days: int = 15  # a "30d outcome" is accepted if realized in 30..45d
+    max_join_gap_days: int = 4             # weekend + one holiday; longer gaps drop the obs
+    bootstrap_samples: int = 2000
+    bootstrap_block: int = 5               # moving-block size, respects autocorrelation
+    bootstrap_seed: int = 0                # fixed → the verdict is reproducible
+    benchmark_symbol: str = "SPY"
+    history_days: int = 400
+
+
 # ── Module-level singletons ────────────
 supabase = SupabaseConfig()
 services = ServicesConfig()
@@ -391,3 +432,4 @@ exploration = ExplorationConfig()
 contextual = ContextualConfig()
 timeouts = TimeoutsConfig()
 telegram = TelegramConfig()
+scorecard = ScorecardConfig()

@@ -874,6 +874,93 @@ def get_latest_portfolio_snapshot() -> dict | None:
     return data[0] if data else None
 
 
+# ---------------------------------------------------------------------------
+# Scorecard (src/scorecard.py) — read-only inputs + the verdict log
+# ---------------------------------------------------------------------------
+
+def get_paper_equity_series(since: str | None = None, limit: int = 2000) -> Rows:
+    """Paper-book snapshots ascending, for the scorecard's NAV-vs-benchmark join.
+    `market_value / total_equity` gives the invested fraction the cash-drag adjustment needs."""
+    q = (get_client().table("paper_equity")
+         .select("snapshot_time, nav_index, total_equity, market_value"))
+    if since:
+        q = q.gte("snapshot_time", since)
+    return db_rows(q.order("snapshot_time", desc=False).limit(limit).execute().data)
+
+
+def get_agent_snapshot_series(since: str | None = None, limit: int = 2000) -> Rows:
+    """Autotrader account snapshots ascending — same shape as the paper series."""
+    q = (get_client().table("agent_account_snapshots")
+         .select("snapshot_time, nav_index, total_equity, market_value"))
+    if since:
+        q = q.gte("snapshot_time", since)
+    return db_rows(q.order("snapshot_time", desc=False).limit(limit).execute().data)
+
+
+def get_benchmark_series(symbol: str = "SPY", since: str | None = None, limit: int = 2000) -> Rows:
+    """Daily benchmark closes ascending. The scorecard's fallback source — it prefers a full
+    yfinance history, since this table only gains a row on days the daily run reached the end."""
+    q = get_client().table("benchmark_prices").select("price_date, close").eq("symbol", symbol)
+    if since:
+        q = q.gte("price_date", since[:10])
+    return db_rows(q.order("price_date", desc=False).limit(limit).execute().data)
+
+
+def get_outcomes_with_decisions(since: str | None = None, limit: int = 5000) -> Rows:
+    """Matured forward returns joined to the decision that produced them.
+
+    NOTE `notes` carries a window label like "30d outcome", but it must NOT be trusted as the
+    horizon: backfill_outcomes stamps it from the requested window while pricing at the day it
+    happened to run, so a missed run skews the realized horizon. The scorecard derives the true
+    horizon from `outcome_date - decisions.run_date` and filters on that instead.
+    """
+    q = (get_client().table("outcomes")
+         .select("decision_id, outcome_date, pct_change, price_at_outcome, notes, "
+                 "decisions(ticker, action, run_date, price_at_decision)"))
+    if since:
+        q = q.gte("outcome_date", since)
+    return db_rows(q.order("outcome_date", desc=False).limit(limit).execute().data)
+
+
+def get_agent_trades_history(limit: int = 5000) -> Rows:
+    """All agentic orders (realized_pnl is stored here, unlike paper_trades)."""
+    return db_rows(
+        get_client().table("agent_trades").select("*")
+        .order("run_date", desc=True).limit(limit).execute().data
+    )
+
+
+def get_decision_features_since(since: str, limit: int = 5000) -> Rows:
+    """The full per-ticker feature substrate from `since` onward.
+
+    The first reader for `decision_features` (writer-only until now). Unused by the scorecard's
+    pick axis — that grades `decisions`, the calls ASTRA actually made — but the calibration
+    work in docs/attribution.md needs this table, and a missing reader was the only thing
+    standing between it and a query.
+    """
+    return db_rows(
+        get_client().table("decision_features").select("*")
+        .gte("run_date", since).order("run_date", desc=False).limit(limit).execute().data
+    )
+
+
+def save_scorecard_run(row: dict) -> None:
+    """Append one scorecard verdict. The only write the scorecard is permitted to make."""
+    get_client().table("scorecard_runs").insert({
+        **row,
+        **brain_version_fields(),
+    }).execute()
+
+
+def get_latest_scorecard(track: str) -> dict | None:
+    """The previous verdict row for a track — drives change detection for the alert."""
+    data = db_rows(
+        get_client().table("scorecard_runs").select("*").eq("track", track)
+        .order("scored_at", desc=True).limit(1).execute().data
+    )
+    return data[0] if data else None
+
+
 def build_agent_context_summary(max_decisions: int = 20) -> str:
     """Compact text summary of recent history for agent context. Token-efficient."""
     recent = get_recent_decisions(max_decisions)

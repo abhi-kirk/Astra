@@ -97,6 +97,7 @@ _G_PAPER = "Paper track"
 _G_AI = "AI judgment layer"
 _G_LIMITS = "Hard limits (code-enforced)"
 _G_DATA = "Data sources"
+_G_SCORE = "Self-evaluation"
 
 _DIALS: list[Knob] = [
     # ── The buy gate ──────────────────────────────────────────────────────────
@@ -443,6 +444,25 @@ _DIALS: list[Knob] = [
         impact="Locked. Changing it requires a code change so the circuit breaker stays in "
                "version history.",
     ),
+
+    # ── Self-evaluation ───────────────────────────────────────────────────────
+    Knob(
+        "scorecard.enabled", DIAL, "Grade my own record", group=_G_SCORE,
+        help="When on, at the end of each day ASTRA grades its own track record: how its "
+             "results compare with simply owning the S&P 500, and whether the companies it "
+             "picked actually did better than the market. It only reads past history — it "
+             "never changes a setting and never places a trade.",
+        impact="Turning this off stops the grading and the alerts. Nothing about how ASTRA "
+               "trades changes either way.",
+    ),
+    Knob(
+        "scorecard.notify_enabled", DIAL, "Tell me when the grade changes", group=_G_SCORE,
+        help="Sends a message only when the conclusion actually changes — for example from "
+             "'not enough history yet' to 'doing well, consider adding funds'. A day where "
+             "nothing changed stays silent.",
+        impact="Off means the grade is still worked out and recorded, just never pushed to "
+               "your phone.",
+    ),
 ]
 
 
@@ -710,6 +730,78 @@ _SHAPE: list[Knob] = [
          help="Cash accounts settle trades a day late and penalise quick round-trips, so extra "
               "checks apply before selling. Turn off only if the account type changes.",
          impact="Turning this off removes those settlement checks."),
+
+    # ── Self-evaluation: how much evidence before ASTRA draws a conclusion ────
+    # These decide when ASTRA is allowed to ask for more money, so they sit behind the
+    # advanced reveal rather than on the main dial board.
+    Knob("scorecard.min_nav_days", SHAPE, "Days of history required", group=_G_SCORE,
+         unit="days", min=30, max=500, step=5,
+         help="How many days where both ASTRA's own value and the S&P 500's value were "
+              "recorded before it will draw any conclusion at all. Below this it reports "
+              "'too early to tell' and says what it is still waiting for.",
+         impact="Lowering it makes ASTRA reach a verdict sooner on thinner evidence, which at "
+                "these sample sizes mostly means reaching the wrong one."),
+    Knob("scorecard.min_closed_trips", SHAPE, "Finished trades required", group=_G_SCORE,
+         unit="count", min=5, max=200, step=1,
+         help="How many positions must have been bought and then fully sold before the grade "
+              "counts. A position still held has no result yet.",
+         impact="Lowering it lets a handful of lucky or unlucky trades drive the conclusion."),
+    Knob("scorecard.min_matured_decisions", SHAPE, "Old-enough calls required", group=_G_SCORE,
+         unit="count", min=10, max=500, step=5,
+         help="How many past buy calls must be old enough for their result to be visible.",
+         impact="Lowering it grades ASTRA on calls that have not had time to play out."),
+    Knob("scorecard.min_distinct_tickers", SHAPE, "Different companies required",
+         group=_G_SCORE, unit="count", min=3, max=50, step=1,
+         help="Three hundred results spread over fourteen companies is really fourteen bets, "
+              "not three hundred. This is the minimum number of different companies that must "
+              "sit behind those results.",
+         impact="Lowering it lets a couple of names masquerade as a large sample."),
+    Knob("scorecard.min_decision_weeks", SHAPE, "Different weeks required", group=_G_SCORE,
+         unit="count", min=1, max=52, step=1,
+         help="How many separate weeks the graded calls must be spread across. Calls made in "
+              "one week all faced the same market and are really one bet on that moment.",
+         impact="Lowering it lets a single good or bad week decide the verdict."),
+    Knob("scorecard.ir_scale_threshold", SHAPE, "Bar for 'doing well'", group=_G_SCORE,
+         unit="score", min=0.0, max=3.0, step=0.1,
+         help="How far ahead of the market ASTRA must be, measured against how bumpy the ride "
+              "was, before it says the record justifies more money. This is only half the "
+              "test — the result must also be strong enough that it is unlikely to be luck.",
+         impact="Lowering it makes ASTRA ask for funds on a weaker record."),
+    Knob("scorecard.ir_review_threshold", SHAPE, "Bar for 'needs attention'", group=_G_SCORE,
+         unit="score", min=-3.0, max=0.0, step=0.1,
+         help="The same measure in the other direction: how far behind the market ASTRA must "
+              "be before it flags that something needs fixing.",
+         impact="Raising it toward zero makes ASTRA raise the alarm more readily."),
+    Knob("scorecard.pick_excess_scale_pct", SHAPE, "Good pick margin", group=_G_SCORE,
+         unit="pct", min=0.0, max=25.0, step=0.5,
+         help="How much better than the S&P 500 the average pick must have done, over the "
+              "measurement window, to count as genuinely good stock picking.",
+         impact="Lowering it credits ASTRA with skill for beating the market by a hair."),
+    Knob("scorecard.pick_excess_review_pct", SHAPE, "Bad pick margin", group=_G_SCORE,
+         unit="pct", min=-25.0, max=0.0, step=0.5,
+         help="How far behind the S&P 500 the average pick must be before ASTRA concludes the "
+              "problem is what it chooses to buy, rather than how it buys it. That is the "
+              "difference between a settings problem and a rethink of your convictions.",
+         impact="Raising it toward zero triggers a strategy rethink on smaller shortfalls."),
+    Knob("scorecard.confidence_level", SHAPE, "How sure before it speaks", group=_G_SCORE,
+         unit="fraction", min=0.50, max=0.99, step=0.01,
+         help="ASTRA only calls a result good or bad when the evidence would hold up this "
+              "often. Higher means it stays quiet longer and is right more often when it does "
+              "speak up.",
+         impact="Lowering it produces confident-sounding verdicts out of pure noise."),
+    Knob("scorecard.beta_adjust_benchmark", SHAPE, "Allow for uninvested cash",
+         group=_G_SCORE,
+         help="Both tracks deliberately hold some cash, so comparing them against a fully "
+              "invested S&P 500 makes them look bad in a rising market for a reason that has "
+              "nothing to do with skill. When on, the comparison is against holding the same "
+              "proportion in the S&P 500 and the rest in cash.",
+         impact="Turning this off reverts to the raw comparison, which will read as poor "
+                "execution in almost any rising market."),
+    Knob("scorecard.pick_window_days", SHAPE, "Pick measurement window", group=_G_SCORE,
+         unit="days", min=15, max=180, step=5,
+         help="How long after a buy call ASTRA waits before judging whether it was a good one.",
+         impact="Must match a window ASTRA actually records results for (currently 30 or 60 "
+                "days); any other value finds no data and the grade stays 'too early'."),
 ]
 
 
@@ -732,6 +824,9 @@ _PLUMBING: list[Knob] = _plumbing(
     "contextual.model", "contextual.max_tokens", "contextual.effort",
     "contextual.max_rounds", "contextual.max_searches",
     "timeouts.advisor", "timeouts.exploration", "timeouts.contextual",
+    "scorecard.pick_horizon_tolerance_days", "scorecard.max_join_gap_days",
+    "scorecard.bootstrap_samples", "scorecard.bootstrap_block", "scorecard.bootstrap_seed",
+    "scorecard.benchmark_symbol", "scorecard.history_days",
 )
 
 
@@ -745,6 +840,7 @@ BY_KEY: dict[str, Knob] = {k.key: k for k in REGISTRY}
 # Group display order for the dashboard (groups not listed sort last, alphabetically).
 GROUP_ORDER: tuple[str, ...] = (
     _G_GATE, _G_SIZE, _G_DIP, _G_SELL, _G_AUTO, _G_PAPER, _G_AI, _G_DATA, _G_LIMITS,
+    _G_SCORE,
     _G_PILLARS, _G_QUALITY, _G_VALUE, _G_TREND, _G_ENTRY, _G_REGIME, _G_MACRO, _G_EXPLORE,
 )
 

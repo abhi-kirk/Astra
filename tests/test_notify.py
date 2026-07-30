@@ -201,3 +201,86 @@ class TestNotifyExploration:
                 themes_explored=1, already_tracked=0,
             )
             assert isinstance(out, str) and "AA" in out
+
+
+# ---------------------------------------------------------------------------
+# notify_scorecard
+# ---------------------------------------------------------------------------
+
+def _result(verdict="STEADY", **kw):
+    base = {
+        "track": "autotrader",
+        "verdict": verdict,
+        "ready": True,
+        "nav_days": 118,
+        "missing": [],
+        "eta_days": None,
+        "exec_cum_excess_adj": 0.032,
+        "exec_cum_excess_raw": -0.004,
+        "exec_ci_low": 0.004,
+        "exec_ci_high": 0.061,
+        "exec_ir_annual": 0.61,
+        "pick_hit_rate": 0.63,
+        "pick_window_days": 30,
+        "pick_clustered_excess": 2.9,
+        "distinct_tickers": 14,
+        "reasons": ["Because the numbers said so."],
+        "diagnostic": None,
+    }
+    base.update(kw)
+    return base
+
+
+class TestNotifyScorecard:
+    def test_renders_the_transition_and_the_track(self):
+        with patch.object(notify, "send", side_effect=lambda t: t):
+            out = notify.notify_scorecard(_result("SCALE"), "STEADY")
+        assert "STEADY" in out and "SCALE" in out
+        assert "Autotrader" in out
+
+    def test_carries_the_confidence_interval_not_just_the_point_estimate(self):
+        # A verdict here argues for moving real money; a bare number would overstate what is known.
+        with patch.object(notify, "send", side_effect=lambda t: t):
+            out = notify.notify_scorecard(_result("SCALE"), "STEADY")
+        plain = out.replace("\\", "")  # MarkdownV2 escapes '+' and '.'
+        assert "+3.2%" in plain
+        assert "+0.4%" in plain and "+6.1%" in plain
+
+    def test_insufficient_data_lists_what_is_missing_and_an_eta(self):
+        result = _result("INSUFFICIENT_DATA", missing=["nav days 13/90"], eta_days=112)
+        with patch.object(notify, "send", side_effect=lambda t: t):
+            out = notify.notify_scorecard(result, "STEADY")
+        assert "nav days 13/90" in out
+        assert "112" in out
+
+    def test_tune_states_that_nothing_was_changed(self):
+        # Load-bearing: the module's promise is that it observes and never self-tunes.
+        result = _result("TUNE", diagnostic={"fingerprints": [
+            {"name": "cash-drag", "detail": "Only 65% of the account was invested."},
+        ]})
+        with patch.object(notify, "send", side_effect=lambda t: t):
+            out = notify.notify_scorecard(result, "STEADY")
+        assert "cash" in out.lower()
+        assert "no settings were changed" in out.lower()
+
+    def test_non_tune_verdicts_omit_the_disclaimer(self):
+        with patch.object(notify, "send", side_effect=lambda t: t):
+            out = notify.notify_scorecard(_result("SCALE"), "STEADY")
+        assert "no settings were changed" not in out.lower()
+
+    def test_markdown_is_converted_for_telegram(self):
+        with patch.object(notify, "send", side_effect=lambda t: t):
+            out = notify.notify_scorecard(_result("SCALE"), "STEADY")
+        assert "**" not in out
+
+    def test_first_verdict_renders_without_a_previous(self):
+        with patch.object(notify, "send", side_effect=lambda t: t):
+            out = notify.notify_scorecard(_result("SCALE"), None)
+        assert "SCALE" in out
+
+    def test_missing_statistics_do_not_crash_the_message(self):
+        result = _result("STEADY", exec_cum_excess_adj=None, pick_hit_rate=None,
+                         pick_clustered_excess=None, exec_ci_low=None, exec_ci_high=None)
+        with patch.object(notify, "send", side_effect=lambda t: t):
+            out = notify.notify_scorecard(result, "SCALE")
+        assert "n/a" in out
