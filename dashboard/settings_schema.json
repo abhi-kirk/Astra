@@ -558,7 +558,7 @@
       "locked": false,
       "editable": true,
       "type": "float",
-      "default": 0.3
+      "default": 0.15
     },
     {
       "key": "agent.max_deploy_per_run_pct",
@@ -576,7 +576,25 @@
       "locked": false,
       "editable": true,
       "type": "float",
-      "default": 0.25
+      "default": 0.4
+    },
+    {
+      "key": "agent.min_position_usd",
+      "section": "agent",
+      "field": "min_position_usd",
+      "tier": 1,
+      "group": "Autotrader (real money)",
+      "label": "Smallest worthwhile position",
+      "help": "The smallest dollar amount the Autotrader will put into any one stock. It buys fewer, properly-sized positions instead of splitting a small budget into many tiny ones. Anything you already own that sits below this gets topped up first \u2014 nothing is ever sold to reach it.",
+      "impact": "Higher means fewer but more meaningful holdings; lower spreads the same money across more names and risks positions too small to matter.",
+      "unit": "usd",
+      "min": 5,
+      "max": 500,
+      "step": 5,
+      "locked": false,
+      "editable": true,
+      "type": "float",
+      "default": 50.0
     },
     {
       "key": "paper.portfolio_size",

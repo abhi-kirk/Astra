@@ -311,8 +311,13 @@ class AgentConfig:
     # Sizing + pacing for the small cash sleeve. The brain sets each name's conviction weight;
     # the sleeve deploys a capped slice of remaining cash per run, split in proportion to weight,
     # and never below the reserve cushion — dry powder isn't idle (Robinhood Gold pays ~3.5% APY).
-    reserve_floor_pct: float = _cfg("AGENT_RESERVE_FLOOR_PCT", cast=float, default=0.30)      # keep ≥ this fraction of sleeve equity as cash
-    max_deploy_per_run_pct: float = _cfg("AGENT_MAX_DEPLOY_PER_RUN_PCT", cast=float, default=0.25)  # deploy ≤ this fraction of remaining cash per run
+    reserve_floor_pct: float = _cfg("AGENT_RESERVE_FLOOR_PCT", cast=float, default=0.15)      # keep ≥ this fraction of sleeve equity as cash
+    max_deploy_per_run_pct: float = _cfg("AGENT_MAX_DEPLOY_PER_RUN_PCT", cast=float, default=0.40)  # deploy ≤ this fraction of remaining cash per run
+    # Minimum meaningful position ($). The budget is spent in WHOLE lots of at least this size —
+    # funding fewer real positions beats splitting a small budget into dust (see docs/capital_rotation.md
+    # §11). A held position worth less than this is repaired to the floor (top-up) before any new
+    # entry is funded; nothing is ever sold to achieve it.
+    min_position_usd: float = _cfg("AGENT_MIN_POSITION_USD", cast=float, default=50.0)
     # Cash account: T+1 settlement + Good-Faith-Violation aware (block selling unsettled / same-day round-trips)
     account_is_cash: bool = _cfg("AGENT_ACCOUNT_IS_CASH", cast=bool, default=True)
     # Robinhood Agentic MCP (official execution endpoint) + its own encrypted OAuth token store

@@ -138,23 +138,78 @@ def _sleeve_budget(buying_power: float | None, equity: float | None) -> float:
     return round(max(0.0, min(above_floor, per_run)), 2)
 
 
-def _allocate_buys(buys: list[dict], budget: float, slots: int) -> None:
-    """Size today's buy mirrors together (the brain sets weights; the sleeve splits a paced
-    budget across them). Rank by conviction weight, keep the top `slots`, and split `budget`
-    in proportion to weight — higher conviction gets more (equal split if weights are absent).
-    Annotates each mirror in place with `dollars`; deferred/unfunded mirrors get 0.0."""
-    ranked = sorted(buys, key=lambda m: m.get("weight") or 0.0, reverse=True)
-    funded, deferred = ranked[: max(0, slots)], ranked[max(0, slots):]
-    for m in deferred:
+def _position_value(positions: dict[str, dict], ticker: str) -> float:
+    """Approximate current value of a held sleeve position, as shares × avg_cost.
+
+    Robinhood's positions payload carries no per-position market value (see
+    `agent_broker.extract_positions`), so cost basis is the proxy. It is close enough for a
+    size floor — the sleeve's job here is "is this position dust or real", not precise marking —
+    and it avoids a quote call per ticker on every run.
+    """
+    p = positions.get(ticker) or {}
+    return (p.get("shares") or 0.0) * (p.get("avg_cost") or 0.0)
+
+
+def _allocate_buys(buys: list[dict], budget: float, slots: int,
+                   positions: dict[str, dict] | None = None) -> None:
+    """Size today's buy mirrors together, in WHOLE lots of at least `min_position_usd`.
+
+    The old behaviour split `budget` proportionally across the top `slots` names, so the number
+    of funded names was fixed regardless of budget size — an $84 budget became six ~$14 lots and
+    fragmented the sleeve (docs/capital_rotation.md §11). Now the budget buys whole positions:
+
+      1. TOP-UPS first. A mirror whose ticker is already held BELOW the minimum is repaired to
+         the floor, funded with exactly its shortfall. Repairing the book precedes widening it.
+         Only names the brain is *already* signalling a buy on are eligible — the sleeve never
+         invents a trade the brain did not authorize, so this stays a pure mirror.
+      2. NEW LOTS with what remains: `floor(remaining / min_position)` names, strongest weight
+         first, each guaranteed the minimum and sharing any surplus in proportion to weight.
+      3. Everything else DEFERS to 0.0 — not lost, just first in line next run, by which point
+         the budget has recovered.
+
+    Annotates each mirror in place with `dollars` (and `topup` for reporting).
+    """
+    positions = positions or {}
+    minimum = config.agent.min_position_usd
+    slots = max(0, slots)
+    for m in buys:
         m["dollars"] = 0.0
-    total = sum((m.get("weight") or 0.0) for m in funded)
-    n = len(funded)
-    for m in funded:
-        if budget <= 0 or n == 0:
-            m["dollars"] = 0.0
-            continue
-        share = (m.get("weight") or 0.0) / total if total > 0 else 1.0 / n
-        m["dollars"] = round(budget * share, 2)
+
+    def _weight(m: dict) -> float:
+        return m.get("weight") or 0.0
+
+    # Partition: held-below-minimum (repair) vs everything else (new lot / normal add).
+    topups, entries = [], []
+    for m in buys:
+        shortfall = minimum - _position_value(positions, m["ticker"])
+        if m["ticker"] in positions and shortfall > 0.01:
+            m["topup"] = round(shortfall, 2)
+            topups.append(m)
+        else:
+            entries.append(m)
+
+    remaining = max(0.0, budget)
+    used_slots = 0
+
+    # 1. Repair pass — strongest conviction first, cheapest first as the tie-break.
+    for m in sorted(topups, key=lambda x: (-_weight(x), x["topup"])):
+        if used_slots >= slots:
+            break
+        if m["topup"] <= remaining:
+            m["dollars"] = m["topup"]
+            remaining = round(remaining - m["topup"], 2)
+            used_slots += 1
+
+    # 2. New lots — only whole ones, strongest weight first.
+    free_slots = max(0, slots - used_slots)
+    n_lots = min(int(remaining // minimum) if minimum > 0 else free_slots, free_slots)
+    funded = sorted(entries, key=_weight, reverse=True)[:n_lots]
+    if funded:
+        surplus = max(0.0, remaining - minimum * len(funded))
+        total_w = sum(_weight(m) for m in funded)
+        for m in funded:
+            share = (_weight(m) / total_w) if total_w > 0 else 1.0 / len(funded)
+            m["dollars"] = round(minimum + surplus * share, 2)
 
 
 def run(run_date: str | None = None, broker: AgenticBroker | None = None,
@@ -276,14 +331,16 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
     ]
     sleeve_budget = _sleeve_budget(port["buying_power"], equity)
     summary["account"]["budget"] = sleeve_budget
-    _allocate_buys(pending_buys, sleeve_budget, buy_slots)
+    _allocate_buys(pending_buys, sleeve_budget, buy_slots, positions)
     sleeve = {
         "budget": sleeve_budget,
         "buy_slots": buy_slots,
         "buying_power": port["buying_power"],
         "equity": equity,
+        "min_position_usd": config.agent.min_position_usd,
         "allocations": [
-            {"ticker": m["ticker"], "weight": m.get("weight"), "dollars": m.get("dollars")}
+            {"ticker": m["ticker"], "weight": m.get("weight"), "dollars": m.get("dollars"),
+             "topup": m.get("topup")}
             for m in pending_buys
         ],
     }

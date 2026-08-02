@@ -336,6 +336,16 @@ _DIALS: list[Knob] = [
              "Paces buying out over weeks instead of emptying the account at once.",
         impact="Higher invests faster and concentrates your entry into fewer days.",
     ),
+    Knob(
+        "agent.min_position_usd", DIAL, "Smallest worthwhile position", group=_G_AUTO,
+        unit="usd", min=5, max=500, step=5,
+        help="The smallest dollar amount the Autotrader will put into any one stock. It buys "
+             "fewer, properly-sized positions instead of splitting a small budget into many "
+             "tiny ones. Anything you already own that sits below this gets topped up first — "
+             "nothing is ever sold to reach it.",
+        impact="Higher means fewer but more meaningful holdings; lower spreads the same money "
+               "across more names and risks positions too small to matter.",
+    ),
 
     # ── Paper track ───────────────────────────────────────────────────────────
     Knob(

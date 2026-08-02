@@ -121,8 +121,8 @@ def test_live_places_marketable_limit(wired, monkeypatch):
     assert len(fb.reviews) == 1 and len(fb.places) == 1
     p = fb.places[0]
     assert p["symbol"] == "RKLB" and p["side"] == "buy" and p["type"] == "market"
-    # Sole buy takes the whole run budget: min(cash − 30% reserve, 25% of cash) = min(700, 250).
-    assert p["dollar_amount"] == "250.00"
+    # Sole buy takes the whole run budget: min(cash − 15% reserve, 40% of cash) = min(850, 400).
+    assert p["dollar_amount"] == "400.00"
     assert "quantity" not in p and "ref_id" in p
     logged = logs[-1]
     assert logged["status"] == "submitted"
@@ -427,17 +427,26 @@ class TestSleeveBudget:
 
 
 class TestAllocateBuys:
-    def test_split_proportional_to_weight(self):
+    """Whole-lot allocation (docs/capital_rotation.md §11): the budget buys entire positions of
+    at least `min_position_usd`, repairs sub-minimum holdings first, and defers the rest."""
+
+    @pytest.fixture(autouse=True)
+    def _min_lot(self, monkeypatch):
+        monkeypatch.setattr(config.agent, "min_position_usd", 50.0)
+
+    def test_surplus_splits_by_weight_above_the_minimum(self):
         buys = [{"ticker": "NVDA", "weight": 0.08}, {"ticker": "PL", "weight": 0.04}]
         ex._allocate_buys(buys, budget=300.0, slots=6)
         by = {b["ticker"]: b["dollars"] for b in buys}
-        assert by["NVDA"] == 200.0 and by["PL"] == 100.0  # 2:1 ordering preserved
+        # Each gets the $50 floor; the $200 surplus splits 2:1 → 183.33 / 116.67.
+        assert by["NVDA"] == 183.33 and by["PL"] == 116.67
+        assert by["NVDA"] > by["PL"]  # conviction ordering preserved
 
     def test_slots_defer_lowest_conviction(self):
         buys = [{"ticker": "NVDA", "weight": 0.08}, {"ticker": "PL", "weight": 0.04}]
         ex._allocate_buys(buys, budget=300.0, slots=1)
         by = {b["ticker"]: b["dollars"] for b in buys}
-        assert by["NVDA"] == 300.0 and by["PL"] == 0.0  # only the top-ranked name funded
+        assert by["NVDA"] == 300.0 and by["PL"] == 0.0
 
     def test_equal_split_when_weights_absent(self):
         buys = [{"ticker": "A"}, {"ticker": "B"}]
@@ -449,6 +458,74 @@ class TestAllocateBuys:
         ex._allocate_buys(buys, budget=0.0, slots=6)
         assert buys[0]["dollars"] == 0.0
 
+    # ── whole lots, never dust ────────────────────────────────────────────────
+    def test_budget_funds_whole_lots_not_fragments(self):
+        """The regression this whole change exists for: an $84 budget across 6 names used to
+        become six ~$14 lots. It must now fund one real position and defer the rest."""
+        buys = [{"ticker": t, "weight": w} for t, w in
+                [("A", 0.08), ("B", 0.04), ("C", 0.04), ("D", 0.015), ("E", 0.015), ("F", 0.015)]]
+        ex._allocate_buys(buys, budget=84.32, slots=6)
+        funded = [b for b in buys if b["dollars"] > 0]
+        assert len(funded) == 1 and funded[0]["ticker"] == "A"
+        assert funded[0]["dollars"] == 84.32
+
+    def test_never_emits_a_sub_minimum_lot(self):
+        buys = [{"ticker": t, "weight": 0.05} for t in "ABCDEF"]
+        ex._allocate_buys(buys, budget=175.0, slots=6)
+        assert all(b["dollars"] == 0.0 or b["dollars"] >= 50.0 for b in buys)
+        assert sum(1 for b in buys if b["dollars"] > 0) == 3  # floor(175/50)
+
+    def test_budget_below_one_lot_funds_nothing(self):
+        buys = [{"ticker": "A", "weight": 0.05}]
+        ex._allocate_buys(buys, budget=49.99, slots=6)
+        assert buys[0]["dollars"] == 0.0
+
+    # ── top-up repair pass ────────────────────────────────────────────────────
+    def test_subminimum_holding_is_topped_up_to_the_floor(self):
+        buys = [{"ticker": "HSAI", "weight": 0.015}]
+        positions = {"HSAI": {"shares": 0.398, "avg_cost": 15.5}}  # ≈ $6.17
+        ex._allocate_buys(buys, budget=300.0, slots=6, positions=positions)
+        assert buys[0]["dollars"] == pytest.approx(43.83, abs=0.01)  # exactly the shortfall
+        assert buys[0]["topup"] == pytest.approx(43.83, abs=0.01)
+
+    def test_topups_precede_new_entries(self):
+        """Repair the book before widening it — even when the new name has higher conviction."""
+        buys = [{"ticker": "NEW", "weight": 0.09}, {"ticker": "TER", "weight": 0.015}]
+        positions = {"TER": {"shares": 0.0507, "avg_cost": 316.51}}  # ≈ $16.04
+        ex._allocate_buys(buys, budget=60.0, slots=1, positions=positions)
+        by = {b["ticker"]: b["dollars"] for b in buys}
+        assert by["TER"] == pytest.approx(33.96, abs=0.01)
+        assert by["NEW"] == 0.0  # single slot consumed by the repair
+
+    def test_healthy_holding_is_not_treated_as_a_topup(self):
+        buys = [{"ticker": "NVDA", "weight": 0.08}]
+        positions = {"NVDA": {"shares": 0.909, "avg_cost": 206.98}}  # ≈ $188, well above floor
+        ex._allocate_buys(buys, budget=200.0, slots=6, positions=positions)
+        assert "topup" not in buys[0]
+        assert buys[0]["dollars"] == 200.0  # normal add-lot, full budget
+
+    def test_topup_skipped_when_budget_cannot_cover_it(self):
+        buys = [{"ticker": "CRDO", "weight": 0.02}]
+        positions = {"CRDO": {"shares": 0.0153, "avg_cost": 211.76}}  # ≈ $3.23, needs ~$46.77
+        ex._allocate_buys(buys, budget=20.0, slots=6, positions=positions)
+        assert buys[0]["dollars"] == 0.0  # a partial top-up would just make more dust
+
+    def test_repair_then_deploy_remaining_on_new_lots(self):
+        buys = [{"ticker": "TER", "weight": 0.015}, {"ticker": "NEW", "weight": 0.09}]
+        positions = {"TER": {"shares": 0.0507, "avg_cost": 316.51}}  # needs ≈ $33.96
+        ex._allocate_buys(buys, budget=150.0, slots=6, positions=positions)
+        by = {b["ticker"]: b["dollars"] for b in buys}
+        assert by["TER"] == pytest.approx(33.96, abs=0.01)
+        assert by["NEW"] == pytest.approx(116.04, abs=0.01)  # the whole remainder, ≥ $50
+
+    def test_unheld_ticker_is_never_a_topup(self):
+        """A name the sleeve doesn't hold is a new entry, not a repair — even though its
+        position value reads as $0."""
+        buys = [{"ticker": "IRDM", "weight": 0.04}]
+        ex._allocate_buys(buys, budget=120.0, slots=6, positions={"NVDA": {"shares": 1, "avg_cost": 200}})
+        assert "topup" not in buys[0]
+        assert buys[0]["dollars"] == 120.0
+
 
 def test_higher_conviction_buy_gets_more_dollars(wired, monkeypatch):
     """End-to-end: two same-day buys split the paced budget by conviction weight."""
@@ -458,11 +535,11 @@ def test_higher_conviction_buy_gets_more_dollars(wired, monkeypatch):
         {"id": 41, "ticker": "NVDA", "action": "buy", "suggested_position_pct": 0.08},
         {"id": 42, "ticker": "PL", "action": "buy", "suggested_position_pct": 0.04},
     ]
-    fb = FakeBroker()  # $1000 → run budget $250, split 2:1
+    fb = FakeBroker()  # $1000 → run budget $400; each gets the $50 floor, surplus splits 2:1
     ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
     dollars = {p["symbol"]: float(p["dollar_amount"]) for p in fb.places}
     assert dollars["NVDA"] > dollars["PL"]
-    assert dollars["NVDA"] == 166.67 and dollars["PL"] == 83.33
+    assert dollars["NVDA"] == 250.0 and dollars["PL"] == 150.0
 
 
 # ---------------------------------------------------------------------------
