@@ -26,6 +26,8 @@ dependencies = [
 dev = [
     "pytest>=7.4",
     "pytest-mock>=3.12",
+    # Workflow parity guard (tests/test_settings.py) parses .github/workflows/*.yml.
+    "pyyaml>=6",
     "ruff>=0.15",
     "pyright>=1.1.400",
 ]

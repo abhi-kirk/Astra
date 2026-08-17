@@ -378,3 +378,53 @@ def test_recording_effective_preserves_the_override_map(monkeypatch):
     assert captured["content"]["values"] == {"brain.f_global": 0.2}
     assert captured["content"]["effective"] == {"brain.f_global": 0.2}
     assert captured["content"]["effective_at"]
+
+
+# ── Workflow parity (the environment layer must look the same to every writer) ─
+
+def _snapshot_writing_workflow_steps():
+    """Every workflow step that runs a module calling settings.load_and_apply().
+
+    Derived from the source, not hardcoded, so a new caller is picked up automatically.
+    """
+    import pathlib
+    import re
+
+    import yaml
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    modules = {
+        f"src.{p.stem}" for p in (root / "src").glob("*.py")
+        if "load_and_apply" in p.read_text()
+    } - {"src.settings"}
+    assert modules, "no load_and_apply callers found — did the settings entrypoint move?"
+
+    steps = []
+    for wf in sorted((root / ".github" / "workflows").glob("*.yml")):
+        spec = yaml.safe_load(wf.read_text())
+        for job in (spec.get("jobs") or {}).values():
+            for step in job.get("steps") or []:
+                run = step.get("run") or ""
+                if any(re.search(rf"python -m {re.escape(m)}\b", run) for m in modules):
+                    steps.append((wf.name, step.get("name") or run.strip()[:40], step.get("env") or {}))
+    return steps
+
+
+def test_settings_writing_workflows_share_the_env_layer():
+    """Every production run that calls load_and_apply() stamps the SHARED `effective`
+    snapshot the dashboard reports as the truth about production. A workflow missing an
+    env-only switch resolves it to its code default and clobbers the truthful value — which
+    is how the dashboard came to show the Autotrader OFF while it was live (Daily Analysis
+    and Weekly Exploration overwrote the Autotrader's own stamp). So every snapshot-writing
+    workflow must be handed the same env-only switches, whether or not it uses them."""
+    required = {"AGENT_TRADING_ENABLED"}
+    steps = _snapshot_writing_workflow_steps()
+    assert steps, "no workflow runs a settings-writing module — parity guard is not testing anything"
+    missing = [
+        (wf, step, sorted(required - set(env)))
+        for wf, step, env in steps if required - set(env)
+    ]
+    assert not missing, (
+        "workflow(s) write the effective settings snapshot without the full environment "
+        f"layer, so the dashboard would misreport production: {missing}"
+    )

@@ -33,6 +33,10 @@ jobs:
           TAVILY_MCP_URL: ${{ secrets.TAVILY_MCP_URL }}
           ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          # Unused by this run — passed so the "effective" settings snapshot it stamps
+          # reports the same Autotrader switch the Autotrader itself resolves. See
+          # tests/test_settings.py::test_settings_writing_workflows_share_the_env_layer.
+          AGENT_TRADING_ENABLED: ${{ secrets.AGENT_TRADING_ENABLED }}
         run: python -m src.exploration
 
       # Output goes to Supabase exploration_candidates table only — no files committed.

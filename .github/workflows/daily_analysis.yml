@@ -52,6 +52,11 @@ jobs:
           ROBINHOOD_ACCOUNT_NUMBER: ${{ secrets.ROBINHOOD_ACCOUNT_NUMBER }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Unused by this run (it never places an order), but every run that calls
+          # settings.load_and_apply() stamps the shared "effective" snapshot the dashboard
+          # reads. Without the secret this run would resolve the switch to its code default
+          # (off) and the UI would report the Autotrader as OFF while it is live.
+          AGENT_TRADING_ENABLED: ${{ secrets.AGENT_TRADING_ENABLED }}
         run: python -m src.agent --mode simulation
 
       # Analysis output goes to Supabase only — no files committed back to repo.
