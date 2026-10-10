@@ -37,10 +37,10 @@ class SupabaseConfig:
     anon_key: str = _cfg("SUPABASE_ANON_KEY", default="")        # public read — safe for the dashboard JS
 
 
-# ── External services (Anthropic + MCP data providers) ─────────────────────────
+# ── External services (Grok + MCP data providers) ──────────────────────────────
 @dataclass
 class ServicesConfig:
-    anthropic_api_key: str = _cfg("ANTHROPIC_API_KEY", default="")            # LLM for advisor + exploration reasoning
+    grok_api_key: str = _cfg("GROK_API_KEY", default="")                      # xAI key for advisor + exploration + contextual
     tavily_mcp_url: str = _cfg("TAVILY_MCP_URL", default="")                  # hosted web-search MCP endpoint
     alpha_vantage_api_key: str = _cfg("ALPHA_VANTAGE_API_KEY", default="")    # news sentiment / earnings / company-overview MCP
     # Community-hosted, no auth. Falls back gracefully if unavailable.
@@ -54,12 +54,13 @@ class ServicesConfig:
 # ── AI reasoning ───────────────────────────────────────────────────────────────
 @dataclass
 class ReasoningConfig:
-    model: str = "claude-opus-4-8"  # advisor narrative-reasoning model
-    # Adaptive thinking counts toward max_tokens — keep headroom (still <16k, so non-streaming is safe).
-    max_tokens: int = 8000
-    advisor_effort: str = "high"  # output_config.effort: low|medium|high|max
+    model: str = "grok-4.7"  # advisor narrative model (xAI flagship; same $2/$6 per 1M as grok-4.6)
+    # max_output_tokens covers thinking AND the note. Reasoning cannot be turned off.
+    max_tokens: int = 16384
+    # medium: high effort on a tool loop ran ~200s per turn on the shop and blew the wall clock.
+    advisor_effort: str = "medium"  # reasoning.effort: low|medium|high|xhigh (max is accepted as xhigh)
     tavily_max_searches: int = 5  # web searches per advisor run
-    # Alpha Vantage free tier: 25 calls/day, 5 calls/min. Claude uses tools selectively —
+    # Alpha Vantage free tier: 25 calls/day, 5 calls/min. The model uses tools selectively —
     # cap to avoid blowing the daily limit in one run.
     alpha_vantage_max_calls: int = 8
     # FMP free tier: 250 calls/day. Analyst data (price targets, grades) only available for
@@ -68,8 +69,8 @@ class ReasoningConfig:
 
 
 # ── Client-side MCP tool loop ──────────────────────────────────────────────────
-# We run Claude's tool-use loop ourselves (see src/mcp_loop.py) instead of the server-side
-# MCP connector, so each tool call is individually bounded and observable.
+# We run the model's tool-use loop ourselves (see src/mcp_loop.py) instead of a
+# server-side connector, so each tool call is individually bounded and observable.
 @dataclass
 class ToolLoopConfig:
     advisor_tool_timeout: int = 45      # per MCP tool call, seconds
@@ -341,9 +342,9 @@ class AgentConfig:
 # ── Exploration (weekly discovery run) ─────────────────────────────────────────
 @dataclass
 class ExplorationConfig:
-    model: str = "claude-opus-4-8"  # weekly discovery model
-    max_tokens: int = 8000          # response token cap
-    effort: str = "medium"          # output_config.effort: low|medium|high|max
+    model: str = "grok-4.7"  # weekly discovery model
+    max_tokens: int = 16384  # thinking + the candidate list
+    effort: str = "medium"   # reasoning.effort: low|medium|high|xhigh
     max_searches: int = 2           # web searches per theme
     max_av_calls: int = 8           # Alpha Vantage calls per run
     max_fmp_calls: int = 15         # FMP calls per run
@@ -354,21 +355,33 @@ class ExplorationConfig:
 # proposals via a forced tool call. Reuses the reasoning model; its own effort/round budget.
 @dataclass
 class ContextualConfig:
-    model: str = "claude-opus-4-8"
-    max_tokens: int = 8000
-    effort: str = "high"    # output_config.effort
+    model: str = "grok-4.7"
+    max_tokens: int = 16384
+    effort: str = "medium"  # reasoning.effort; high ate the turn budget on tool loops
     max_rounds: int = 6     # gather/reason tool rounds before the forced emit
     max_searches: int = 4   # web searches per run
 
 
-# ── Claude API call timeouts ───────────────────────────────────────────────────
+# ── Grok call timeouts ─────────────────────────────────────────────────────────
 # Wall-clock backstop for the whole client-side tool loop. Each tool call is bounded by
-# tool_loop.advisor_tool_timeout, so these should now rarely fire.
+# tool_loop.advisor_tool_timeout; each model turn is bounded by grok.timeout_s.
 @dataclass
 class TimeoutsConfig:
-    advisor: int = 300      # seconds — 5 min backstop
-    exploration: int = 300  # seconds — 5 min backstop
-    contextual: int = 300   # seconds — 5 min backstop
+    advisor: int = 600      # seconds
+    exploration: int = 600  # seconds
+    contextual: int = 600   # seconds
+
+
+# ── Grok / xAI Responses API ───────────────────────────────────────────────────
+# Per-turn ceiling and the retry budget around it. A timeout is itself a long failure,
+# so total_s stops a retry from starting once the budget is already spent.
+@dataclass
+class GrokConfig:
+    api_url: str = "https://api.x.ai/v1/responses"
+    timeout_s: int = 240
+    retry_attempts: int = 3
+    retry_base_delay_s: float = 2.0
+    total_s: int = 500
 
 
 # ── Notifications (Telegram) ───────────────────────────────────────────────────
@@ -436,5 +449,6 @@ agent = AgentConfig()
 exploration = ExplorationConfig()
 contextual = ContextualConfig()
 timeouts = TimeoutsConfig()
+grok = GrokConfig()
 telegram = TelegramConfig()
 scorecard = ScorecardConfig()

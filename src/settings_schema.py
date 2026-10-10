@@ -76,7 +76,7 @@ def _plumbing(*keys: str) -> list[Knob]:
 # ══════════════════════════════════════════════════════════════════════════════
 _SECRETS: list[Knob] = _secret(
     "supabase.url", "supabase.service_key", "supabase.anon_key",
-    "services.anthropic_api_key", "services.tavily_mcp_url", "services.alpha_vantage_api_key",
+    "services.grok_api_key", "services.tavily_mcp_url", "services.alpha_vantage_api_key",
     "services.sec_edgar_mcp_url", "services.fmp_api_key", "services.sec_user_agent",
     "robinhood.account_number", "robinhood.token_key", "robinhood.tokens_file",
     "agent.account_number", "agent.rh_mcp_url", "agent.rh_token_key",
@@ -834,6 +834,7 @@ _PLUMBING: list[Knob] = _plumbing(
     "contextual.model", "contextual.max_tokens", "contextual.effort",
     "contextual.max_rounds", "contextual.max_searches",
     "timeouts.advisor", "timeouts.exploration", "timeouts.contextual",
+    "grok.api_url", "grok.timeout_s", "grok.retry_attempts", "grok.retry_base_delay_s", "grok.total_s",
     "scorecard.pick_horizon_tolerance_days", "scorecard.max_join_gap_days",
     "scorecard.bootstrap_samples", "scorecard.bootstrap_block", "scorecard.bootstrap_seed",
     "scorecard.benchmark_symbol", "scorecard.history_days",

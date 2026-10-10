@@ -1,12 +1,10 @@
 """
-MCP server registry for ASTRA's Claude tool loop.
+MCP server registry for ASTRA's Grok tool loop.
 
 Each integration is a function returning a `ServerSpec` (or None if unconfigured).
-ASTRA runs Claude's tool-use loop **client-side** (see src/mcp_loop.py): we open the
-MCP connection ourselves, list its tools, expose them to Claude as ordinary tool
-schemas, and dispatch each call with our own per-tool timeout + circuit breaker. This
-replaced the server-side `mcp_servers=` connector, which ran the loop opaquely on
-Anthropic's infra with no per-tool timeout — one slow server stalled the whole call.
+ASTRA runs the tool-use loop client-side (see src/mcp_loop.py): we open the MCP
+connection ourselves, list its tools, expose them to Grok as ordinary function
+schemas, and dispatch each call with our own per-tool timeout + circuit breaker.
 
 Usage:
     specs = mcp.advisor_specs()
@@ -17,8 +15,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
-
-from anthropic.types import TextBlock
 
 from src import config
 
@@ -44,7 +40,7 @@ def _tavily() -> ServerSpec | None:
 def _alpha_vantage() -> ServerSpec | None:
     if not config.services.alpha_vantage_api_key:
         return None
-    # Free tier: 25 calls/day, 5 calls/min — the prompt instructs Claude to stay within limits.
+    # Free tier: 25 calls/day, 5 calls/min — the prompt instructs the model to stay within limits.
     # Auth: API key passed as URL query param (legacy method; OAuth requires interactive flow).
     url = f"https://mcp.alphavantage.co/mcp?apikey={config.services.alpha_vantage_api_key}"
     return ServerSpec(
@@ -91,13 +87,12 @@ def exploration_specs() -> list[ServerSpec]:
 
 
 def extract_text(message: Any) -> str:
-    """Join all text blocks of a standard Anthropic Messages response.
-
-    The client-side loop's final turn is clean markdown (no inlined tool XML), so this is
-    a straight concatenation of the ``text`` blocks — no beta-connector stripping needed.
-    """
-    parts = [b.text for b in getattr(message, "content", []) if isinstance(b, TextBlock)]
-    return "\n".join(p for p in parts if p).strip()
+    """Join the text blocks of a model message. Tool-use and reasoning blocks are skipped."""
+    parts = []
+    for block in getattr(message, "content", []) or []:
+        if getattr(block, "type", None) == "text" and getattr(block, "text", None):
+            parts.append(block.text)
+    return "\n".join(parts).strip()
 
 
 def search_context(

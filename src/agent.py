@@ -1,14 +1,14 @@
 """
 Agent orchestrator: runs the full analysis pipeline and produces output.
 
-In simulation mode (Phase 1): fetches data, screens positions, calls Claude
+In simulation mode (Phase 1): fetches data, screens positions, calls Grok
 for narrative reasoning, logs decisions, writes analysis JSON.
 
 Usage:
     python -m src.agent                    # simulation run
     python -m src.agent --mode live        # Phase 2: includes trade approval flow
     python -m src.agent --ticker RKLB      # analyze a single ticker
-    python -m src.agent --no-ai            # skip Claude API call (mechanical only)
+    python -m src.agent --no-ai            # skip the Grok call (mechanical only)
 """
 
 import argparse
@@ -46,8 +46,8 @@ def call_claude_reasoning(
     Runs the tool loop client-side (src.mcp_loop) so each MCP tool call is individually
     timed out and observable. Returns (advisor_note, token_usage, tool_log).
     """
-    if not config.services.anthropic_api_key:
-        return ("Claude API key not set — mechanical signals only.", None, [])
+    if not config.services.grok_api_key:
+        return ("Grok API key not set — mechanical signals only.", None, [])
 
     buy_labels = buy_labels or {}
     action_groups: dict[str, list] = {}
@@ -116,7 +116,7 @@ def call_claude_reasoning(
             failure_limit=config.tool_loop.mcp_tool_failure_limit,
         ),
         config.timeouts.advisor,
-        label="Advisor Claude call",
+        label="Advisor Grok call",
     )
     if not text:
         return ("No advisor note generated.", usage, tool_log)
@@ -359,20 +359,20 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
     advisor_note = ""
     advisor_tool_log: list[dict[str, Any]] = []
     if use_ai and any(s["action"] in ("buy", "sell", "watch") for s in signals):
-        logger.info(f"Calling Claude for narrative reasoning  (model={config.reasoning.model})")
+        logger.info(f"Calling Grok for narrative reasoning  (model={config.reasoning.model})")
         try:
             with obs.phase("advisor"):
                 advisor_note, advisor_usage, advisor_tool_log = call_claude_reasoning(
                     signals, portfolio, market_data, history_context, convictions, buy_labels
                 )
             obs.record_advisor(config.reasoning.model, advisor_usage)
-            obs.record_service("anthropic", ok=bool(advisor_note))
+            obs.record_service("grok", ok=bool(advisor_note))
         except TimeoutError:
-            logger.warning(f"Advisor Claude call timed out after {config.timeouts.advisor}s — pipeline continues without advisor note")
-            obs.record_service("anthropic", ok=False, detail="timeout")
+            logger.warning(f"Advisor Grok call timed out after {config.timeouts.advisor}s — pipeline continues without advisor note")
+            obs.record_service("grok", ok=False, detail="timeout")
         except Exception as e:
-            logger.error("Advisor Claude call failed — pipeline continues without advisor note", exc_info=True)
-            obs.record_service("anthropic", ok=False, detail=str(e))
+            logger.error("Advisor Grok call failed — pipeline continues without advisor note", exc_info=True)
+            obs.record_service("grok", ok=False, detail=str(e))
 
     # Log signals
     action_groups: dict[str, list] = {}
@@ -574,6 +574,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="ASTRA analysis run")
     parser.add_argument("--mode", choices=["simulation", "live"], default="simulation")
     parser.add_argument("--ticker", help="Analyze a single ticker only")
-    parser.add_argument("--no-ai", action="store_true", help="Skip Claude API call")
+    parser.add_argument("--no-ai", action="store_true", help="Skip the Grok call")
     args = parser.parse_args()
     run(mode=args.mode, single_ticker=args.ticker, use_ai=not args.no_ai)

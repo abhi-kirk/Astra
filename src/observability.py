@@ -22,19 +22,17 @@ from src.db import get_client
 
 logger = logging.getLogger(__name__)
 
-# Anthropic pricing, $ per token (input, output). Source: claude-api skill, Jun 2026.
+# xAI pricing, $ per token (input, output), under the 200k-token tier.
+# Source: docs.x.ai model pages, Oct 2026. Above 200k the rate doubles; our prompts do not.
 _PRICING = {
-    "claude-sonnet-4-6": (3.0e-6, 15.0e-6),
-    "claude-sonnet-5":   (3.0e-6, 15.0e-6),
-    "claude-opus-4-8":   (5.0e-6, 25.0e-6),
-    "claude-opus-4-7":   (5.0e-6, 25.0e-6),
-    "claude-haiku-4-5":  (1.0e-6,  5.0e-6),
+    "grok-4.7": (2.0e-6, 6.0e-6),
+    "grok-4.6": (2.0e-6, 6.0e-6),
 }
-_DEFAULT_PRICE = (3.0e-6, 15.0e-6)  # Sonnet-tier fallback for unknown models
+_DEFAULT_PRICE = (2.0e-6, 6.0e-6)
 
 
 def estimate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
-    """Approximate $ cost of one Claude call from its token usage."""
+    """Approximate $ cost of one Grok call from its token usage."""
     price_in, price_out = _PRICING.get(model, _DEFAULT_PRICE)
     return round(tokens_in * price_in + tokens_out * price_out, 4)
 
@@ -68,7 +66,7 @@ class RunObserver:
         self.metrics.update(kv)
 
     def record_advisor(self, model: str, usage) -> None:
-        """Capture advisor Claude model + token usage + estimated cost."""
+        """Capture advisor model + token usage + estimated cost."""
         self.metrics["advisor_model"] = model
         tin = getattr(usage, "input_tokens", None) if usage else None
         tout = getattr(usage, "output_tokens", None) if usage else None

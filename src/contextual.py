@@ -157,8 +157,8 @@ def reason(signals: list[dict], market_data: dict[str, dict], market_ctx: dict, 
 
     Only judgment/hybrid plays are reasoned here (quant plays are handled deterministically by the
     caller). Returns [] on any failure — the caller then falls back to `hybrid_bases`."""
-    if not config.services.anthropic_api_key:
-        logger.info("Contextual layer: no ANTHROPIC_API_KEY — skipping LLM reasoning")
+    if not config.services.grok_api_key:
+        logger.info("Contextual layer: no GROK_API_KEY — skipping LLM reasoning")
         return []
 
     prompt = _build_prompt(signals, market_data, market_ctx, enabled_plays, hybrid_bases)
@@ -175,7 +175,7 @@ def reason(signals: list[dict], market_data: dict[str, dict], market_ctx: dict, 
             failure_limit=config.tool_loop.mcp_tool_failure_limit,
         ),
         config.timeouts.contextual,
-        label="Contextual reasoning Claude call",
+        label="Contextual reasoning Grok call",
     )
     proposals = _validate(payload or {}, signals, enabled_plays, convictions)
     logger.info("Contextual layer: %d validated LLM proposal(s)", len(proposals))

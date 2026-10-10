@@ -56,7 +56,7 @@ def setup(level: str = "INFO") -> None:
     root.addHandler(fh)
 
     # Silence noisy third-party loggers
-    for noisy in ("httpx", "httpcore", "hpack", "anthropic"):
+    for noisy in ("httpx", "httpcore", "hpack", "urllib3"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 

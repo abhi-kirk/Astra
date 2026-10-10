@@ -118,8 +118,8 @@ def call_claude_exploration(
     Call Claude with the exploration prompt + all MCP tools.
     Returns the raw text response (parse_candidates extracts the JSON).
     """
-    if not config.services.anthropic_api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY not set")
+    if not config.services.grok_api_key:
+        raise RuntimeError("GROK_API_KEY not set")
 
     themes_detail   = _build_themes_detail(convictions)
     theme_keys      = list(convictions.get("themes", {}).keys())
@@ -154,7 +154,7 @@ def call_claude_exploration(
             failure_limit=config.tool_loop.mcp_tool_failure_limit,
         ),
         config.timeouts.exploration,
-        label="Exploration Claude call",
+        label="Exploration Grok call",
     )
     return text or ""
 
@@ -289,15 +289,15 @@ def run() -> None:
         return
     logger.info(f"Active themes: {', '.join(active_themes)}")
 
-    logger.info(f"Calling Claude for candidate discovery  (model={config.exploration.model})")
+    logger.info(f"Calling Grok for candidate discovery  (model={config.exploration.model})")
     try:
-        with timer("Exploration Claude call", logger):
+        with timer("Exploration Grok call", logger):
             raw_text = call_claude_exploration(
                 convictions, portfolio_tickers, exclusion_tickers, already_tracked
             )
         candidates = parse_candidates(raw_text)
     except Exception as exc:
-        logger.exception(f"Claude exploration call failed: {exc}")
+        logger.exception(f"Grok exploration call failed: {exc}")
         notify.send(notify.markdownify(
             f"🔭 **ASTRA Exploration** — discovery run failed: `{str(exc)[:200]}`. "
             "No candidates screened this week."

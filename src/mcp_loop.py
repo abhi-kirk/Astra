@@ -1,20 +1,16 @@
 """
-Client-side Claude tool loop.
+Client-side Grok tool loop.
 
-We drive Claude's agentic tool-use loop ourselves instead of handing it to Anthropic's
-server-side MCP connector. That connector ran the loop opaquely on Anthropic's infra with
-no per-tool timeout, so a single slow MCP server stalled the whole non-streaming call until
-our wall-clock wrapper fired — returning an empty advisor note. Here we hold the MCP
-connections, expose their tools to Claude as ordinary tool schemas, and execute every
-`tool_use` in-process with:
+We hold the MCP connections, expose their tools to Grok as ordinary function schemas,
+and execute every ``tool_use`` in-process with:
 
-  - a per-tool timeout (`tool_timeout`) — a hung tool dies fast; Claude gets an error result
-    and still finishes the note;
-  - a circuit breaker (`failure_limit`) — a repeatedly-failing server is disabled for the run;
+  - a per-tool timeout (`tool_timeout`): a hung tool dies fast; the model gets an error
+    result and still finishes the note;
+  - a circuit breaker (`failure_limit`): a repeatedly-failing server is disabled for the run;
   - full logging + a returned `tool_log` for visibility.
 
-Uses the GA `client.messages.create(..., tools=...)` surface (no beta header). Adaptive
-thinking + effort are passed via `extra_body` so the payload is version-independent.
+The wire format lives in src/grok.py. This loop still speaks content blocks and
+``stop_reason`` so a provider swap stays in that one module.
 """
 
 from __future__ import annotations
@@ -27,12 +23,12 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
-import anthropic
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamablehttp_client
 
 from mcp import ClientSession
 from src import config
+from src.grok import GrokClient
 from src.mcp import ServerSpec, extract_text
 
 logger = logging.getLogger(__name__)
@@ -79,7 +75,7 @@ async def run_agentic(
     usage = _Usage()
     tool_log: list[dict[str, Any]] = []
 
-    async with anthropic.AsyncAnthropic(api_key=config.services.anthropic_api_key) as client, AsyncExitStack() as stack:
+    async with GrokClient(api_key=config.services.grok_api_key) as client, AsyncExitStack() as stack:
         tool_to_session: dict[str, ClientSession] = {}
         tool_to_server: dict[str, str] = {}
         tools: list[Any] = []
@@ -184,7 +180,7 @@ async def _dispatch_tool(
     round_no: int,
     tool_log: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Execute one tool_use block; return the tool_result to feed back to Claude."""
+    """Execute one tool_use block; return the tool_result to feed back to the model."""
     name = getattr(block, "name", "")
     block_id = getattr(block, "id", "")
     server = tool_to_server.get(name, "?")
@@ -234,10 +230,10 @@ async def _dispatch_tool(
 
 async def _create(client: Any, model: str, max_tokens: int, messages: list[Any], tools: list[Any],
                   effort: str, tool_choice: dict[str, Any] | None = None, thinking: bool = True) -> Any:
-    """One model turn. Adaptive thinking + effort ride in extra_body (version-independent).
+    """One model turn. Effort rides in extra_body; src/grok.py maps it onto reasoning.effort.
 
-    `tool_choice` forces a specific tool (used for the structured emit); adaptive thinking is
-    disabled on a forced call since extended thinking is incompatible with forced tool use."""
+    `tool_choice` forces a specific tool (used for the structured emit). Grok reasoning
+    stays on for that call too: it cannot be disabled, and a forced function still reasons."""
     extra: dict[str, Any] = {"output_config": {"effort": effort}}
     if thinking and tool_choice is None:
         extra["thinking"] = {"type": "adaptive"}
@@ -279,7 +275,7 @@ async def run_structured(
     usage = _Usage()
     tool_log: list[dict[str, Any]] = []
 
-    async with anthropic.AsyncAnthropic(api_key=config.services.anthropic_api_key) as client, AsyncExitStack() as stack:
+    async with GrokClient(api_key=config.services.grok_api_key) as client, AsyncExitStack() as stack:
         tool_to_session: dict[str, ClientSession] = {}
         tool_to_server: dict[str, str] = {}
         tools: list[Any] = []

@@ -51,12 +51,12 @@ class TestValidate:
 
 class TestReason:
     def test_no_api_key_skips_llm(self, monkeypatch, convictions):
-        monkeypatch.setattr(config.services, "anthropic_api_key", "")
+        monkeypatch.setattr(config.services, "grok_api_key", "")
         out = contextual.reason(_signals(), {}, {"selloff": {}}, convictions, _plays(), [])
         assert out == []
 
     def test_parses_and_validates_a_mocked_emit(self, monkeypatch, convictions):
-        monkeypatch.setattr(config.services, "anthropic_api_key", "test-key")
+        monkeypatch.setattr(config.services, "grok_api_key", "test-key")
         payload = {"proposals": [
             {"ticker": "MSFT", "play": "macro_dip", "kind": "conviction_nudge", "value": 0.05, "rationale": "x"},
             {"ticker": "ZZZZ", "play": "macro_dip", "kind": "size_multiplier", "value": 2.0, "rationale": "y"},

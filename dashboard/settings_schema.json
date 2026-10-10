@@ -2034,7 +2034,7 @@
       "locked": false,
       "editable": false,
       "type": "str",
-      "default": "claude-opus-4-8"
+      "default": "grok-4.7"
     },
     {
       "key": "reasoning.max_tokens",
@@ -2052,7 +2052,7 @@
       "locked": false,
       "editable": false,
       "type": "int",
-      "default": 8000
+      "default": 16384
     },
     {
       "key": "reasoning.advisor_effort",
@@ -2070,7 +2070,7 @@
       "locked": false,
       "editable": false,
       "type": "str",
-      "default": "high"
+      "default": "medium"
     },
     {
       "key": "reasoning.tavily_max_searches",
@@ -2484,7 +2484,7 @@
       "locked": false,
       "editable": false,
       "type": "str",
-      "default": "claude-opus-4-8"
+      "default": "grok-4.7"
     },
     {
       "key": "exploration.max_tokens",
@@ -2502,7 +2502,7 @@
       "locked": false,
       "editable": false,
       "type": "int",
-      "default": 8000
+      "default": 16384
     },
     {
       "key": "exploration.effort",
@@ -2592,7 +2592,7 @@
       "locked": false,
       "editable": false,
       "type": "str",
-      "default": "claude-opus-4-8"
+      "default": "grok-4.7"
     },
     {
       "key": "contextual.max_tokens",
@@ -2610,7 +2610,7 @@
       "locked": false,
       "editable": false,
       "type": "int",
-      "default": 8000
+      "default": 16384
     },
     {
       "key": "contextual.effort",
@@ -2628,7 +2628,7 @@
       "locked": false,
       "editable": false,
       "type": "str",
-      "default": "high"
+      "default": "medium"
     },
     {
       "key": "contextual.max_rounds",
@@ -2682,7 +2682,7 @@
       "locked": false,
       "editable": false,
       "type": "int",
-      "default": 300
+      "default": 600
     },
     {
       "key": "timeouts.exploration",
@@ -2700,7 +2700,7 @@
       "locked": false,
       "editable": false,
       "type": "int",
-      "default": 300
+      "default": 600
     },
     {
       "key": "timeouts.contextual",
@@ -2718,7 +2718,97 @@
       "locked": false,
       "editable": false,
       "type": "int",
-      "default": 300
+      "default": 600
+    },
+    {
+      "key": "grok.api_url",
+      "section": "grok",
+      "field": "api_url",
+      "tier": 3,
+      "group": "",
+      "label": "api url",
+      "help": "",
+      "impact": "",
+      "unit": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "locked": false,
+      "editable": false,
+      "type": "str",
+      "default": "https://api.x.ai/v1/responses"
+    },
+    {
+      "key": "grok.timeout_s",
+      "section": "grok",
+      "field": "timeout_s",
+      "tier": 3,
+      "group": "",
+      "label": "timeout s",
+      "help": "",
+      "impact": "",
+      "unit": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "locked": false,
+      "editable": false,
+      "type": "int",
+      "default": 240
+    },
+    {
+      "key": "grok.retry_attempts",
+      "section": "grok",
+      "field": "retry_attempts",
+      "tier": 3,
+      "group": "",
+      "label": "retry attempts",
+      "help": "",
+      "impact": "",
+      "unit": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "locked": false,
+      "editable": false,
+      "type": "int",
+      "default": 3
+    },
+    {
+      "key": "grok.retry_base_delay_s",
+      "section": "grok",
+      "field": "retry_base_delay_s",
+      "tier": 3,
+      "group": "",
+      "label": "retry base delay s",
+      "help": "",
+      "impact": "",
+      "unit": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "locked": false,
+      "editable": false,
+      "type": "float",
+      "default": 2.0
+    },
+    {
+      "key": "grok.total_s",
+      "section": "grok",
+      "field": "total_s",
+      "tier": 3,
+      "group": "",
+      "label": "total s",
+      "help": "",
+      "impact": "",
+      "unit": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "locked": false,
+      "editable": false,
+      "type": "int",
+      "default": 500
     },
     {
       "key": "scorecard.pick_horizon_tolerance_days",

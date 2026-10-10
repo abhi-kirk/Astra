@@ -2,9 +2,7 @@
 Unit tests for src/mcp.py — server specs, text extraction, prompt context.
 """
 
-from unittest.mock import MagicMock
-
-from anthropic.types import TextBlock
+from types import SimpleNamespace
 
 from src import config
 from src.mcp import ServerSpec, advisor_specs, exploration_specs, extract_text, search_context
@@ -15,27 +13,22 @@ from src.mcp import ServerSpec, advisor_specs, exploration_specs, extract_text, 
 
 class TestExtractText:
     def _make_message(self, blocks):
-        msg = MagicMock()
-        msg.content = blocks
-        return msg
+        return SimpleNamespace(content=blocks)
 
     def test_single_text_block(self):
-        block = MagicMock(spec=TextBlock)
-        block.text = "Standard advisor note."
+        block = SimpleNamespace(type="text", text="Standard advisor note.")
         assert extract_text(self._make_message([block])) == "Standard advisor note."
 
     def test_joins_multiple_text_blocks(self):
-        b1 = MagicMock(spec=TextBlock)
-        b1.text = "## Note"
-        b2 = MagicMock(spec=TextBlock)
-        b2.text = "Body content."
+        b1 = SimpleNamespace(type="text", text="## Note")
+        b2 = SimpleNamespace(type="text", text="Body content.")
         assert extract_text(self._make_message([b1, b2])) == "## Note\nBody content."
 
     def test_empty_content(self):
         assert extract_text(self._make_message([])) == ""
 
     def test_non_text_blocks_ignored(self):
-        other = MagicMock()  # no spec — not a TextBlock instance
+        other = SimpleNamespace(type="tool_use", text="not prose")
         assert extract_text(self._make_message([other])) == ""
 
 

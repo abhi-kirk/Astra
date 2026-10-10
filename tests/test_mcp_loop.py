@@ -1,15 +1,13 @@
 """
-Unit tests for src/mcp_loop.py — the client-side Claude tool loop.
+Unit tests for src/mcp_loop.py, the client-side Grok tool loop.
 
-Fakes the Anthropic client (scripted responses) and the MCP session (in-process tools),
+Fakes the Grok client (scripted responses) and the MCP session (in-process tools),
 so no network is touched. The headline guard is `test_tool_timeout_still_produces_note`:
-a hung tool must NOT stall the run to an empty note — the regression we're fixing.
+a hung tool must NOT stall the run to an empty note.
 """
 
 import asyncio
 from types import SimpleNamespace
-
-from anthropic.types import TextBlock, ToolUseBlock
 
 from src import mcp_loop
 from src.mcp import ServerSpec
@@ -23,7 +21,7 @@ SPEC = [ServerSpec("tavily", "https://tavily", ["tavily-search"])]
 
 def _text_resp(text: str, stop: str = "end_turn"):
     return SimpleNamespace(
-        content=[TextBlock(type="text", text=text, citations=None)],
+        content=[SimpleNamespace(type="text", text=text)],
         stop_reason=stop,
         usage=SimpleNamespace(input_tokens=5, output_tokens=7),
     )
@@ -31,7 +29,7 @@ def _text_resp(text: str, stop: str = "end_turn"):
 
 def _tool_resp(tool_name: str, tool_input=None, block_id: str = "tu1"):
     return SimpleNamespace(
-        content=[ToolUseBlock(type="tool_use", id=block_id, name=tool_name, input=tool_input or {})],
+        content=[SimpleNamespace(type="tool_use", id=block_id, name=tool_name, input=tool_input or {})],
         stop_reason="tool_use",
         usage=SimpleNamespace(input_tokens=5, output_tokens=7),
     )
@@ -85,7 +83,7 @@ def _ok_impl(text: str = "results"):
 
 
 def _patch(monkeypatch, client, session):
-    monkeypatch.setattr("src.mcp_loop.anthropic.AsyncAnthropic", lambda **kw: client)
+    monkeypatch.setattr("src.mcp_loop.GrokClient", lambda **kw: client)
 
     async def fake_connect(stack, spec, timeout):
         return session

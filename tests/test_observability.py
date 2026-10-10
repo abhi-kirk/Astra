@@ -17,15 +17,14 @@ from src.observability import RunObserver, estimate_cost
 
 class TestEstimateCost:
     def test_known_model(self):
-        # Sonnet 4.6: $3/M in, $15/M out
-        assert estimate_cost("claude-sonnet-4-6", 1_000_000, 1_000_000) == pytest.approx(18.0)
+        # grok-4.7: $2/M in, $6/M out
+        assert estimate_cost("grok-4.7", 1_000_000, 1_000_000) == pytest.approx(8.0)
 
-    def test_opus_pricing(self):
-        assert estimate_cost("claude-opus-4-8", 1_000_000, 0) == pytest.approx(5.0)
+    def test_grok_46_matches_flagship_rate(self):
+        assert estimate_cost("grok-4.6", 1_000_000, 0) == pytest.approx(2.0)
 
     def test_unknown_model_falls_back(self):
-        # unknown → Sonnet-tier default
-        assert estimate_cost("mystery-model", 1_000_000, 0) == pytest.approx(3.0)
+        assert estimate_cost("mystery-model", 1_000_000, 0) == pytest.approx(2.0)
 
 
 # ---------------------------------------------------------------------------
@@ -49,16 +48,16 @@ class TestRunObserver:
     def test_record_advisor_with_usage(self):
         obs = RunObserver("2026-07-03", "simulation")
         usage = SimpleNamespace(input_tokens=100, output_tokens=200)
-        obs.record_advisor("claude-sonnet-4-6", usage)
-        assert obs.metrics["advisor_model"] == "claude-sonnet-4-6"
+        obs.record_advisor("grok-4.7", usage)
+        assert obs.metrics["advisor_model"] == "grok-4.7"
         assert obs.metrics["advisor_tokens_in"] == 100
         assert obs.metrics["advisor_tokens_out"] == 200
-        assert obs.metrics["advisor_cost_usd"] == pytest.approx(0.0033)
+        assert obs.metrics["advisor_cost_usd"] == pytest.approx(0.0014)
 
     def test_record_advisor_without_usage(self):
         obs = RunObserver("2026-07-03", "simulation")
-        obs.record_advisor("claude-sonnet-4-6", None)
-        assert obs.metrics["advisor_model"] == "claude-sonnet-4-6"
+        obs.record_advisor("grok-4.7", None)
+        assert obs.metrics["advisor_model"] == "grok-4.7"
         assert "advisor_tokens_in" not in obs.metrics
 
     def test_record_service(self):
