@@ -3,6 +3,8 @@
 from datetime import datetime, timedelta, timezone
 
 from src.briefing import (
+    apply_model_lines,
+    format_model_note,
     headline_from_items,
     known_tickers,
     pick_new_names,
@@ -109,6 +111,35 @@ class TestHeadlines:
         now = 1_700_000_000
         items = [{"title": "Ancient.", "providerPublishTime": now - 40 * 86400}]
         assert headline_from_items(items, now, 21) is None
+
+
+class TestModelLines:
+    def test_keeps_only_the_names_we_asked_about(self):
+        dips = [{"ticker": "INTC", "drawdown_pct": 20, "price": 100, "high": 125}]
+        new_names = [{"ticker": "SERV", "theme": "robotics", "rationale": "Draft line."}]
+        lines = [
+            {"ticker": "intc", "kind": "dip", "text": "Intel cut its forecast after a weak quarter."},
+            {"ticker": "SERV", "kind": "new", "text": "Builds warehouse robots. Extra sentence."},
+            {"ticker": "TSLA", "kind": "dip", "text": "Should never appear."},
+            {"ticker": "INTC", "kind": "new", "text": "Wrong list."},
+            {"ticker": "SERV", "kind": "dip", "text": "Wrong list."},
+            {"ticker": "INTC", "kind": "dip", "text": "Second dip line is ignored."},
+            {"ticker": "AMD", "kind": "dip", "text": ""},
+        ]
+        dip_lines, updated, new_lines = apply_model_lines(lines, dips, new_names)
+        assert dip_lines == {"INTC": "Intel cut its forecast after a weak quarter."}
+        assert updated[0]["rationale"] == "Builds warehouse robots."
+        assert new_lines == {"SERV": "Builds warehouse robots."}
+        assert "TSLA" not in format_model_note(dip_lines, new_lines)
+
+    def test_a_blank_line_leaves_the_draft_in_place(self):
+        new_names = [{"ticker": "SERV", "theme": "robotics", "rationale": "Draft line."}]
+        dip_lines, updated, new_lines = apply_model_lines(
+            [{"ticker": "SERV", "kind": "new", "text": "   "}], [], new_names,
+        )
+        assert dip_lines == {}
+        assert updated[0]["rationale"] == "Draft line."
+        assert new_lines == {}
 
 
 class TestRender:

@@ -298,9 +298,9 @@ async def run_structured(
                 tool_to_server[t.name] = spec.name
 
         # Expose the emit tool DURING the gather loop (alongside the MCP tools) so the model can
-        # emit its proposals the moment it's done reasoning — rather than being told "unknown tool"
-        # when it reaches for emit_proposals mid-loop. A forced emit is kept only as a fallback for
-        # when the model stops (or runs out of rounds) without emitting on its own.
+        # emit the moment it's done reasoning, rather than being told "unknown tool" if it reaches
+        # for the emit tool mid-loop. A forced emit is only the fallback for when the model stops
+        # (or runs out of rounds) without emitting on its own.
         gather_tools = tools + [emit_tool]
         failures: dict[str, int] = {}
         messages: list[Any] = [{"role": "user", "content": prompt}]
@@ -338,8 +338,9 @@ async def run_structured(
         # -- forced structured emit (fallback) -------------------------------
         if not emitted_early:
             if messages[-1]["role"] == "assistant":  # keep roles alternating before the forced turn
+                name = emit_tool["name"]
                 messages.append({"role": "user", "content":
-                                 "Now call emit_proposals with your final proposals (empty list if none fire)."})
+                                 f"Now call {name} with your final result. An empty list is valid."})
             emitted = await _create(
                 client, model, max_tokens, messages, [emit_tool], effort,
                 tool_choice={"type": "tool", "name": emit_tool["name"]},

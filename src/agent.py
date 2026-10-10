@@ -1,8 +1,8 @@
 """
 Agent orchestrator: runs the full analysis pipeline and produces output.
 
-In simulation mode (Phase 1): fetches data, screens positions, calls Grok
-for narrative reasoning, logs decisions, writes analysis JSON.
+In simulation mode (Phase 1): fetches data, screens positions, asks Grok
+for the phone-note lines, logs decisions, writes analysis JSON.
 
 Usage:
     python -m src.agent                    # simulation run
@@ -32,82 +32,70 @@ logger = logging.getLogger(__name__)
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 
-def call_claude_reasoning(
-    signals: list,
-    portfolio: dict,
-    market_data: dict,
-    history_context: str,
-    convictions: dict,
-    buy_labels: dict[str, str] | None = None,
-) -> tuple[str, Any, list[dict[str, Any]]]:
+# Forced emit for the phone note. The schema is the output contract.
+_EMIT_NOTE: dict[str, Any] = {
+    "name": "emit_note",
+    "description": (
+        "Emit one line per name you were given. A dip line says why the price is down. "
+        "A new-name line says what the company does and why it fits the theme. "
+        "Empty text means you found no real cause. Do not add tickers."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "lines": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "ticker": {"type": "string"},
+                        "kind": {"type": "string", "enum": ["dip", "new"]},
+                        "text": {"type": "string"},
+                    },
+                    "required": ["ticker", "kind", "text"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["lines"],
+        "additionalProperties": False,
+    },
+}
+
+
+def call_phone_lines(
+    dips: list[dict],
+    new_names: list[dict],
+) -> tuple[list[dict], Any, list[dict[str, Any]]]:
+    """Ask Grok for one sentence per dip and one sentence per new name.
+
+    Returns (raw lines, token usage, tool log). The caller drops any line whose
+    ticker was not in the lists above. An empty list is a valid answer.
     """
-    Call Claude to synthesize mechanical signals into an advisor narrative.
-
-    Runs the tool loop client-side (src.mcp_loop) so each MCP tool call is individually
-    timed out and observable. Returns (advisor_note, token_usage, tool_log).
-    """
-    if not config.services.grok_api_key:
-        return ("Grok API key not set — mechanical signals only.", None, [])
-
-    buy_labels = buy_labels or {}
-    action_groups: dict[str, list] = {}
-    for sig in signals:
-        action_groups.setdefault(sig["action"], []).append(sig)
-
-    def fmt_sig(sig) -> str:
-        pos = portfolio.get(sig["ticker"], {})
-        mdata = market_data.get(sig["ticker"], {})
-        price = mdata.get("current_price", 0)
-        avg = pos.get("avg_cost", 0)
-        gain = ((price - avg) / avg * 100) if avg else 0
-        reasons = "; ".join(sig["reasons"][:3])
-        intent = sig.get("intent", "opportunistic")
-        catalyst = sig.get("original_catalyst")
-        intent_note = f"\n    Intent: {intent}" + (f" — original catalyst: {catalyst}" if catalyst else "")
-        # Exploration discoveries are theme-aligned names not yet on a conviction roster —
-        # speculative starter entries, not conviction adds. Flag them so the note says so.
-        discovery_note = ""
-        if sig.get("source") == "exploration":
-            theme = sig.get("source_theme") or "conviction theme"
-            discovery_note = f"\n    NEW DISCOVERY (exploration) — {theme} theme, starter size, unproven"
-        # Pyramiding state — distinguishes an actionable buy (NEW ENTRY / ADD n of N) from a
-        # still-qualifying-but-throttled one (AT ADD CAP / IN COOLDOWN) so the note doesn't read
-        # a capped/cooling add as a fresh recommendation.
-        buy_state = buy_labels.get(sig["ticker"]) if sig["action"] == "buy" else None
-        state_note = f"\n    BUY STATE: {buy_state}" if buy_state else ""
-        return (
-            f"  {sig['ticker']}: price=${price:.2f}, avg_cost=${avg:.2f}, "
-            f"unrealized={gain:+.0f}%, shares={pos.get('shares', 0):.1f}\n"
-            f"    Reasons: {reasons}{intent_note}{discovery_note}{state_note}"
-        )
-
-    signal_text = ""
-    for action in ["buy", "sell", "trim", "watch"]:
-        group = action_groups.get(action, [])
-        if group:
-            label = {"buy": "BUY SIGNALS", "sell": "SELL SIGNALS",
-                     "trim": "TRIM SIGNALS", "watch": "WATCHLIST"}[action]
-            signal_text += f"\n{label}:\n" + "\n".join(fmt_sig(s) for s in group)
-
-    blocked = action_groups.get("blocked", [])
-    if blocked:
-        signal_text += f"\nBLOCKED ({len(blocked)} positions): " + ", ".join(s["ticker"] for s in blocked)
-
-    themes = {k: v.get("conviction") for k, v in convictions.get("themes", {}).items()}
-
     specs = mcp.advisor_specs()
     template = (PROMPTS_DIR / "advisor_note.mustache").read_text()
+    dips_json = json.dumps([
+        {
+            "ticker": row["ticker"],
+            "price": round(float(row["price"]), 2),
+            "recent_high": round(float(row["high"]), 2),
+            "percent_below_high": round(float(row["drawdown_pct"])),
+        }
+        for row in dips
+    ], indent=2)
+    new_json = json.dumps([
+        {"ticker": row["ticker"], "theme": row.get("theme") or "", "draft": row.get("rationale") or ""}
+        for row in new_names
+    ], indent=2)
     prompt = chevron.render(template, {
-        "themes_json":     json.dumps(themes),
-        "history_context": history_context,
-        "signal_text":     signal_text,
-        "date":            datetime.now().strftime("%B %-d, %Y"),
+        "dips_json": dips_json,
+        "new_names_json": new_json,
         **mcp.search_context(servers=specs),
     })
 
-    text, usage, tool_log = run_with_timeout(
-        lambda: mcp_loop.run_agentic_sync(
-            prompt, specs,
+    payload, usage, tool_log = run_with_timeout(
+        lambda: mcp_loop.run_structured_sync(
+            prompt, specs, _EMIT_NOTE,
             model=config.reasoning.model,
             max_tokens=config.reasoning.max_tokens,
             effort=config.reasoning.advisor_effort,
@@ -116,11 +104,10 @@ def call_claude_reasoning(
             failure_limit=config.tool_loop.mcp_tool_failure_limit,
         ),
         config.timeouts.advisor,
-        label="Advisor Grok call",
+        label="Phone-note Grok call",
     )
-    if not text:
-        return ("No advisor note generated.", usage, tool_log)
-    return (text, usage, tool_log)
+    lines = payload.get("lines") if isinstance(payload, dict) else None
+    return (lines if isinstance(lines, list) else [], usage, tool_log)
 
 
 def build_public_output(output: dict) -> dict:
@@ -351,35 +338,64 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
 
     history_context = memory.build_agent_context_summary()
 
-    # Pyramiding state per buy name, so the advisor note can tell a fresh/actionable buy from a
-    # still-qualifying-but-capped/cooling add (the buy signal itself fires every run in an uptrend).
+    # Pyramiding state per buy name. Stamped onto the signal so the log and the sleeve
+    # share one answer for "fresh buy" versus "already added, leave it".
     buy_labels = memory.get_paper_buy_labels(
         [s["ticker"] for s in signals if s["action"] == "buy"], run_date
     )
-    # Stamp the state onto each buy signal so it flows through to the stored output (dashboard)
-    # and the Telegram tally alongside the advisor note — one source of truth for "is this
-    # actually a fresh/actionable buy, or a still-qualifying-but-throttled repeat".
     for s in signals:
         if s["action"] == "buy":
             s["buy_state"] = buy_labels.get(s["ticker"])
 
+    from src.briefing import (
+        apply_model_lines,
+        format_model_note,
+        known_tickers,
+        pick_new_names,
+        select_dips,
+    )
+    dips = select_dips(
+        portfolio, market_data,
+        threshold=config.briefing.dip_drawdown, limit=config.briefing.dip_limit,
+    )
+    new_names: list[dict] = []
+    try:
+        new_names = pick_new_names(
+            memory.get_on_radar_candidates(),
+            set(portfolio),
+            known_tickers(convictions),
+            limit=config.briefing.new_limit,
+            now=datetime.now(timezone.utc),
+            max_age_days=config.briefing.new_max_age_days,
+        )
+    except Exception:
+        logger.error("New-name lookup failed — dip lines still run", exc_info=True)
+
     advisor_note = ""
     advisor_tool_log: list[dict[str, Any]] = []
-    if use_ai and any(s["action"] in ("buy", "sell", "watch") for s in signals):
-        logger.info(f"Calling Grok for narrative reasoning  (model={config.reasoning.model})")
+    dip_lines: dict[str, str] = {}
+    if use_ai and config.services.grok_api_key and (dips or new_names):
+        logger.info(f"Calling Grok for phone-note lines  (model={config.reasoning.model})")
         try:
             with obs.phase("advisor"):
-                advisor_note, advisor_usage, advisor_tool_log = call_claude_reasoning(
-                    signals, portfolio, market_data, history_context, convictions, buy_labels
-                )
+                raw_lines, advisor_usage, advisor_tool_log = call_phone_lines(dips, new_names)
+            dip_lines, new_names, new_lines = apply_model_lines(raw_lines, dips, new_names)
+            advisor_note = format_model_note(dip_lines, new_lines)
             obs.record_advisor(config.reasoning.model, advisor_usage)
-            obs.record_service("grok", ok=bool(advisor_note))
+            obs.record_service("grok", ok=True)
         except TimeoutError:
-            logger.warning(f"Advisor Grok call timed out after {config.timeouts.advisor}s — pipeline continues without advisor note")
+            logger.warning(
+                f"Phone-note Grok call timed out after {config.timeouts.advisor}s — "
+                "the note still sends with headlines"
+            )
             obs.record_service("grok", ok=False, detail="timeout")
         except Exception as e:
-            logger.error("Advisor Grok call failed — pipeline continues without advisor note", exc_info=True)
+            logger.error("Phone-note Grok call failed — the note still sends with headlines", exc_info=True)
             obs.record_service("grok", ok=False, detail=str(e))
+    elif use_ai and (dips or new_names):
+        logger.info("GROK_API_KEY is not set. The phone note will use headlines.")
+    elif use_ai:
+        logger.info("No dips or new names. Skipping the phone-note model call.")
 
     # Log signals
     action_groups: dict[str, list] = {}
@@ -514,37 +530,15 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
 
     _capture_performance_series(market_data, run_date)
 
-    # Phone note: dips in holdings he already has, plus at most two names he doesn't.
-    # The long advisor note stays in the run log. Telegram failure is never fatal.
+    # Phone note: the dips and new names chosen above, with a model sentence where
+    # one came back and a headline where it did not. Telegram failure is never fatal.
     try:
         from src import notify
-        from src.briefing import (
-            fetch_headline,
-            known_tickers,
-            pick_new_names,
-            render_briefing,
-            select_dips,
-            thesis_breaks,
-        )
-        dips = select_dips(
-            portfolio, market_data,
-            threshold=config.briefing.dip_drawdown, limit=config.briefing.dip_limit,
-        )
-        headlines = {}
-        for row in dips:
-            headlines[row["ticker"]] = fetch_headline(row["ticker"])
-        new_names: list[dict] = []
-        try:
-            new_names = pick_new_names(
-                memory.get_on_radar_candidates(),
-                set(portfolio),
-                known_tickers(convictions),
-                limit=config.briefing.new_limit,
-                now=datetime.now(timezone.utc),
-                max_age_days=config.briefing.new_max_age_days,
-            )
-        except Exception:
-            logger.error("New-name lookup failed — dip note still sends", exc_info=True)
+        from src.briefing import fetch_headline, render_briefing, thesis_breaks
+        headlines = {
+            row["ticker"]: dip_lines.get(row["ticker"]) or fetch_headline(row["ticker"])
+            for row in dips
+        }
         note = render_briefing(
             dips, headlines, new_names, thesis_breaks(signals),
             threshold=config.briefing.dip_drawdown,

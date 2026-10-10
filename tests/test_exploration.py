@@ -8,7 +8,13 @@ import json
 
 import pytest
 
-from src.exploration import build_theme_queries, filter_known_tickers, parse_candidates
+from src.exploration import (
+    _build_themes_detail,
+    build_theme_queries,
+    candidates_from_payload,
+    filter_known_tickers,
+    parse_candidates,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -81,6 +87,52 @@ class TestBuildThemeQueries:
     def test_no_themes_key(self):
         queries = build_theme_queries({})
         assert queries == {}
+
+    def test_detail_skips_frozen_and_low_themes(self, convictions):
+        convictions["themes"]["ev_transition"]["frozen"] = True
+        detail = _build_themes_detail(convictions)
+        assert "space" in detail
+        assert "core_tech" in detail
+        assert "ev_transition" not in detail
+        assert "cannabis" not in detail
+        assert "in portfolio" not in detail
+        assert "Already named, do not recommend: RKLB, ASTS, ARKX" in detail
+
+
+class TestCandidatesFromPayload:
+    def test_maps_conviction_and_drops_bad_rows(self):
+        payload = {"candidates": [
+            {"ticker": "lunr", "source_theme": "space", "rationale": "Lunar landers.",
+             "quality_summary": "Early.", "analyst_summary": "None.",
+             "conviction": "medium", "conviction_rationale": "Direct fit."},
+            {"ticker": "TSLA", "source_theme": "space", "rationale": "No.",
+             "conviction": "high", "quality_summary": "", "analyst_summary": "",
+             "conviction_rationale": ""},
+            {"ticker": "BYDDY", "source_theme": "ev_transition", "rationale": "Frozen theme.",
+             "conviction": "high", "quality_summary": "", "analyst_summary": "",
+             "conviction_rationale": ""},
+            {"ticker": "NONE", "source_theme": "space", "rationale": "  ",
+             "conviction": "low", "quality_summary": "", "analyst_summary": "",
+             "conviction_rationale": ""},
+        ]}
+        rows = candidates_from_payload(payload, {"space"})
+        assert len(rows) == 1
+        assert rows[0]["ticker"] == "LUNR"
+        assert rows[0]["claude_conviction"] == "medium"
+
+    def test_caps_at_three_per_theme(self):
+        payload = {"candidates": [
+            {"ticker": f"S{i}", "source_theme": "space", "rationale": "Fits.",
+             "quality_summary": "", "analyst_summary": "",
+             "conviction": "low", "conviction_rationale": "Early."}
+            for i in range(5)
+        ]}
+        rows = candidates_from_payload(payload, {"space"})
+        assert [row["ticker"] for row in rows] == ["S0", "S1", "S2"]
+
+    def test_empty_payload(self):
+        assert candidates_from_payload({}, {"space"}) == []
+        assert candidates_from_payload(None, {"space"}) == []
 
 
 # ---------------------------------------------------------------------------

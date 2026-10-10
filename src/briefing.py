@@ -193,6 +193,52 @@ def fetch_headline(ticker: str) -> str | None:
     return headline_from_items(items, time.time(), config.briefing.headline_max_age_days)
 
 
+def apply_model_lines(
+    lines: list[dict],
+    dips: list[dict],
+    new_names: list[dict],
+) -> tuple[dict[str, str], list[dict], dict[str, str]]:
+    """Keep model sentences only for names we asked about.
+
+    Returns (dip sentences, new names with a model line swapped in, new sentences).
+    A dip with no sentence is absent, so the caller can fall back to a headline.
+    The first sentence for a ticker wins. The wrong kind, an unknown ticker, and
+    an empty sentence are dropped.
+    """
+    dip_of = {row["ticker"].upper(): row["ticker"] for row in dips}
+    new_of = {row["ticker"].upper(): row["ticker"] for row in new_names}
+    dip_text: dict[str, str] = {}
+    new_text: dict[str, str] = {}
+    for line in lines or []:
+        if not isinstance(line, dict):
+            continue
+        ticker = str(line.get("ticker") or "").strip().upper()
+        kind = line.get("kind")
+        text = _first_sentence(str(line.get("text") or ""), _RATIONALE_MAX)
+        if not text:
+            continue
+        if kind == "dip" and ticker in dip_of and dip_of[ticker] not in dip_text:
+            dip_text[dip_of[ticker]] = text
+        elif kind == "new" and ticker in new_of and new_of[ticker] not in new_text:
+            new_text[new_of[ticker]] = text
+    ordered_dips = {row["ticker"]: dip_text[row["ticker"]] for row in dips if row["ticker"] in dip_text}
+    updated: list[dict] = []
+    for row in new_names:
+        if row["ticker"] in new_text:
+            updated.append({**row, "rationale": new_text[row["ticker"]]})
+        else:
+            updated.append(row)
+    ordered_new = {row["ticker"]: new_text[row["ticker"]] for row in new_names if row["ticker"] in new_text}
+    return ordered_dips, updated, ordered_new
+
+
+def format_model_note(dip_lines: dict[str, str], new_lines: dict[str, str]) -> str:
+    """The sentences the model actually wrote, for the run log."""
+    rows = [f"{ticker}: {text}" for ticker, text in dip_lines.items()]
+    rows.extend(f"{ticker}: {text}" for ticker, text in new_lines.items())
+    return "\n".join(rows)
+
+
 def render_briefing(
     dips: list[dict],
     headlines: dict[str, str | None],
