@@ -59,4 +59,28 @@ jobs:
           AGENT_TRADING_ENABLED: ${{ secrets.AGENT_TRADING_ENABLED }}
         run: python -m src.agent --mode simulation
 
+      # A failed run never starts the Autotrader (that workflow only chains off success),
+      # and a skipped sleeve looks like a quiet day. Text before the log is the only signal.
+      - name: Text if this run failed
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram is not configured. The failure stays in the Actions log."
+            exit 1
+          fi
+          text="ASTRA morning run failed, so the sleeve did not trade. ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          # Do not pass --show-error: curl would print the request URL, which contains the bot token.
+          if ! curl --fail-with-body --silent --output /tmp/tg.json \
+              --request POST \
+              --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+              --data-urlencode "text=${text}" \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"; then
+            echo "Telegram alert failed."
+            cat /tmp/tg.json
+            exit 1
+          fi
+
       # Analysis output goes to Supabase only — no files committed back to repo.

@@ -19,6 +19,8 @@ jobs:
   execute:
     runs-on: ubuntu-latest
     # Only chain off a successful Advisor run (manual dispatch always allowed).
+    # A failed Daily Analysis skips this job on purpose. That failure texts from
+    # daily_analysis.yml, so the skip is not a silent day.
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
 
     steps:
