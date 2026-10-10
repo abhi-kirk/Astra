@@ -29,6 +29,13 @@ def test_empty_convictions_yields_nothing():
     assert buyable_tickers({}) == []
 
 
+def test_frozen_theme_is_not_buyable():
+    convictions = {"themes": {"ev_transition": {
+        "conviction": "high", "frozen": True, "preferred": ["BYDDY"],
+    }}}
+    assert buyable_tickers(convictions) == []
+
+
 class TestConvictionWeightTiering:
     """Conviction-primary: C from the THEME label (very_high>high>low), not preferred/approved."""
 

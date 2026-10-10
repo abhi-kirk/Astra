@@ -53,14 +53,19 @@ def get_ticker_guidance(ticker: str, convictions: dict) -> dict:
             ("do_not_add", "do_not_add", False, True),
         ):
             if ticker in theme.get(bucket, []):
+                # A frozen theme is one Abhi already owns another way (EV, through Tesla).
+                # Existing shares can stay; nothing new is bought.
+                frozen = bool(theme.get("frozen"))
+                notes = theme.get("notes")
+                note = notes.get(ticker, "") if isinstance(notes, dict) else ""
                 return _with_meta({
                     "status": status,
-                    "notes": theme.get("notes", {}).get(ticker, ""),
+                    "notes": note,
                     "action_note": "",
                     "theme": theme_name,
                     "theme_conviction": theme.get("conviction"),  # industry-level label → C under conviction-primary
                     "do_not_add": do_not_add,
-                    "hold_only": hold_only,
+                    "hold_only": hold_only or frozen,
                 })
 
     return _with_meta({"status": "unknown", "notes": "", "action_note": "", "theme": None,

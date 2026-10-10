@@ -61,6 +61,10 @@ class TestBuildThemeQueries:
         queries = build_theme_queries(convictions)
         assert "cannabis" not in queries
 
+    def test_skips_a_frozen_theme(self, convictions):
+        convictions["themes"]["ev_transition"]["frozen"] = True
+        assert "ev_transition" not in build_theme_queries(convictions)
+
     def test_includes_core_tech(self, convictions):
         queries = build_theme_queries(convictions)
         assert "core_tech" in queries

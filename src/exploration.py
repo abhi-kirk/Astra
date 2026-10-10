@@ -44,7 +44,7 @@ def build_theme_queries(convictions: dict) -> dict[str, str]:
     """Return {theme_key: tavily_search_query} for high-conviction, non-excluded themes."""
     queries = {}
     for key, theme in convictions.get("themes", {}).items():
-        if key in EXPLORATION_EXCLUDED_THEMES:
+        if key in EXPLORATION_EXCLUDED_THEMES or theme.get("frozen"):
             continue
         conviction = theme.get("conviction", "medium")
         if conviction not in ("high", "very_high"):

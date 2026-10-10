@@ -227,6 +227,13 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
     logger.info(f"ASTRA — {mode.upper()} run  |  {run_date[:10]}")
     logger.info("=" * 60)
 
+    # Apply any Telegram replies (`drop DAL`, `add XYZ`) before this run reads the list.
+    try:
+        from src.owner_prompts import apply_replies
+        apply_replies()
+    except Exception:
+        logger.error("Telegram replies failed — pipeline continues", exc_info=True)
+
     convictions = load_convictions()
     excluded = {e["ticker"] for e in convictions.get("exclusions", [])}
 
@@ -542,6 +549,13 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
             dips, headlines, new_names, thesis_breaks(signals),
             threshold=config.briefing.dip_drawdown,
         )
+        try:
+            from src.owner_prompts import ensure_trade_prompts, format_prompts
+            questions = format_prompts(ensure_trade_prompts(convictions, set(portfolio)))
+            if questions:
+                note = f"{note}\n\n{questions}"
+        except Exception:
+            logger.error("Conviction questions failed — dip note still sends", exc_info=True)
         notify.send_briefing(note)
     except Exception:
         logger.error("Daily note failed — pipeline continues", exc_info=True)
