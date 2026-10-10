@@ -54,6 +54,7 @@ SECTIONS: dict[str, Any] = {
     "contextual": config.contextual,
     "timeouts": config.timeouts,
     "grok": config.grok,
+    "briefing": config.briefing,
     "telegram": config.telegram,
     "scorecard": config.scorecard,
 }

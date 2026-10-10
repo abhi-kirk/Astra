@@ -507,15 +507,44 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
 
     _capture_performance_series(market_data, run_date)
 
-    # Push the tally + advisor note to Telegram (no-op if unconfigured; never fatal)
-    from src import notify
-    notify.notify_run(
-        buy_tickers=buy_tickers,
-        sell_tickers=sell_tickers,
-        advisor_note=advisor_note,
-        mode=mode,
-        buy_labels=buy_labels,
-    )
+    # Phone note: dips in holdings he already has, plus at most two names he doesn't.
+    # The long advisor note stays in the run log. Telegram failure is never fatal.
+    try:
+        from src import notify
+        from src.briefing import (
+            fetch_headline,
+            known_tickers,
+            pick_new_names,
+            render_briefing,
+            select_dips,
+            thesis_breaks,
+        )
+        dips = select_dips(
+            portfolio, market_data,
+            threshold=config.briefing.dip_drawdown, limit=config.briefing.dip_limit,
+        )
+        headlines = {}
+        for row in dips:
+            headlines[row["ticker"]] = fetch_headline(row["ticker"])
+        new_names: list[dict] = []
+        try:
+            new_names = pick_new_names(
+                memory.get_on_radar_candidates(),
+                set(portfolio),
+                known_tickers(convictions),
+                limit=config.briefing.new_limit,
+                now=datetime.now(timezone.utc),
+                max_age_days=config.briefing.new_max_age_days,
+            )
+        except Exception:
+            logger.error("New-name lookup failed — dip note still sends", exc_info=True)
+        note = render_briefing(
+            dips, headlines, new_names, thesis_breaks(signals),
+            threshold=config.briefing.dip_drawdown,
+        )
+        notify.send_briefing(note)
+    except Exception:
+        logger.error("Daily note failed — pipeline continues", exc_info=True)
 
     # Outcome tracking: forward returns + trade journal detection
     from src.outcomes import backfill_outcomes, detect_portfolio_changes

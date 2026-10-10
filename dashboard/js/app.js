@@ -2957,6 +2957,7 @@ async function init() {
   // Check existing session (Supabase auto-restores from localStorage JWT)
   const { data: { session } } = await sb.auth.getSession();
   isAuthenticated = !!session;
+  if (isAuthenticated) document.body.classList.add('owner-quiet');
   updateLockBtn(isAuthenticated);
   initLockButton(sb);
   initConvictionsDrawer();

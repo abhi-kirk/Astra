@@ -384,6 +384,19 @@ class GrokConfig:
     total_s: int = 500
 
 
+# ── Daily phone note ───────────────────────────────────────────────────────────
+# The Telegram message Abhi actually reads: dips in names he already holds, plus at most
+# a couple of conviction names he does not. The long advisor note stays in the run log.
+@dataclass
+class BriefingConfig:
+    dip_drawdown: float = 0.12          # flag a holding this far under its recent high (0.12 = 12%)
+    dip_window_days: int = 63           # trading days in "the last few months"
+    dip_limit: int = 5                  # deepest dips that fit in one phone message
+    new_limit: int = 2                  # unknown conviction names mentioned per day
+    new_max_age_days: int = 8           # only surface discoveries from the last week or so
+    headline_max_age_days: int = 21     # older headlines are not why the dip is happening now
+
+
 # ── Notifications (Telegram) ───────────────────────────────────────────────────
 # Bot token from @BotFather; chat id of the destination chat. Both unset = no-op.
 @dataclass
@@ -450,5 +463,6 @@ exploration = ExplorationConfig()
 contextual = ContextualConfig()
 timeouts = TimeoutsConfig()
 grok = GrokConfig()
+briefing = BriefingConfig()
 telegram = TelegramConfig()
 scorecard = ScorecardConfig()

@@ -230,6 +230,11 @@ def get_market_data(ticker: str, period_days: int = config.market_data.period_da
         high_52w = float(closes.max())
         low_52w = float(closes.min())
         pct_below_52w_high = round((high_52w - current_price) / high_52w * 100, 2)
+        # "Last few months" high, for the daily dip note. Distinct from the 52-week high,
+        # which is too long a window for a manual dip buy.
+        recent = closes.tail(config.briefing.dip_window_days)
+        high_3m = float(recent.max()) if len(recent) else high_52w
+        pct_below_3m_high = round((high_3m - current_price) / high_3m * 100, 2) if high_3m else None
 
         rsi = _calc_rsi(hist["Close"])
         ma_50 = float(hist["Close"].tail(50).mean())
@@ -262,6 +267,8 @@ def get_market_data(ticker: str, period_days: int = config.market_data.period_da
             "high_52w": high_52w,
             "low_52w": low_52w,
             "pct_below_52w_high": pct_below_52w_high,
+            "high_3m": round(high_3m, 4),
+            "pct_below_3m_high": pct_below_3m_high,
             "rsi_14": rsi,
             "ma_50": round(ma_50, 2),
             "ma_200": round(ma_200, 2) if ma_200 else None,

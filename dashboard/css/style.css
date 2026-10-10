@@ -2594,3 +2594,22 @@ header, main, #modal-overlay { position: relative; z-index: 1; }
   .tuning-num { width: 70px; }
   .tuning-text { width: 110px; }
 }
+
+/* Signed-in view is the sleeve's performance. Signals, the advisor essay, paper
+   trading, and the editors stay in the page for the public teaser and are hidden
+   once the owner is logged in. Telegram is the daily interface. */
+body.owner-quiet #hero-banner,
+body.owner-quiet #signal-strip,
+body.owner-quiet #astra-intro,
+body.owner-quiet #advisor-section,
+body.owner-quiet #tuning-strip,
+body.owner-quiet #playbook-panel,
+body.owner-quiet #paper-portfolio,
+body.owner-quiet #on-radar,
+body.owner-quiet #fleet-status,
+body.owner-quiet #journal-btn,
+body.owner-quiet #convictions-btn,
+body.owner-quiet #playbook-btn,
+body.owner-quiet #tuning-btn {
+  display: none !important;
+}

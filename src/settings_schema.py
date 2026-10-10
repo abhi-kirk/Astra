@@ -93,6 +93,7 @@ _G_SIZE = "How big each purchase is"
 _G_DIP = "Buying dips harder"
 _G_SELL = "When ASTRA sells"
 _G_AUTO = "Autotrader (real money)"
+_G_NOTE = "Daily note"
 _G_PAPER = "Paper track"
 _G_AI = "AI judgment layer"
 _G_LIMITS = "Hard limits (code-enforced)"
@@ -345,6 +346,15 @@ _DIALS: list[Knob] = [
              "nothing is ever sold to reach it.",
         impact="Higher means fewer but more meaningful holdings; lower spreads the same money "
                "across more names and risks positions too small to matter.",
+    ),
+
+    # ── Daily phone note ──────────────────────────────────────────────────────
+    Knob(
+        "briefing.dip_drawdown", DIAL, "How deep a dip is worth texting", group=_G_NOTE,
+        unit="fraction", min=0.05, max=0.40, step=0.01,
+        help="A stock you already hold is mentioned in the daily note when it is at least "
+             "this far below its high of the last few months. Shallower pullbacks stay quiet.",
+        impact="Lower texts you about smaller dips; higher only speaks up for real drops.",
     ),
 
     # ── Paper track ───────────────────────────────────────────────────────────
@@ -835,6 +845,8 @@ _PLUMBING: list[Knob] = _plumbing(
     "contextual.max_rounds", "contextual.max_searches",
     "timeouts.advisor", "timeouts.exploration", "timeouts.contextual",
     "grok.api_url", "grok.timeout_s", "grok.retry_attempts", "grok.retry_base_delay_s", "grok.total_s",
+    "briefing.dip_window_days", "briefing.dip_limit", "briefing.new_limit",
+    "briefing.new_max_age_days", "briefing.headline_max_age_days",
     "scorecard.pick_horizon_tolerance_days", "scorecard.max_join_gap_days",
     "scorecard.bootstrap_samples", "scorecard.bootstrap_block", "scorecard.bootstrap_seed",
     "scorecard.benchmark_symbol", "scorecard.history_days",
@@ -850,7 +862,7 @@ BY_KEY: dict[str, Knob] = {k.key: k for k in REGISTRY}
 
 # Group display order for the dashboard (groups not listed sort last, alphabetically).
 GROUP_ORDER: tuple[str, ...] = (
-    _G_GATE, _G_SIZE, _G_DIP, _G_SELL, _G_AUTO, _G_PAPER, _G_AI, _G_DATA, _G_LIMITS,
+    _G_GATE, _G_SIZE, _G_DIP, _G_SELL, _G_AUTO, _G_NOTE, _G_PAPER, _G_AI, _G_DATA, _G_LIMITS,
     _G_SCORE,
     _G_PILLARS, _G_QUALITY, _G_VALUE, _G_TREND, _G_ENTRY, _G_REGIME, _G_MACRO, _G_EXPLORE,
 )
