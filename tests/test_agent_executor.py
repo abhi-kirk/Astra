@@ -535,11 +535,14 @@ def test_higher_conviction_buy_gets_more_dollars(wired, monkeypatch):
         {"id": 41, "ticker": "NVDA", "action": "buy", "suggested_position_pct": 0.08},
         {"id": 42, "ticker": "PL", "action": "buy", "suggested_position_pct": 0.04},
     ]
-    fb = FakeBroker()  # $1000 → run budget $400; each gets the $50 floor, surplus splits 2:1
+    # $2000 cash → run budget $800. Each name gets the $200 floor; the $400 surplus
+    # splits 2:1 by conviction weight.
+    fb = FakeBroker(equity=2000.0)
     ex.run(broker=fb, run_date="2026-07-06T13:00:00", dry_run=False)
     dollars = {p["symbol"]: float(p["dollar_amount"]) for p in fb.places}
     assert dollars["NVDA"] > dollars["PL"]
-    assert dollars["NVDA"] == 250.0 and dollars["PL"] == 150.0
+    assert dollars["NVDA"] == pytest.approx(466.67, abs=0.01)
+    assert dollars["PL"] == pytest.approx(333.33, abs=0.01)
 
 
 # ---------------------------------------------------------------------------

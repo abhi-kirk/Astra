@@ -595,7 +595,7 @@
       "locked": false,
       "editable": true,
       "type": "float",
-      "default": 50.0
+      "default": 200.0
     },
     {
       "key": "briefing.dip_drawdown",

@@ -318,7 +318,7 @@ class AgentConfig:
     # funding fewer real positions beats splitting a small budget into dust (see docs/capital_rotation.md
     # §11). A held position worth less than this is repaired to the floor (top-up) before any new
     # entry is funded; nothing is ever sold to achieve it.
-    min_position_usd: float = _cfg("AGENT_MIN_POSITION_USD", cast=float, default=50.0)
+    min_position_usd: float = _cfg("AGENT_MIN_POSITION_USD", cast=float, default=200.0)
     # Cash account: T+1 settlement + Good-Faith-Violation aware (block selling unsettled / same-day round-trips)
     account_is_cash: bool = _cfg("AGENT_ACCOUNT_IS_CASH", cast=bool, default=True)
     # Robinhood Agentic MCP (official execution endpoint) + its own encrypted OAuth token store
