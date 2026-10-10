@@ -4,16 +4,13 @@ Tests for src/exploration.py pure functions.
 No network, no Supabase, no Anthropic — all I/O mocked or untouched.
 """
 
-import json
-
 import pytest
 
 from src.exploration import (
     _build_themes_detail,
-    build_theme_queries,
     candidates_from_payload,
+    eligible_themes,
     filter_known_tickers,
-    parse_candidates,
 )
 
 # ---------------------------------------------------------------------------
@@ -54,39 +51,30 @@ def convictions():
 
 
 # ---------------------------------------------------------------------------
-# build_theme_queries
+# eligible_themes
 # ---------------------------------------------------------------------------
 
-class TestBuildThemeQueries:
+class TestEligibleThemes:
     def test_includes_high_and_very_high(self, convictions):
-        queries = build_theme_queries(convictions)
-        assert "space" in queries
-        assert "ev_transition" in queries
+        themes = eligible_themes(convictions)
+        assert "space" in themes
+        assert "ev_transition" in themes
 
     def test_excludes_low_conviction(self, convictions):
-        queries = build_theme_queries(convictions)
-        assert "cannabis" not in queries
+        assert "cannabis" not in eligible_themes(convictions)
 
     def test_skips_a_frozen_theme(self, convictions):
         convictions["themes"]["ev_transition"]["frozen"] = True
-        assert "ev_transition" not in build_theme_queries(convictions)
+        assert "ev_transition" not in eligible_themes(convictions)
 
     def test_includes_core_tech(self, convictions):
-        queries = build_theme_queries(convictions)
-        assert "core_tech" in queries
-
-    def test_query_contains_theme_label(self, convictions):
-        queries = build_theme_queries(convictions)
-        assert "space" in queries["space"]
-        assert "ev transition" in queries["ev_transition"]
+        assert "core_tech" in eligible_themes(convictions)
 
     def test_empty_themes(self):
-        queries = build_theme_queries({"themes": {}})
-        assert queries == {}
+        assert eligible_themes({"themes": {}}) == {}
 
     def test_no_themes_key(self):
-        queries = build_theme_queries({})
-        assert queries == {}
+        assert eligible_themes({}) == {}
 
     def test_detail_skips_frozen_and_low_themes(self, convictions):
         convictions["themes"]["ev_transition"]["frozen"] = True
@@ -135,10 +123,6 @@ class TestCandidatesFromPayload:
         assert candidates_from_payload(None, {"space"}) == []
 
 
-# ---------------------------------------------------------------------------
-# parse_candidates
-# ---------------------------------------------------------------------------
-
 _VALID_CANDIDATE = {
     "ticker": "LUNR",
     "source_theme": "space",
@@ -148,43 +132,6 @@ _VALID_CANDIDATE = {
     "claude_conviction": "medium",
     "conviction_rationale": "Early stage but direct thesis fit.",
 }
-
-
-class TestParseCandidates:
-    def test_parses_json_code_block(self):
-        text = f"```json\n{json.dumps([_VALID_CANDIDATE])}\n```"
-        result = parse_candidates(text)
-        assert len(result) == 1
-        assert result[0]["ticker"] == "LUNR"
-
-    def test_parses_bare_json_array(self):
-        text = json.dumps([_VALID_CANDIDATE])
-        result = parse_candidates(text)
-        assert len(result) == 1
-
-    def test_returns_empty_on_no_json(self):
-        result = parse_candidates("No candidates found this week.")
-        assert result == []
-
-    def test_returns_empty_on_invalid_json(self):
-        result = parse_candidates("```json\n{broken\n```")
-        assert result == []
-
-    def test_returns_empty_list_from_json(self):
-        result = parse_candidates("```json\n[]\n```")
-        assert result == []
-
-    def test_multiple_candidates(self):
-        second = {**_VALID_CANDIDATE, "ticker": "RDW", "source_theme": "space"}
-        text = f"```json\n{json.dumps([_VALID_CANDIDATE, second])}\n```"
-        result = parse_candidates(text)
-        assert len(result) == 2
-        assert {c["ticker"] for c in result} == {"LUNR", "RDW"}
-
-    def test_preamble_before_block_is_ignored(self):
-        text = "Here are my findings after research:\n\n```json\n" + json.dumps([_VALID_CANDIDATE]) + "\n```"
-        result = parse_candidates(text)
-        assert len(result) == 1
 
 
 # ---------------------------------------------------------------------------

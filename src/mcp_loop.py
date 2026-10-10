@@ -5,7 +5,7 @@ We hold the MCP connections, expose their tools to Grok as ordinary function sch
 and execute every ``tool_use`` in-process with:
 
   - a per-tool timeout (`tool_timeout`): a hung tool dies fast; the model gets an error
-    result and still finishes the note;
+    result and still finishes the structured emit;
   - a circuit breaker (`failure_limit`): a repeatedly-failing server is disabled for the run;
   - full logging + a returned `tool_log` for visibility.
 
@@ -29,15 +29,12 @@ from mcp.client.streamable_http import streamablehttp_client
 from mcp import ClientSession
 from src import config
 from src.grok import GrokClient
-from src.mcp import ServerSpec, extract_text
+from src.mcp import ServerSpec
 
 logger = logging.getLogger(__name__)
 
 # Cap a single tool result so a chatty server (e.g. AV NEWS_SENTIMENT) can't blow the context.
 _MAX_TOOL_RESULT_CHARS = 8000
-
-AgenticResult = tuple[str, Any, list[dict[str, Any]]]
-
 
 @dataclass
 class _Usage:
@@ -50,100 +47,6 @@ class _Usage:
             return
         self.input_tokens += getattr(usage, "input_tokens", 0) or 0
         self.output_tokens += getattr(usage, "output_tokens", 0) or 0
-
-
-def run_agentic_sync(prompt: str, specs: list[ServerSpec], **kwargs: Any) -> AgenticResult:
-    """Synchronous entry point — runs the async loop in a fresh event loop.
-
-    Wrap this in src.timeout.run_with_timeout for a wall-clock backstop.
-    """
-    return asyncio.run(run_agentic(prompt, specs, **kwargs))
-
-
-async def run_agentic(
-    prompt: str,
-    specs: list[ServerSpec],
-    *,
-    model: str,
-    max_tokens: int,
-    effort: str = "high",
-    tool_timeout: int = 45,
-    max_rounds: int = 8,
-    failure_limit: int = 2,
-) -> AgenticResult:
-    """Run the manual tool loop and return (final_text, usage, tool_log)."""
-    usage = _Usage()
-    tool_log: list[dict[str, Any]] = []
-
-    async with GrokClient(api_key=config.services.grok_api_key) as client, AsyncExitStack() as stack:
-        tool_to_session: dict[str, ClientSession] = {}
-        tool_to_server: dict[str, str] = {}
-        tools: list[Any] = []
-
-        # -- connect servers + collect tool schemas -------------------------
-        for spec in specs:
-            session = await _connect(stack, spec, tool_timeout)
-            if session is None:
-                continue
-            try:
-                listed = await asyncio.wait_for(session.list_tools(), timeout=tool_timeout)
-            except Exception:
-                logger.warning("MCP %s: list_tools failed — skipping server", spec.name, exc_info=True)
-                continue
-            allowed = set(spec.allowed_tools)
-            added = 0
-            for t in listed.tools:
-                if allowed and t.name not in allowed:
-                    continue
-                tools.append({
-                    "name": t.name,
-                    "description": t.description or "",
-                    "input_schema": t.inputSchema,
-                })
-                tool_to_session[t.name] = session
-                tool_to_server[t.name] = spec.name
-                added += 1
-            logger.info("MCP %s: %d tool(s) available", spec.name, added)
-
-        # -- manual agentic loop --------------------------------------------
-        failures: dict[str, int] = {}
-        messages: list[Any] = [{"role": "user", "content": prompt}]
-        final: Any = None
-        rounds = 0
-
-        for round_no in range(1, max_rounds + 1):
-            rounds = round_no
-            final = await _create(client, model, max_tokens, messages, tools, effort)
-            usage.add(getattr(final, "usage", None))
-            if getattr(final, "stop_reason", None) != "tool_use":
-                break
-
-            # Echo the full assistant turn back (thinking + tool_use blocks preserved).
-            messages.append({"role": "assistant", "content": final.content})
-            results: list[dict[str, Any]] = []
-            for block in list(final.content):
-                if getattr(block, "type", None) != "tool_use":
-                    continue
-                results.append(
-                    await _dispatch_tool(
-                        block, tool_to_session, tool_to_server, failures,
-                        failure_limit, tool_timeout, round_no, tool_log,
-                    )
-                )
-            messages.append({"role": "user", "content": results})
-        else:
-            # Ran out of rounds while still calling tools — force a final tool-free note.
-            if final is not None and getattr(final, "stop_reason", None) == "tool_use":
-                logger.warning("Advisor loop hit max_rounds=%d — forcing a final tool-free note", max_rounds)
-                final = await _create(client, model, max_tokens, messages, [], effort)
-                usage.add(getattr(final, "usage", None))
-
-        text = extract_text(final) if final is not None else ""
-        logger.info(
-            "Advisor loop: %d round(s), %d tool call(s), tokens in=%d out=%d",
-            rounds, len(tool_log), usage.input_tokens, usage.output_tokens,
-        )
-        return (text, usage, tool_log)
 
 
 async def _connect(stack: AsyncExitStack, spec: ServerSpec, timeout: int) -> ClientSession | None:

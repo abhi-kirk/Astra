@@ -166,10 +166,9 @@ const SIG_BOARD_ROWS = 2;
 // board re-slices itself on resize rather than re-wrapping raggedly.
 let sigBoardState = null;
 
-// A buy is only fresh/actionable as a NEW ENTRY or a cooldown-elapsed ADD; IN COOLDOWN /
-// AT ADD CAP names still clear the buy bar but are throttled by pyramiding (mirrors
-// notify._actionable_buy + the advisor-note rule) — an uptrending conviction name re-fires
-// every run, so those aren't a fresh buy today.
+// A buy is only fresh as a NEW ENTRY or a cooldown-elapsed ADD. IN COOLDOWN and
+// AT ADD CAP still clear the buy bar, but pyramiding says leave them alone. An
+// uptrending conviction name re-fires every run, so those are not a fresh buy today.
 function buyThrottled(sig) {
   const st = sig.buy_state;
   return !!st && !(st.startsWith('NEW ENTRY') || st.startsWith('ADD '));

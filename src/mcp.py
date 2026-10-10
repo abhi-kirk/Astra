@@ -8,7 +8,7 @@ schemas, and dispatch each call with our own per-tool timeout + circuit breaker.
 
 Usage:
     specs = mcp.advisor_specs()
-    text, usage, tool_log = mcp_loop.run_agentic_sync(prompt, specs, ...)
+    payload, usage, tool_log = mcp_loop.run_structured_sync(prompt, specs, emit_tool, ...)
 """
 
 from __future__ import annotations
@@ -84,15 +84,6 @@ def advisor_specs() -> list[ServerSpec]:
 def exploration_specs() -> list[ServerSpec]:
     """MCP servers exposed to the weekly exploration loop (same reliable set)."""
     return [s for s in (_tavily(), _alpha_vantage()) if s is not None]
-
-
-def extract_text(message: Any) -> str:
-    """Join the text blocks of a model message. Tool-use and reasoning blocks are skipped."""
-    parts = []
-    for block in getattr(message, "content", []) or []:
-        if getattr(block, "type", None) == "text" and getattr(block, "text", None):
-            parts.append(block.text)
-    return "\n".join(parts).strip()
 
 
 def search_context(

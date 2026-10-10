@@ -73,7 +73,7 @@ def call_phone_lines(
     ticker was not in the lists above. An empty list is a valid answer.
     """
     specs = mcp.advisor_specs()
-    template = (PROMPTS_DIR / "advisor_note.mustache").read_text()
+    template = (PROMPTS_DIR / "phone_note.mustache").read_text()
     dips_json = json.dumps([
         {
             "ticker": row["ticker"],
@@ -113,8 +113,7 @@ def call_phone_lines(
 def build_public_output(output: dict) -> dict:
     """
     Scrubbed version of the run output safe for public display.
-    Strips: advisor note, avg_cost references in reasons, suggested position sizes,
-    portfolio %/dollar amounts from blocked reasons, history context.
+    Strips the advisor lines, dollar sizing, and cost-basis detail out of the reasons.
     """
     public_signals = []
     for s in output.get("signals", []):
@@ -336,8 +335,6 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
         except Exception:
             logger.error("Decision-features capture failed — pipeline continues", exc_info=True)
 
-    history_context = memory.build_agent_context_summary()
-
     # Pyramiding state per buy name. Stamped onto the signal so the log and the sleeve
     # share one answer for "fresh buy" versus "already added, leave it".
     buy_labels = memory.get_paper_buy_labels(
@@ -518,7 +515,6 @@ def _run(obs, mode: str, single_ticker: str | None, use_ai: bool):
             for t, d in market_data.items()
             if "error" not in d
         },
-        "history_context": history_context,
     }
 
     memory.log_run_summary(

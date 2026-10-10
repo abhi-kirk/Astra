@@ -14,9 +14,7 @@ Bridges to the exploitation pipeline (kept minimal):
 
 from __future__ import annotations
 
-import json
 import logging
-import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,12 +22,11 @@ from typing import Any
 
 import chevron
 
-from src import mcp, mcp_loop
+from src import config, mcp, mcp_loop
 from src.logger import timer
+from src.timeout import run_with_timeout
 
 logger = logging.getLogger(__name__)
-from src import config
-from src.timeout import run_with_timeout
 
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
@@ -38,48 +35,16 @@ PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 # Pure helpers (testable without I/O)
 # ---------------------------------------------------------------------------
 
-EXPLORATION_EXCLUDED_THEMES: set[str] = set()  # all high/very_high themes are eligible
-
-
 def eligible_themes(convictions: dict) -> dict[str, dict]:
     """High and very-high themes that are still an active hunt. Frozen themes are not."""
     out: dict[str, dict] = {}
     for key, theme in (convictions.get("themes") or {}).items():
-        if not isinstance(theme, dict):
-            continue
-        if key in EXPLORATION_EXCLUDED_THEMES or theme.get("frozen"):
+        if not isinstance(theme, dict) or theme.get("frozen"):
             continue
         if theme.get("conviction", "medium") not in ("high", "very_high"):
             continue
         out[key] = theme
     return out
-
-
-def build_theme_queries(convictions: dict) -> dict[str, str]:
-    """Return {theme_key: tavily_search_query} for themes we are still willing to hunt."""
-    queries = {}
-    for key in eligible_themes(convictions):
-        label = key.replace("_", " ")
-        queries[key] = f"best emerging {label} stocks not widely held 2026 2027 under 10 billion market cap"
-    return queries
-
-
-def parse_candidates(text: str) -> list[dict]:
-    """
-    Extract the JSON array from Claude's response text.
-    Returns [] if no valid JSON array is found.
-    """
-    match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
-    if not match:
-        # Fallback: try a bare JSON array
-        match = re.search(r"\[\s*\{.*?\}\s*\]", text, re.DOTALL)
-    if not match:
-        return []
-    try:
-        data = json.loads(match.group(1) if "```" in (match.group(0) or "") else match.group(0))
-        return data if isinstance(data, list) else []
-    except json.JSONDecodeError:
-        return []
 
 
 _PER_THEME_CAP = 3
@@ -210,10 +175,10 @@ def _build_themes_detail(convictions: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Claude API call
+# Discovery call
 # ---------------------------------------------------------------------------
 
-def call_claude_exploration(
+def discover_candidates(
     convictions: dict,
     portfolio_tickers: set[str],
     exclusion_tickers: set[str],
@@ -394,7 +359,7 @@ def run() -> None:
     logger.info(f"Calling Grok for candidate discovery  (model={config.exploration.model})")
     try:
         with timer("Exploration Grok call", logger):
-            candidates = call_claude_exploration(
+            candidates = discover_candidates(
                 convictions, portfolio_tickers, exclusion_tickers, already_tracked
             )
     except Exception as exc:
@@ -408,7 +373,6 @@ def run() -> None:
     candidates = filter_known_tickers(
         candidates, portfolio_tickers, exclusion_tickers, already_tracked
     )
-    candidates = [c for c in candidates if c.get("source_theme") not in EXPLORATION_EXCLUDED_THEMES]
     for c in candidates:
         c["ticker"] = c["ticker"].upper()
 

@@ -2,8 +2,8 @@
 Unit tests for src/mcp_loop.py, the client-side Grok tool loop.
 
 Fakes the Grok client (scripted responses) and the MCP session (in-process tools),
-so no network is touched. The headline guard is `test_tool_timeout_still_produces_note`:
-a hung tool must NOT stall the run to an empty note.
+so no network is touched. The headline guard is `test_tool_timeout_still_emits`:
+a hung tool must NOT stall the run before the structured emit.
 """
 
 import asyncio
@@ -35,6 +35,21 @@ def _tool_resp(tool_name: str, tool_input=None, block_id: str = "tu1"):
     )
 
 
+_EMIT = {
+    "name": "emit_note",
+    "description": "Emit the final result.",
+    "input_schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]},
+}
+
+
+def _emit(ok: bool = True):
+    return SimpleNamespace(
+        content=[SimpleNamespace(type="tool_use", id="emit1", name="emit_note", input={"ok": ok})],
+        stop_reason="tool_use",
+        usage=SimpleNamespace(input_tokens=5, output_tokens=7),
+    )
+
+
 class _FakeMessages:
     def __init__(self, responses):
         self._responses = list(responses)
@@ -44,7 +59,7 @@ class _FakeMessages:
         self.calls.append(kwargs)
         if self._responses:
             return self._responses.pop(0)
-        return _text_resp("## ASTRA Note\nFinal fallback.")  # terminal when script is exhausted
+        return _text_resp("fallback")  # terminal when the script is exhausted
 
 
 class _FakeClient:
@@ -94,7 +109,7 @@ def _patch(monkeypatch, client, session):
 def _run(**overrides):
     kwargs = dict(model="m", max_tokens=100, tool_timeout=5, max_rounds=4, failure_limit=2)
     kwargs.update(overrides)
-    return mcp_loop.run_agentic_sync("prompt", SPEC, **kwargs)
+    return mcp_loop.run_structured_sync("prompt", SPEC, _EMIT, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -102,30 +117,30 @@ def _run(**overrides):
 # ---------------------------------------------------------------------------
 
 def test_happy_path(monkeypatch):
-    client = _FakeClient([_tool_resp("tavily-search", {"query": "RKLB"}), _text_resp("## ASTRA Note\nBody here.")])
+    client = _FakeClient([_tool_resp("tavily-search", {"query": "RKLB"}), _emit()])
     session = _FakeSession([_tool("tavily-search")], _ok_impl("news!"))
     _patch(monkeypatch, client, session)
 
-    text, usage, tool_log = _run()
+    payload, usage, tool_log = _run()
 
-    assert "Body here." in text
+    assert payload == {"ok": True}
     assert len(tool_log) == 1 and tool_log[0]["status"] == "ok"
     assert usage.input_tokens == 10  # 2 model turns × 5
     assert session.call_count == 1
 
 
-def test_tool_timeout_still_produces_note(monkeypatch):
+def test_tool_timeout_still_emits(monkeypatch):
     async def slow_impl(name, args):
         await asyncio.sleep(3)
         return SimpleNamespace(content=[SimpleNamespace(text="late")], structuredContent=None, isError=False)
 
-    client = _FakeClient([_tool_resp("tavily-search"), _text_resp("## ASTRA Note\nMechanical fallback.")])
+    client = _FakeClient([_tool_resp("tavily-search"), _emit()])
     session = _FakeSession([_tool("tavily-search")], slow_impl)
     _patch(monkeypatch, client, session)
 
-    text, _usage, tool_log = _run(tool_timeout=1)
+    payload, _usage, tool_log = _run(tool_timeout=1)
 
-    assert "Mechanical fallback." in text          # note produced despite the hang
+    assert payload == {"ok": True}
     assert tool_log[0]["status"] == "timeout"
 
 
@@ -136,36 +151,40 @@ def test_circuit_breaker(monkeypatch):
     client = _FakeClient([
         _tool_resp("tavily-search", block_id="a"),
         _tool_resp("tavily-search", block_id="b"),
-        _text_resp("## ASTRA Note\nDone."),
+        _emit(),
     ])
     session = _FakeSession([_tool("tavily-search")], boom)
     _patch(monkeypatch, client, session)
 
-    text, _usage, tool_log = _run(max_rounds=5, failure_limit=1)
+    payload, _usage, tool_log = _run(max_rounds=5, failure_limit=1)
 
     assert [e["status"] for e in tool_log] == ["error", "circuit_open"]
     assert session.call_count == 1  # second call short-circuited, no network hit
-    assert "Done." in text
+    assert payload == {"ok": True}
 
 
-def test_max_rounds_forces_final_note(monkeypatch):
-    client = _FakeClient([_tool_resp("tavily-search", block_id="a"), _tool_resp("tavily-search", block_id="b")])
+def test_max_rounds_forces_emit(monkeypatch):
+    client = _FakeClient([
+        _tool_resp("tavily-search", block_id="a"),
+        _tool_resp("tavily-search", block_id="b"),
+        _emit(),
+    ])
     session = _FakeSession([_tool("tavily-search")], _ok_impl())
     _patch(monkeypatch, client, session)
 
-    text, _usage, tool_log = _run(max_rounds=2, failure_limit=5)
+    payload, _usage, tool_log = _run(max_rounds=2, failure_limit=5)
 
-    assert "Final fallback." in text
+    assert payload == {"ok": True}
     assert len(tool_log) == 2
-    assert client.messages.calls[-1].get("tools") is None  # forced final call is tool-free
+    assert client.messages.calls[-1]["tool_choice"]["name"] == "emit_note"
 
 
-def test_no_servers_still_produces_note(monkeypatch):
-    client = _FakeClient([_text_resp("## ASTRA Note\nMechanical only.")])
-    _patch(monkeypatch, client, None)  # _connect returns None → no tools
+def test_no_servers_still_emits(monkeypatch):
+    client = _FakeClient([_emit()])
+    _patch(monkeypatch, client, None)  # _connect returns None, so no research tools
 
-    text, _usage, tool_log = _run()
+    payload, _usage, tool_log = _run()
 
-    assert "Mechanical only." in text
+    assert payload == {"ok": True}
     assert tool_log == []
-    assert client.messages.calls[0].get("tools") is None
+    assert client.messages.calls[0]["tools"][0]["name"] == "emit_note"

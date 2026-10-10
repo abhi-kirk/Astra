@@ -1,36 +1,7 @@
-"""
-Unit tests for src/mcp.py — server specs, text extraction, prompt context.
-"""
-
-from types import SimpleNamespace
+"""Unit tests for src/mcp.py: server specs and prompt context."""
 
 from src import config
-from src.mcp import ServerSpec, advisor_specs, exploration_specs, extract_text, search_context
-
-# ---------------------------------------------------------------------------
-# extract_text
-# ---------------------------------------------------------------------------
-
-class TestExtractText:
-    def _make_message(self, blocks):
-        return SimpleNamespace(content=blocks)
-
-    def test_single_text_block(self):
-        block = SimpleNamespace(type="text", text="Standard advisor note.")
-        assert extract_text(self._make_message([block])) == "Standard advisor note."
-
-    def test_joins_multiple_text_blocks(self):
-        b1 = SimpleNamespace(type="text", text="## Note")
-        b2 = SimpleNamespace(type="text", text="Body content.")
-        assert extract_text(self._make_message([b1, b2])) == "## Note\nBody content."
-
-    def test_empty_content(self):
-        assert extract_text(self._make_message([])) == ""
-
-    def test_non_text_blocks_ignored(self):
-        other = SimpleNamespace(type="tool_use", text="not prose")
-        assert extract_text(self._make_message([other])) == ""
-
+from src.mcp import ServerSpec, advisor_specs, exploration_specs, search_context
 
 # ---------------------------------------------------------------------------
 # advisor_specs / exploration_specs

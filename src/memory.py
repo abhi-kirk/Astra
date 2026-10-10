@@ -735,26 +735,11 @@ def log_agent_run(summary: dict, sleeve: dict | None = None, run_date: str | Non
 # Read
 # ---------------------------------------------------------------------------
 
-def get_recent_decisions(n: int = 30) -> Rows:
-    return db_rows(
-        get_client().table("decisions")
-        .select("*, outcomes(price_at_outcome, pct_change)")
-        .order("run_date", desc=True).limit(n).execute().data
-    )
-
-
 def get_ticker_history(ticker: str) -> Rows:
     return db_rows(
         get_client().table("decisions")
         .select("*, outcomes(price_at_outcome, pct_change)")
         .eq("ticker", ticker).order("run_date").execute().data
-    )
-
-
-def get_run_summaries(n: int = 10) -> Rows:
-    return db_rows(
-        get_client().table("run_summaries").select("*")
-        .order("run_date", desc=True).limit(n).execute().data
     )
 
 
@@ -961,31 +946,3 @@ def get_latest_scorecard(track: str) -> dict | None:
     return data[0] if data else None
 
 
-def build_agent_context_summary(max_decisions: int = 20) -> str:
-    """Compact text summary of recent history for agent context. Token-efficient."""
-    recent = get_recent_decisions(max_decisions)
-    if not recent:
-        return "No prior decisions on record. This is the first analysis run."
-
-    lines = ["=== RECENT DECISION HISTORY ==="]
-    for d in recent:
-        outcome_rows = d.get("outcomes") or []
-        outcome = ""
-        if outcome_rows:
-            pct = outcome_rows[0].get("pct_change")
-            if pct is not None:
-                outcome = f" → outcome: {pct:+.1f}%"
-        lines.append(
-            f"{str(d['run_date'])[:10]}  {d['ticker']:8s}  {d['action']:8s}  "
-            f"@${d.get('price_at_decision') or 0:.2f}{outcome}"
-        )
-        if d.get("reasoning"):
-            lines.append(f"  Reasoning: {d['reasoning'][:120]}")
-
-    summaries = get_run_summaries(3)
-    if summaries:
-        lines.append("\n=== RECENT RUN SUMMARIES ===")
-        for s in summaries:
-            lines.append(f"{str(s['run_date'])[:10]}: {s.get('summary', '')[:200]}")
-
-    return "\n".join(lines)
