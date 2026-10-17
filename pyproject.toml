@@ -15,7 +15,11 @@ dependencies = [
     "chevron>=0.14.0",
     "starlette>=0.27.0",
     "cryptography>=42.0.0",
-    "telegramify-markdown>=1.2.0",
+    "telegramify-markdown>=1.2.0,<1.5",
+    # pyromark 0.10 returns a one-shot event iterator. telegramify 1.4 walks it
+    # twice whenever a message contains "$", and the second walk is empty, so
+    # the whole Telegram text comes out blank. 0.9.14 still returns a tuple.
+    "pyromark>=0.9.14,<0.10",
     # v2 is a breaking rewrite (streamable_http_client rename, snake_case protocol fields,
     # float timeouts, httpx2 auth base). Pin until we port; see the v1->v2 migration guide.
     "mcp>=1.28,<2",

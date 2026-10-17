@@ -161,3 +161,10 @@ class TestNotifyScorecard:
         with patch.object(notify, "send", side_effect=lambda t: t):
             out = notify.notify_scorecard(result, "SCALE")
         assert "n/a" in out
+
+
+def test_dollar_amounts_survive_telegram_formatting():
+    """A price has to stay in the message. pyromark 0.10 makes any text that
+    contains '$' render as a blank string."""
+    text = notify.markdownify("BUY NVDA — $63.00 · filled")
+    assert "NVDA" in text and "63" in text
