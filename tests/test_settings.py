@@ -428,3 +428,31 @@ def test_settings_writing_workflows_share_the_env_layer():
         "workflow(s) write the effective settings snapshot without the full environment "
         f"layer, so the dashboard would misreport production: {missing}"
     )
+
+
+def test_live_runs_are_not_gated_on_checks():
+    """A library release must not skip the morning trade.
+
+    Lint, types, and tests live in ci.yml. The workflows that analyze, trade,
+    search, or refresh data install the locked runtime and run.
+    """
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workflows"
+    live = (
+        "daily_analysis.yml",
+        "autotrader.yml",
+        "exploration.yml",
+        "fundamentals_refresh.yml",
+    )
+    for name in live:
+        text = (root / name).read_text()
+        assert "uv sync --locked" in text
+        assert 'python-version: "3.13"' in text
+        assert "ruff check" not in text
+        assert "\n        run: pyright\n" not in text
+        assert "\n        run: pytest\n" not in text
+    ci = (root / "ci.yml").read_text()
+    assert 'python-version: "3.13"' in ci
+    assert "uv sync --locked --extra dev" in ci
+    assert "ruff check" in ci and "pyright" in ci and "pytest" in ci

@@ -23,23 +23,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
+          version: "0.12.3"
           python-version: "3.13"
-          cache: "pip"
+          enable-cache: true
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
-
-      - name: Lint (ruff)
-        run: ruff check
-
-      - name: Type check (pyright)
-        run: pyright
-
-      - name: Run tests
-        run: pytest
+        run: uv sync --locked
 
       - name: Refresh fundamentals cache
         env:
@@ -49,4 +41,4 @@ jobs:
           # SEC_USER_AGENT intentionally not passed: SEC fair-use needs a descriptive UA with a
           # contact, and an unset secret would render as "" and override the config default (which
           # carries the contact) — 403-ing SEC. The config default is correct; leave it be.
-        run: python -m src.fundamentals --refresh ${{ github.event.inputs.tickers }}
+        run: uv run --frozen python -m src.fundamentals --refresh ${{ github.event.inputs.tickers }}

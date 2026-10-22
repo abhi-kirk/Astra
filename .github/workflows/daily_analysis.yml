@@ -13,23 +13,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
+          version: "0.12.3"
           python-version: "3.13"
-          cache: "pip"
+          enable-cache: true
 
+      # Locked runtime only. Lint, types, and tests run on push (ci.yml). A new
+      # library release must not fail this job and skip the sleeve.
       - name: Install dependencies
-        run: pip install -e ".[dev]"
-
-      - name: Lint (ruff)
-        run: ruff check
-
-      - name: Type check (pyright)
-        run: pyright
-
-      - name: Run tests
-        run: pytest
+        run: uv sync --locked
 
       - name: Decode Robinhood tokens
         env:
@@ -57,7 +51,7 @@ jobs:
           # reads. Without the secret this run would resolve the switch to its code default
           # (off) and the UI would report the Autotrader as OFF while it is live.
           AGENT_TRADING_ENABLED: ${{ secrets.AGENT_TRADING_ENABLED }}
-        run: python -m src.agent --mode simulation
+        run: uv run --frozen python -m src.agent --mode simulation
 
       # A failed run never starts the Autotrader (that workflow only chains off success),
       # and a skipped sleeve looks like a quiet day. Text before the log is the only signal.

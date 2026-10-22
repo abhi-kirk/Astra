@@ -27,6 +27,19 @@ from src import config
 logger = logging.getLogger(__name__)
 from src.db import rows as db_rows
 
+
+def _as_float(value: object) -> float:
+    """One number from a pandas reduction.
+
+    Recent pandas stubs type ``Series.sum()`` as a Series, so ``if total <= 0``
+    fails the type check and can stop the morning run. At runtime the reduction
+    is a scalar.
+    """
+    if isinstance(value, pd.Series):
+        return 0.0 if value.empty else _as_float(value.iloc[0])
+    return float(value)
+
+
 ROOT = Path(__file__).parent.parent
 HISTORY_CSV = ROOT / "data" / "portfolio_history.csv"
 
@@ -123,8 +136,8 @@ def get_cost_basis_from_csv() -> dict[str, dict]:
     for ticker, group in trades.groupby("Instrument"):
         buys = group[group["Trans Code"] == "Buy"]
         sells = group[group["Trans Code"] == "Sell"]
-        net_shares = round(buys["qty"].sum() - sells["qty"].sum(), 6)
-        net_cost = round(buys["amount"].sum() - sells["amount"].sum(), 2)
+        net_shares = round(_as_float(buys["qty"].sum()) - _as_float(sells["qty"].sum()), 6)
+        net_cost = round(_as_float(buys["amount"].sum()) - _as_float(sells["amount"].sum()), 2)
         if net_shares <= 0.01:
             continue
         last_buy = buys.sort_values("date").iloc[-1] if len(buys) else None
