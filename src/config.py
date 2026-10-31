@@ -87,7 +87,7 @@ class PaperConfig:
     # Bounded pyramiding (adds): a persisting BUY on a held name opens an additional paper lot,
     # up to N adds and no more often than the cooldown. Position-size + averaging-down hard rules
     # still gate over-concentration upstream (a buy over cap is `blocked`, never reaches here).
-    max_adds_per_ticker: int = _cfg("PAPER_MAX_ADDS_PER_TICKER", cast=int, default=3)  # additional lots beyond the initial (0 = no pyramiding)
+    max_adds_per_ticker: int = _cfg("PAPER_MAX_ADDS_PER_TICKER", cast=int, default=7)  # additional lots beyond the initial (0 = no pyramiding); 7 extra = 8 open buys
     add_cooldown_days: int = _cfg("PAPER_ADD_COOLDOWN_DAYS", cast=int, default=5)      # min calendar days between adds on the same name
 
 

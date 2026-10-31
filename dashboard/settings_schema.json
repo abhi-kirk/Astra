@@ -757,7 +757,7 @@
       "locked": false,
       "editable": true,
       "type": "int",
-      "default": 3
+      "default": 7
     },
     {
       "key": "paper.add_cooldown_days",
