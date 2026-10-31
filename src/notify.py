@@ -65,6 +65,13 @@ _SKIP_LABELS = {
 
 def _fmt_placed(o: dict) -> str:
     """One order line with side, ticker, size ($ for buys, shares for sells) and fill state."""
+    if o.get("side") == "sell" and o.get("rotation_for"):
+        shares = o.get("shares")
+        size = f"{shares:g} sh" if shares else ""
+        status = o.get("status")
+        bits = [b for b in (size, status) if b]
+        tail = f" — {' · '.join(bits)}" if bits else ""
+        return f"🔴 SOLD {o.get('ticker')} to fund {o['rotation_for']}{tail}"
     side = (o.get("side") or "").upper()
     arrow = "🟢" if o.get("side") == "buy" else "🔴"
     if o.get("side") == "buy":

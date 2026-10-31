@@ -286,6 +286,19 @@ class BrainConfig:
     contextual_size_mult_max: float = _cfg("BRAIN_CONTEXTUAL_SIZE_MULT_MAX", cast=float, default=2.0)
     contextual_nudge_cap: float = _cfg("BRAIN_CONTEXTUAL_NUDGE_CAP", cast=float, default=0.10)  # max |ΔC| a play may apply
 
+    # ── Capital rotation (docs/capital_rotation.md) — sleeve only ──────────────
+    # When a new buy cannot be funded, sell the weakest sleeve holding it clearly beats
+    # and buy the next session, after the cash settles. Off leaves the sleeve to skip
+    # the buy. The Advisor book is not wired.
+    capital_rotation_enabled: bool = _cfg("BRAIN_CAPITAL_ROTATION_ENABLED", default="true").strip().lower() in ("true", "1", "yes", "on")
+    swap_margin: float = _cfg("BRAIN_SWAP_MARGIN", cast=float, default=0.15)  # min OwnScore edge to displace an ordinary holding
+    swap_margin_thesis_hold: float = _cfg("BRAIN_SWAP_MARGIN_THESIS_HOLD", cast=float, default=0.30)  # higher bar for a thesis_hold
+    swap_overshoot: float = _cfg("BRAIN_SWAP_OVERSHOOT", cast=float, default=0.10)  # free this much more than the shortfall, for slippage
+    swap_min_lot: float = _cfg("BRAIN_SWAP_MIN_LOT", cast=float, default=25.0)  # reject a rotation whose resulting buy is still dust
+    swap_min_proceeds: float = _cfg("BRAIN_SWAP_MIN_PROCEEDS", cast=float, default=25.0)  # reject a sale that raises dust
+    swap_cooldown_days: int = _cfg("BRAIN_SWAP_COOLDOWN_DAYS", cast=int, default=10)  # trading days before either name can rotate again
+    swap_intent_ttl_days: int = _cfg("BRAIN_SWAP_INTENT_TTL_DAYS", cast=int, default=3)  # trading days a pending buy stays live
+
 
 # ── Robinhood live portfolio sync ──────────────────────────────────────────────
 @dataclass

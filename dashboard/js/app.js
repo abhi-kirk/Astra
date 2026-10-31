@@ -531,6 +531,16 @@ async function fetchAgentTrades(sb) {
   return data || [];
 }
 
+async function fetchRotationIntents(sb) {
+  const { data, error } = await sb.from('rotation_intents').select('*')
+    .eq('status', 'pending').order('created_at', { ascending: false }).limit(5);
+  if (error) {
+    console.warn('rotation_intents fetch failed:', error.message);
+    return [];
+  }
+  return data || [];
+}
+
 async function fetchAgentSnapshot(sb) {
   const { data } = await sb.from('agent_account_snapshots').select('*')
     .order('snapshot_time', { ascending: false }).limit(1).maybeSingle();
@@ -851,7 +861,7 @@ function renderTreemap(container, items) {
   _layoutTreemap(container, clean);                // immediate paint (re-corrected by the observer)
 }
 
-function renderAutotrader(sb, control, trades, snapshot, navRows, spyRows, marketData) {
+function renderAutotrader(sb, control, trades, snapshot, navRows, spyRows, marketData, rotationIntents) {
   const section = document.getElementById("autotrader");
   if (!section) return;
   section.classList.remove('hidden');
@@ -887,15 +897,23 @@ function renderAutotrader(sb, control, trades, snapshot, navRows, spyRows, marke
     ? `<div class="paper-stat-value ${series.vsSpy >= 0 ? 'positive' : 'negative'}">${fmtPct(series.vsSpy)}</div>`
     : `<div class="paper-stat-value paper-stat-na">— <span class="paper-stat-note">&lt;2 runs</span></div>`;
 
+  const pending = rotationIntents || [];
+  const pendingHtml = pending.map(r => {
+    const frac = r.sell_fraction != null && Number(r.sell_fraction) < 1
+      ? ` (${Math.round(Number(r.sell_fraction) * 100)}%)` : '';
+    return `Selling ${r.sell_ticker}${frac} to fund ${r.buy_ticker}. The buy waits until the cash settles.`;
+  }).join('<br>');
   const orderRows = trades.map(t => {
     const sideCls = t.side === 'buy' ? 'positive' : 'negative';
     const size = t.dollar_amount != null ? money(t.dollar_amount) : (t.quantity != null ? `${t.quantity} sh` : '—');
+    const funding = t.source === 'rotation' && t.rule_checks && t.rule_checks.rotation_for
+      ? ` · to fund ${t.rule_checks.rotation_for}` : '';
     return `<tr>
       <td>${(t.run_date || '').slice(0, 10)}</td>
       <td class="pt-ticker">${t.ticker}</td>
       <td class="${sideCls}" style="font-weight:600">${(t.side || '').toUpperCase()}</td>
       <td>${size}</td>
-      <td>${t.status || ''}${t.status === 'dry_run' ? ' <span style="color:var(--text-dim)">(sim)</span>' : ''}</td>
+      <td>${t.status || ''}${funding}${t.status === 'dry_run' ? ' <span style="color:var(--text-dim)">(sim)</span>' : ''}</td>
     </tr>`;
   }).join('');
 
@@ -932,6 +950,7 @@ function renderAutotrader(sb, control, trades, snapshot, navRows, spyRows, marke
         <div class="treemap-caption">HOLDINGS <span>· tile size = position weight · color = P&amp;L</span></div>
         <div class="treemap" id="at-treemap"></div>
       </div>
+      ${pendingHtml ? `<div style="color:var(--text-dim);font-size:13px;margin:10px 0 0">${pendingHtml}</div>` : ''}
       <details class="activity-log">
         <summary>Activity log <span class="activity-count">${trades.length} orders</span></summary>
         ${trades.length ? `<div class="activity-table-wrap"><table class="paper-table">
@@ -958,7 +977,7 @@ function renderAutotrader(sb, control, trades, snapshot, navRows, spyRows, marke
         return;
       }
       logUserAction(next ? 'autotrader_pause' : 'autotrader_resume', null, { paused: next });
-      renderAutotrader(sb, { ...control, paused: next }, trades, snapshot, navRows, spyRows, marketData);
+      renderAutotrader(sb, { ...control, paused: next }, trades, snapshot, navRows, spyRows, marketData, pending);
     });
   }
 }
@@ -3159,10 +3178,11 @@ async function init() {
     // ── Autotrader autonomous panel + pause/resume (owner-only) ──
     if (isAuthenticated) {
       try {
-        const [agentControl, agentTrades, agentSnapshot, agentNav] = await Promise.all([
+        const [agentControl, agentTrades, agentSnapshot, agentNav, rotationIntents] = await Promise.all([
           fetchAgentControl(sb), fetchAgentTrades(sb), fetchAgentSnapshot(sb), fetchAgentNavSeries(sb),
+          fetchRotationIntents(sb),
         ]);
-        renderAutotrader(sb, agentControl, agentTrades, agentSnapshot, agentNav, spyPrices, marketData);
+        renderAutotrader(sb, agentControl, agentTrades, agentSnapshot, agentNav, spyPrices, marketData, rotationIntents);
       } catch (err) {
         console.error('[Autotrader] render error:', err);
       }

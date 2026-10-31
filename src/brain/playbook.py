@@ -102,8 +102,20 @@ def _eval_macro_dip(play: dict, signals: list[dict], market_data: dict[str, dict
     return out
 
 
+def _eval_capital_rotation(_play: dict, _signals: list[dict], _market_data: dict[str, dict],
+                           _market_ctx: dict) -> list[Proposal]:
+    """The swap itself runs in the Autotrader, against the sleeve's own book.
+
+    The morning advisor pass does not know which sleeve holding is the one to sell, so
+    this evaluator deliberately emits nothing. Enabling or reweighting the play is read
+    by the executor. A model call here would be guessing at a sale.
+    """
+    return []
+
+
 _QUANT_EVALUATORS = {
     "macro_dip": _eval_macro_dip,
+    "capital_rotation": _eval_capital_rotation,
 }
 
 

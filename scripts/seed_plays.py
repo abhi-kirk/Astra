@@ -40,7 +40,25 @@ PLAYS = {
                 "size_mult_max": 1.5,
                 "nudge_max": 0.08,
             },
-        }
+        },
+        {
+            "name": "capital_rotation",
+            "enabled": True,
+            "type": "quant",
+            # weight 1 uses the published score gaps. Lower makes a swap harder to justify.
+            "weight": 1.0,
+            "rationale": (
+                "When the sleeve cannot pay for a new buy, sell the weakest holding that "
+                "the new name clearly beats, and buy the next day once the cash has settled."
+            ),
+            "evaluates": (
+                "One swap per day, only when a buy is already gated and unfunded. The new "
+                "name must beat the holding being sold by the published margin (wider for a "
+                "core holding). Dust that cannot pay for the buy is left alone. The morning "
+                "note does not choose the sale — the sleeve does, from its own holdings."
+            ),
+            "params": {},
+        },
     ]
 }
 

@@ -610,6 +610,57 @@ def get_agent_trades_today(run_date: str) -> Rows:
     )
 
 
+def get_decision_features_on(day: str) -> Rows:
+    """Today's screened scores (OwnScore lives in score_buy). Rotation reads these; it does
+    not rescore. One row per ticker — the latest run of the day wins."""
+    d = str(day)[:10]
+    rows = db_rows(
+        get_client().table("decision_features")
+        .select("ticker,action,score_buy,features,run_date")
+        .gte("run_date", f"{d}T00:00:00").lte("run_date", f"{d}T23:59:59.999999")
+        .order("run_date", desc=True).execute().data
+    )
+    seen: dict[str, dict] = {}
+    for row in rows:
+        seen.setdefault(row["ticker"], row)
+    return list(seen.values())
+
+
+def save_rotation_intent(row: dict) -> int | None:
+    """Record a sell placed so a named buy can be funded once the cash settles."""
+    _register_brain_version()
+    result = get_client().table("rotation_intents").insert({
+        **row,
+        **brain_version_fields(),
+    }).execute()
+    data = db_rows(result.data)
+    return data[0].get("id") if data else None
+
+
+def update_rotation_intent(intent_id: int, status: str, **extra) -> None:
+    patch = {"status": status, **{k: v for k, v in extra.items() if v is not None}}
+    get_client().table("rotation_intents").update(patch).eq("id", intent_id).execute()
+
+
+def get_pending_rotation_intent(book: str = "autotrader") -> dict | None:
+    """The newest unsettled sell-to-fund. One at a time: a second sale waits."""
+    data = db_rows(
+        get_client().table("rotation_intents").select("*")
+        .eq("book", book).eq("status", "pending")
+        .order("created_at", desc=True).limit(1).execute().data
+    )
+    return data[0] if data else None
+
+
+def get_recent_rotation_intents(limit: int = 40) -> Rows:
+    """Recent swaps, so a name that just moved cannot be swapped again immediately."""
+    return db_rows(
+        get_client().table("rotation_intents").select(
+            "sell_ticker,buy_ticker,created_at,status"
+        ).order("created_at", desc=True).limit(limit).execute().data
+    )
+
+
 def get_last_agent_buy(ticker: str) -> dict | None:
     """Most recent placed BUY for a ticker in the agentic account (for the min-hold
     check). Blocked/dry-run rows are not real purchases and must not reset the clock."""

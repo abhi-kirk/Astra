@@ -74,6 +74,11 @@ def wired(monkeypatch, convictions):
         "today": [],
         "last_buy": None,
         "prev_snapshot": None,
+        "features": [],
+        "rotation_intent": None,
+        "rotation_recent": [],
+        "rotation_saved": [],
+        "rotation_updates": [],
     }
     monkeypatch.setattr(memory, "get_agent_control", lambda: state["control"])
     monkeypatch.setattr(memory, "get_paper_trades_opened_on", lambda d: state["opened"])
@@ -82,6 +87,20 @@ def wired(monkeypatch, convictions):
     monkeypatch.setattr(memory, "get_agent_trades_today", lambda d: state["today"])
     monkeypatch.setattr(memory, "get_last_agent_buy", lambda t: state["last_buy"])
     monkeypatch.setattr(memory, "get_latest_agent_snapshot", lambda: state["prev_snapshot"])
+    monkeypatch.setattr(memory, "get_decision_features_on", lambda d: state["features"])
+    monkeypatch.setattr(memory, "get_pending_rotation_intent", lambda book="autotrader": state["rotation_intent"])
+    monkeypatch.setattr(memory, "get_recent_rotation_intents", lambda limit=40: state["rotation_recent"])
+
+    def _save_intent(row):
+        state["rotation_saved"].append(row)
+        return len(state["rotation_saved"])
+
+    def _update_intent(intent_id, status, **extra):
+        state["rotation_updates"].append({"id": intent_id, "status": status, **extra})
+
+    monkeypatch.setattr(memory, "save_rotation_intent", _save_intent)
+    monkeypatch.setattr(memory, "update_rotation_intent", _update_intent)
+    monkeypatch.setattr(ex, "_rotation_weight", lambda: 1.0)
     monkeypatch.setattr(memory, "save_agent_account_snapshot", lambda s: None)
 
     def _halt(h, r=None):
@@ -617,3 +636,56 @@ def test_notify_agent_still_quiet_on_empty_run(monkeypatch):
     from src import notify
     monkeypatch.setattr(notify, "send", lambda text: (_ for _ in ()).throw(AssertionError("sent")))
     assert notify.notify_agent({"placed": [], "blocked": [], "failed": []}) is False
+
+
+def test_unfunded_new_name_sells_a_weaker_holding(wired, monkeypatch):
+    """$150 of deployable cash cannot buy a $200 lot. The sleeve sells part of a weaker
+    holding and records the buy for the next session. It does not buy today (unsettled cash)."""
+    from src import notify
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
+    state, _logs = wired
+    state["opened"] = [{"id": 21, "ticker": "NBIS", "action": "buy", "suggested_position_pct": 0.04}]
+    state["features"] = [
+        {"ticker": "NBIS", "action": "buy", "score_buy": 0.90, "features": {"current_price": 40.0}},
+        {"ticker": "ASTS", "action": "hold", "score_buy": 0.40, "features": {"current_price": 40.0}},
+    ]
+    fb = FakeBroker(
+        equity=5000.0, equity_value=4100.0, cash=900.0,
+        positions={"positions": [{
+            "symbol": "ASTS", "quantity": 10, "average_cost": 40,
+            "shares_available_for_sells": 10,
+        }]},
+    )
+    summary = ex.run(broker=fb, run_date="2026-10-30T13:00:00", dry_run=False)
+    sells = [p for p in fb.places if p["side"] == "sell"]
+    assert len(sells) == 1 and sells[0]["symbol"] == "ASTS"
+    assert float(sells[0]["quantity"]) == pytest.approx(1.375, abs=0.001)
+    assert not any(p["side"] == "buy" for p in fb.places)
+    assert state["rotation_saved"][0]["buy_ticker"] == "NBIS"
+    assert state["rotation_saved"][0]["sell_ticker"] == "ASTS"
+    assert state["rotation_saved"][0]["status"] == "pending"
+    line = notify._fmt_placed(summary["placed"][-1])
+    assert "SOLD ASTS to fund NBIS" in line
+
+
+def test_settled_rotation_buys_the_next_session(wired, monkeypatch):
+    """The day after the sale, the named buy is placed and the intent is closed.
+    No new paper lot is required — that lot already exists."""
+    monkeypatch.setattr(config.agent, "trading_enabled", True)
+    state, _logs = wired
+    state["opened"] = []
+    state["features"] = [
+        {"ticker": "NBIS", "action": "buy", "score_buy": 0.90, "features": {"current_price": 40.0}},
+    ]
+    state["rotation_intent"] = {
+        "id": 7, "book": "autotrader", "status": "pending",
+        "buy_ticker": "NBIS", "sell_ticker": "ASTS",
+        "margin": 0.30, "incumbent_score": 0.40, "challenger_score": 0.90,
+        "expected_proceeds": 55, "created_at": "2026-10-29T13:00:00+00:00",
+    }
+    fb = FakeBroker(equity=5000.0, equity_value=0.0, cash=1100.0)
+    summary = ex.run(broker=fb, run_date="2026-10-30T13:00:00", dry_run=False)
+    buys = [p for p in fb.places if p["side"] == "buy"]
+    assert len(buys) == 1 and buys[0]["symbol"] == "NBIS" and buys[0]["dollar_amount"] == "200.00"
+    assert state["rotation_updates"][0]["status"] == "filled"
+    assert summary["placed"][0]["ticker"] == "NBIS"

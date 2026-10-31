@@ -347,6 +347,54 @@ _DIALS: list[Knob] = [
         impact="Higher means fewer but more meaningful holdings; lower spreads the same money "
                "across more names and risks positions too small to matter.",
     ),
+    Knob(
+        "brain.capital_rotation_enabled", DIAL, "Sell a weaker holding to fund a buy",
+        group=_G_AUTO,
+        help="When a new stock the brain wants cannot be paid for out of cash, sell the "
+             "weakest sleeve holding that the new stock clearly beats, and buy it the next "
+             "day once the cash has settled. A name you already own is never sold just to "
+             "buy more of itself. Turning this off makes an unaffordable buy wait.",
+        impact="This places real sell orders. Off stops new rotations. A sale already placed "
+               "still completes its buy.",
+    ),
+    Knob(
+        "brain.swap_margin", DIAL, "Edge required to swap", group=_G_AUTO, unit="score",
+        min=0.0, max=1.0, step=0.01,
+        help="How much higher the new stock must score than the holding being sold. Below "
+             "this the two are too close and the trade is friction.",
+        impact="Higher swaps less often. Lower will sell a holding for a name that is only "
+               "slightly better.",
+    ),
+    Knob(
+        "brain.swap_margin_thesis_hold", DIAL, "Edge required to sell a core holding",
+        group=_G_AUTO, unit="score", min=0.0, max=1.0, step=0.01,
+        help="The higher bar for selling a stock you are holding because you believe the "
+             "business, rather than an ordinary or fading position.",
+        impact="Higher protects core holdings. Lower lets a modestly better idea replace one.",
+    ),
+    Knob(
+        "brain.swap_overshoot", DIAL, "Extra cash freed above the buy", group=_G_AUTO,
+        unit="fraction", min=0.0, max=0.5, step=0.05,
+        help="Sell a little more than the buy needs, so slippage and the cash cushion do not "
+             "leave the buy short the next day.",
+        impact="Higher sells more of the old holding. The leftover cash is not spent on a "
+               "second name.",
+    ),
+    Knob(
+        "brain.swap_min_lot", DIAL, "Smallest buy a swap may fund", group=_G_AUTO,
+        unit="usd", min=5, max=500, step=5,
+        help="Refuse the swap when the cash it frees still cannot buy a position at least "
+             "this large. The sleeve's own minimum position also applies, so a swap that "
+             "cannot pay for a real lot does not sell anything.",
+        impact="Higher refuses swaps that would only fund a small buy.",
+    ),
+    Knob(
+        "brain.swap_min_proceeds", DIAL, "Smallest sale a swap may make", group=_G_AUTO,
+        unit="usd", min=5, max=500, step=5,
+        help="Refuse a sale that raises less than this. Selling a real holding to collect "
+             "a few dollars is worse than doing nothing.",
+        impact="Higher leaves tiny leftover positions alone.",
+    ),
 
     # ── Daily phone note ──────────────────────────────────────────────────────
     Knob(
@@ -746,6 +794,17 @@ _SHAPE: list[Knob] = [
          unit="fraction", min=0.005, max=0.5, step=0.005,
          help="The fallback purchase size used when no explicit size was calculated.",
          impact="Rarely used — the brain almost always supplies a size."),
+    Knob("brain.swap_cooldown_days", SHAPE, "Days before a swapped name can move again",
+         group=_G_AUTO, unit="days", min=0, max=60, step=1,
+         help="After a name is sold or bought in a swap, neither side can be part of another "
+              "swap until this many trading days have passed. Stops selling A for B and then "
+              "immediately selling B to buy A back.",
+         impact="Lower allows the same stock to be rotated again sooner."),
+    Knob("brain.swap_intent_ttl_days", SHAPE, "Days a funded buy stays waiting",
+         group=_G_AUTO, unit="days", min=1, max=10, step=1,
+         help="After the sale, the buy has this many trading days to still qualify. If it "
+              "no longer looks like a buy, the cash simply stays unspent.",
+         impact="Shorter cancels a waiting buy sooner when the idea fades."),
     Knob("agent.account_is_cash", SHAPE, "Autotrader is a cash account", group=_G_AUTO,
          help="Cash accounts settle trades a day late and penalise quick round-trips, so extra "
               "checks apply before selling. Turn off only if the account type changes.",

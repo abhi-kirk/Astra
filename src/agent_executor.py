@@ -9,7 +9,9 @@ Runs as its own workflow, after Advisor's daily run has persisted the paper trac
     → for each mirror: check_agent_guardrails → review_equity_order → place_equity_order
        (marketable limit, fresh ref_id) → log_agent_trade (link mirrors_paper_trade_id)
 
-No LLM in the loop; guardrails are pure code. Nothing places a real order unless
+No LLM decides a sale. When a new buy cannot be funded, capital rotation
+(src/brain/rotation.py) may sell one weaker sleeve holding and buy the next session,
+after the cash settles. Nothing places a real order unless
 `AGENT_TRADING_ENABLED` is True — otherwise every order runs in dry-run (review only).
 The broker is injectable so the whole path is unit-tested with a fake.
 """
@@ -18,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from src import config, memory, notify, performance
 from src.agent_broker import (
@@ -29,7 +31,10 @@ from src.agent_broker import (
     extract_positions,
     extract_realized_pnl,
 )
-from src.agent_guardrails import check_agent_guardrails
+from src.agent_guardrails import business_days_between, check_agent_guardrails
+from src.brain.conviction import get_ticker_guidance, is_excluded
+from src.brain.hard_rules import check_hard_rules, compute_portfolio_summary
+from src.brain.rotation import plan_rotation
 from src.data_layer import load_convictions
 from src.observability import RunObserver
 
@@ -212,6 +217,235 @@ def _allocate_buys(buys: list[dict], budget: float, slots: int,
             m["dollars"] = round(minimum + surplus * share, 2)
 
 
+def _feature_map(run_date: str) -> dict[str, dict]:
+    """Today's OwnScore and price per ticker. Missing or failed read → empty (no rotation)."""
+    try:
+        rows = memory.get_decision_features_on(run_date)
+    except Exception:
+        logger.warning("Rotation: could not read today's scores — no swap this run.", exc_info=True)
+        return {}
+    return {r["ticker"]: r for r in rows if r.get("ticker")}
+
+
+def _rotation_weight() -> float | None:
+    """Playbook weight for a new swap, or None when rotation is switched off.
+
+    A missing play row does not disable it — the config flag is the master switch.
+    Disabling the play in the drawer does. A pending buy from a sale already placed
+    is completed either way (the caller does not consult this for fills).
+    """
+    if not config.brain.capital_rotation_enabled:
+        return None
+    try:
+        from src.brain.playbook import load_plays
+        plays = (load_plays() or {}).get("plays") or []
+    except Exception:
+        logger.warning("Rotation: Playbook unreadable — using the published margins.", exc_info=True)
+        return 1.0
+    play = next((p for p in plays if p.get("name") == "capital_rotation"), None)
+    if play is not None and not play.get("enabled", True):
+        return None
+    try:
+        return float((play or {}).get("weight") or 1.0)
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _cooled_tickers(now: datetime) -> set[str]:
+    try:
+        rows = memory.get_recent_rotation_intents()
+    except Exception:
+        logger.warning("Rotation: could not read recent swaps — treating none as cooling.", exc_info=True)
+        return set()
+    cooled: set[str] = set()
+    window = config.brain.swap_cooldown_days
+    for row in rows:
+        if row.get("status") not in ("pending", "filled", "expired"):
+            continue
+        created = _as_naive(row.get("created_at"))
+        if created is None or business_days_between(created, now) > window:
+            continue
+        for key in ("sell_ticker", "buy_ticker"):
+            ticker = row.get(key)
+            if isinstance(ticker, str) and ticker:
+                cooled.add(ticker)
+    return cooled
+
+
+def _as_naive(value) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+    except (ValueError, TypeError):
+        return None
+
+
+def _expiry_date(now: datetime) -> str:
+    """The last session on which a pending buy may still fill (trading days, not calendar)."""
+    cur = now.date()
+    left = config.brain.swap_intent_ttl_days
+    while left > 0:
+        cur += timedelta(days=1)
+        if cur.weekday() < 5:
+            left -= 1
+    return cur.isoformat()
+
+
+def _price(features: dict[str, dict], ticker: str, fallback: float) -> float:
+    feat = features.get(ticker) or {}
+    raw = (feat.get("features") or {}).get("current_price")
+    try:
+        price = float(raw) if raw is not None else 0.0
+    except (TypeError, ValueError):
+        price = 0.0
+    return price or fallback
+
+
+def _intent_still_due(intent: dict, now: datetime) -> bool:
+    created = _as_naive(intent.get("created_at")) or now
+    return business_days_between(created, now) <= config.brain.swap_intent_ttl_days
+
+
+def _prepare_rotation_fill(intent: dict, features: dict[str, dict], convictions: dict,
+                           positions: dict[str, dict], now: datetime) -> dict | None:
+    """A buy mirror for yesterday's sale, once the challenger still qualifies.
+
+    Returns the mirror with dollars already set when today's budget can pay for the lot.
+    Returns None when the idea has expired or no longer clears the original bar — the
+    caller marks the intent expired and the cash stays put.
+    """
+    if not _intent_still_due(intent, now):
+        memory.update_rotation_intent(intent["id"], "expired", reason="timed out before the buy qualified")
+        logger.info("Rotation: %s intent expired unfilled.", intent.get("buy_ticker"))
+        return None
+    ticker = intent["buy_ticker"]
+    feat = features.get(ticker) or {}
+    score = feat.get("score_buy")
+    try:
+        score_f = float(score) if score is not None else None
+    except (TypeError, ValueError):
+        score_f = None
+    margin = float(intent.get("margin") or 0)
+    incumbent = float(intent.get("incumbent_score") or 0)
+    still = feat.get("action") == "buy" and score_f is not None and score_f - incumbent >= margin - 1e-9
+    if feat and not still:
+        memory.update_rotation_intent(intent["id"], "expired", reason="the buy no longer clears the bar")
+        logger.info("Rotation: %s no longer qualifies — cash stays unspent.", ticker)
+        return None
+    if not feat:
+        return None  # today's scores are missing; keep the intent and try the next session
+    if is_excluded(ticker, convictions):
+        memory.update_rotation_intent(intent["id"], "expired", reason="excluded")
+        return None
+    md = {t: {"current_price": _price(features, t, p.get("avg_cost") or 0)} for t, p in positions.items()}
+    port = {t: {"shares": p.get("shares") or 0, "avg_cost": p.get("avg_cost") or 0} for t, p in positions.items()}
+    block = check_hard_rules(ticker, {}, md.get(ticker, {}), convictions, compute_portfolio_summary(port, md, convictions))
+    if block:
+        memory.update_rotation_intent(intent["id"], "expired", reason=block)
+        logger.info("Rotation: %s blocked (%s) — cash stays unspent.", ticker, block)
+        return None
+    return {
+        "ticker": ticker, "side": "buy", "weight": 1.0,
+        "rotation_intent_id": intent["id"], "rotation_reserved": True,
+        "desired_usd": config.agent.min_position_usd,
+    }
+
+
+def _plan_sleeve_rotation(unfunded: list[dict], positions: dict[str, dict], features: dict[str, dict],
+                          convictions: dict, budget: float, now: datetime) -> dict | None:
+    """A sell mirror, or None. Does not place anything."""
+    weight = _rotation_weight()
+    if weight is None or not unfunded:
+        return None
+    cooled = _cooled_tickers(now)
+    challengers = []
+    for m in unfunded:
+        ticker = m["ticker"]
+        if ticker in positions:
+            continue  # an add to a name already held is the cash cushion's job, not a sale
+        feat = features.get(ticker) or {}
+        score = feat.get("score_buy")
+        guidance = get_ticker_guidance(ticker, convictions)
+        challengers.append({
+            "ticker": ticker,
+            "own_score": score,
+            "desired_usd": config.agent.min_position_usd,
+            "held": False,
+            "hold_only": bool(guidance.get("hold_only")),
+            "do_not_add": bool(guidance.get("do_not_add")),
+            "excluded": is_excluded(ticker, convictions) is not None,
+        })
+    incumbents = []
+    for ticker, pos in positions.items():
+        feat = features.get(ticker) or {}
+        guidance = get_ticker_guidance(ticker, convictions)
+        last = memory.get_last_agent_buy(ticker)
+        value = (pos.get("shares") or 0) * _price(features, ticker, pos.get("avg_cost") or 0)
+        incumbents.append({
+            "ticker": ticker,
+            "own_score": feat.get("score_buy"),
+            "value_usd": value,
+            "intent": guidance.get("intent"),
+            "last_buy_at": (last or {}).get("run_date"),
+            "excluded": is_excluded(ticker, convictions) is not None,
+        })
+    plan = plan_rotation(challengers, incumbents, budget, weight=weight, cooled=cooled, now=now)
+    if plan is None:
+        return None
+    mirror = {
+        "ticker": plan.sell_ticker, "side": "sell", "source": "rotation",
+        "rotation_for": plan.buy_ticker, "rotation_plan": plan,
+    }
+    if not plan.full_exit:
+        mirror["trim_fraction"] = plan.sell_fraction
+    mirror["shortfall"] = round(config.agent.min_position_usd - float(budget or 0), 2)
+    logger.info("Rotation: %s", plan.reason)
+    return mirror
+
+
+def _record_rotation(mirror: dict, summary: dict, before: int, dry_run: bool, run_date: str) -> None:
+    """Persist the sell→buy link once the order is actually in `placed`.
+
+    A dry-run rehearses the sale and texts it, but does not leave a pending buy that
+    the next live session would try to fill without a real sale behind it.
+    """
+    if len(summary.get("placed") or []) <= before:
+        return
+    placed = summary["placed"][-1]
+    plan = mirror.get("rotation_plan")
+    if plan is not None and placed.get("side") == "sell":
+        summary["rotation"] = {"sell": plan.sell_ticker, "buy": plan.buy_ticker, "reason": plan.reason}
+        if dry_run:
+            return
+        try:
+            memory.save_rotation_intent({
+                "book": "autotrader",
+                "status": "pending",
+                "sell_ticker": plan.sell_ticker,
+                "sell_fraction": plan.sell_fraction,
+                "sell_trade_id": placed.get("id"),
+                "buy_ticker": plan.buy_ticker,
+                "expected_proceeds": plan.expected_proceeds,
+                "challenger_score": plan.challenger_score,
+                "incumbent_score": plan.incumbent_score,
+                "margin": plan.margin,
+                "shortfall": mirror.get("shortfall"),
+                "reason": plan.reason,
+                "llm_influenced": False,
+                "expires_on": _expiry_date(_as_naive(run_date) or datetime.now()),
+            })
+        except Exception:
+            logger.error("Rotation: the sell was placed but the follow-up buy was not recorded", exc_info=True)
+        return
+    intent_id = mirror.get("rotation_intent_id")
+    if intent_id and placed.get("side") == "buy" and not dry_run:
+        try:
+            memory.update_rotation_intent(intent_id, "filled", filled_trade_id=placed.get("id"))
+        except Exception:
+            logger.error("Rotation: the buy was placed but the intent was not closed", exc_info=True)
+
+
 def run(run_date: str | None = None, broker: AgenticBroker | None = None,
         dry_run: bool | None = None) -> dict:
     """Execute Autotrader for one session. Returns a summary dict."""
@@ -309,29 +543,79 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
 
     # -- mirror source + shared context ----------------------------------
     mirrors = _build_mirrors(run_date)
+    now = datetime.now()
+    convictions = load_convictions()
+    features = _feature_map(run_date)
+    # A sale placed on an earlier session funds its buy here, even when the paper book
+    # opened nothing new today (the lot is already open; the sleeve is catching up).
+    try:
+        pending_intent = memory.get_pending_rotation_intent()
+    except Exception:
+        logger.warning("Rotation: could not read a pending buy — continuing without it.", exc_info=True)
+        pending_intent = None
+    if pending_intent:
+        fill = _prepare_rotation_fill(pending_intent, features, convictions, positions, now)
+        if fill and fill["ticker"] in positions:
+            try:
+                memory.update_rotation_intent(
+                    fill["rotation_intent_id"], "expired", reason="already held",
+                )
+            except Exception:
+                logger.warning("Rotation: could not close an already-held buy.", exc_info=True)
+        elif fill:
+            # The paper book may already want this name today. One order, tagged so the
+            # sale's intent closes when that order is placed.
+            existing = next(
+                (m for m in mirrors if m.get("side") == "buy" and m.get("ticker") == fill["ticker"]),
+                None,
+            )
+            if existing:
+                existing["rotation_intent_id"] = fill["rotation_intent_id"]
+                existing["rotation_reserved"] = True
+                existing["desired_usd"] = fill["desired_usd"]
+            else:
+                mirrors.insert(0, fill)
     if not mirrors:
         logger.info("No paper decisions to mirror today — nothing to execute.")
         _finalize(summary)
         return summary
 
-    convictions = load_convictions()
     trades_today = memory.get_agent_trades_today(run_date)
-    now = datetime.now()
 
     # Size today's buys together: rank by the brain's conviction weight, deploy a capped slice
-    # of remaining cash (never below the reserve floor), split in proportion to weight. Sells
-    # don't draw on this budget. `_allocate_buys` annotates each buy mirror with `dollars`.
+    # of remaining cash (never below the reserve floor), in whole lots. A rotation fill is
+    # reserved first — the sale was made for that buy — and the surplus is not spent on a
+    # second name. Sells don't draw on this budget.
     placed_buys_today = sum(
         1 for t in trades_today if t.get("side") == "buy" and t.get("status") in _PLACED_STATES
     )
     buy_slots = config.agent.max_trades_per_day - placed_buys_today
-    pending_buys = [
-        m for m in mirrors
-        if m["side"] == "buy" and not _already_handled(trades_today, m["ticker"], "buy")
-    ]
     sleeve_budget = _sleeve_budget(port["buying_power"], equity)
     summary["account"]["budget"] = sleeve_budget
-    _allocate_buys(pending_buys, sleeve_budget, buy_slots, positions)
+    reserved = [m for m in mirrors if m.get("rotation_reserved")]
+    if reserved and sleeve_budget >= config.agent.min_position_usd:
+        lot = config.agent.min_position_usd
+        # The sale's proceeds are for this buy. Other buys may use only the cash that was
+        # already available before it.
+        proceeds = float((pending_intent or {}).get("expected_proceeds") or 0)
+        organic = max(0.0, sleeve_budget - proceeds)
+        reserved[0]["dollars"] = lot
+        others_budget = min(organic, max(0.0, sleeve_budget - lot))
+        buy_slots = max(0, buy_slots - 1)
+    else:
+        others_budget = sleeve_budget
+    pending_buys = [
+        m for m in mirrors
+        if m["side"] == "buy" and not m.get("rotation_reserved")
+        and not _already_handled(trades_today, m["ticker"], "buy")
+    ]
+    _allocate_buys(pending_buys, others_budget, buy_slots, positions)
+    # One new swap per session, and never on a day we are already completing one.
+    if not reserved:
+        unfunded = [m for m in pending_buys if not m.get("dollars")]
+        sell = _plan_sleeve_rotation(unfunded, positions, features, convictions, sleeve_budget, now)
+        if sell:
+            mirrors.append(sell)
     sleeve = {
         "budget": sleeve_budget,
         "buy_slots": buy_slots,
@@ -387,8 +671,10 @@ def run(run_date: str | None = None, broker: AgenticBroker | None = None,
             summary["block_reasons"][f"{side}:{ticker}"] = gr.block_reason
             continue
 
+        before = len(summary["placed"])
         _execute_one(broker, ticker, side, held, estimated_cost, m, gr,
                      run_date, dry_run, summary, trades_today)
+        _record_rotation(m, summary, before, dry_run, run_date)
 
     logger.info("Autotrader run complete — placed=%d blocked=%d failed=%d skipped=%d dry_run=%s",
                 len(summary["placed"]), len(summary["blocked"]), len(summary["failed"]), len(summary["skipped"]), dry_run)
@@ -441,6 +727,9 @@ def _execute_one(broker, ticker, side, held, estimated_cost, mirror, gr,
     # — it is passed to place_order alone, below.
     ref_id = str(uuid.uuid4())
     rule_checks = {**gr.checks, "dollar_amount": dollar_amount, "quantity": quantity}
+    if mirror.get("rotation_for"):
+        rule_checks["rotation_for"] = mirror["rotation_for"]
+    source = mirror.get("source") or "mirror"
     submitted_at = datetime.now(timezone.utc).isoformat()
     size_desc = f"${dollar_amount:.2f}" if side == "buy" else f"x{quantity}"
 
@@ -457,11 +746,12 @@ def _execute_one(broker, ticker, side, held, estimated_cost, mirror, gr,
             ticker=ticker, side=side, run_date=run_date, order_type="market",
             quantity=quantity, dollar_amount=dollar_amount, ref_id=ref_id, status="dry_run",
             rule_checks=rule_checks, mirrors_paper_trade_id=mirror.get("mirrors_paper_trade_id"),
-            submitted_at=submitted_at, is_open=False,
+            source=source, submitted_at=submitted_at, is_open=False,
         )
         logger.info("Autotrader DRY-RUN %s %s %s (id=%s)", side, ticker, size_desc, tid)
         summary["placed"].append({"ticker": ticker, "side": side, "dry_run": True, "id": tid,
-                                   "dollars": dollar_amount, "shares": quantity, "status": "dry_run"})
+                                   "dollars": dollar_amount, "shares": quantity, "status": "dry_run",
+                                   "rotation_for": mirror.get("rotation_for")})
         trades_today.append({"ticker": ticker, "side": side, "status": "dry_run"})
         return
 
@@ -477,7 +767,7 @@ def _execute_one(broker, ticker, side, held, estimated_cost, mirror, gr,
             quantity=quantity, dollar_amount=dollar_amount, ref_id=ref_id, status="failed",
             rule_checks={**rule_checks, "place_error": str(e)},
             mirrors_paper_trade_id=mirror.get("mirrors_paper_trade_id"),
-            submitted_at=submitted_at, is_open=False,
+            source=source, submitted_at=submitted_at, is_open=False,
         )
         summary["failed"].append(f"{side}:{ticker}")
         return
@@ -487,11 +777,13 @@ def _execute_one(broker, ticker, side, held, estimated_cost, mirror, gr,
         ticker=ticker, side=side, run_date=run_date, order_type="market",
         quantity=quantity, dollar_amount=dollar_amount, order_id=order_id, ref_id=ref_id,
         status=status if status in _PLACED_STATES else "submitted", rule_checks=rule_checks,
-        mirrors_paper_trade_id=mirror.get("mirrors_paper_trade_id"), submitted_at=submitted_at,
+        mirrors_paper_trade_id=mirror.get("mirrors_paper_trade_id"), source=source,
+        submitted_at=submitted_at,
     )
     logger.info("Autotrader PLACED %s %s %s (order_id=%s, id=%s)", side, ticker, size_desc, order_id, tid)
     summary["placed"].append({"ticker": ticker, "side": side, "order_id": order_id, "id": tid,
-                              "dollars": dollar_amount, "shares": quantity, "status": status})
+                              "dollars": dollar_amount, "shares": quantity, "status": status,
+                              "rotation_for": mirror.get("rotation_for")})
     trades_today.append({"ticker": ticker, "side": side, "status": "submitted"})
 
 
